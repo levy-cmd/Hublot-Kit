@@ -101,12 +101,18 @@ spike/               code jetable de la semaine 1 (supprimé après le spike)
 
 ### 5.1 Conteneur actif (`procfs`)
 
-1. `Inspect` → `State.Pid`, `State.StartedAt`. `Pid == 0` → bascule sur `tarindex`.
-2. Ouvrir `/proc/<pid>/root` en `O_PATH | O_DIRECTORY` et garder le descripteur.
-3. Refaire `Inspect`. Si `Pid` ou `StartedAt` a changé → fermer, erreur `container_changed`. Le descripteur ouvert entre les deux `Inspect` pointe alors bien sur ce conteneur.
-4. Ouvrir le chemin demandé par `securejoin.OpenInRoot(descripteur, chemin)`. **Interdits** : `filepath.Join`, `os.Open` sur un chemin construit à la main, tout suivi de lien hors `securejoin`.
-5. `List` : lire le dossier, `Lstat` de chaque entrée (les liens ne sont pas suivis), `Readlink` pour `LinkTarget`. Au-delà de 10 000 entrées : tronquer, `truncated = true`.
-6. Navigation sur un lien : l'interface demande le chemin cible, résolu par `securejoin` comme n'importe quel autre chemin.
+Comparer deux `Inspect` ne suffit pas à prouver que la racine ouverte est celle du conteneur : un PID peut être réattribué avant que Docker ne voie l'arrêt. On accroche donc l'identité du process avec un **pidfd**, qui désigne un process précis et ne peut pas être réattribué :
+
+1. `Inspect` → `State.Pid`. `Pid == 0` → bascule sur `tarindex`.
+2. `pidfd_open(pid)` → `pidfd`. Échec (process disparu) → `container_changed`.
+3. Lire `/proc/<pid>/cgroup` : il doit contenir l'ID complet du conteneur (formes `docker-<id>.scope` et `/docker/<id>`), sinon `container_changed`. Ce contrôle prouve que le process épinglé par `pidfd` appartient au conteneur.
+4. Ouvrir `/proc/<pid>/root` en `O_PATH | O_DIRECTORY` → `rootfd`.
+5. `pidfd_send_signal(pidfd, 0)` doit réussir : le process est toujours vivant, donc le PID n'a pas été réattribué entre les étapes 2 et 4, et `rootfd` est bien sa racine. Sinon → fermer, `container_changed`.
+6. Ouvrir le chemin demandé par `securejoin.OpenatInRoot(rootfd, chemin)`, qui renvoie lui aussi un descripteur `O_PATH`. Pour lire, le rouvrir par `securejoin.Reopen(handle, O_RDONLY)` (avec `O_DIRECTORY` pour un dossier). Version exacte de la bibliothèque et noms des fonctions à confirmer au spike (paquet `pathrs-lite` dans les versions récentes). **Interdits** : `filepath.Join`, `os.Open` sur un chemin construit à la main, tout suivi de lien hors `securejoin`.
+7. `List` : sur le dossier rouvert, lire les noms, puis pour chaque nom `fstatat(dirfd, nom, AT_SYMLINK_NOFOLLOW)` et, pour un lien, `readlinkat(dirfd, nom)`. Tout se fait relativement au descripteur du dossier, avec un seul composant de chemin : aucun lien n'est suivi et rien ne peut sortir de la racine. Au-delà de 10 000 entrées : tronquer, `truncated = true`.
+8. Navigation sur un lien : l'interface demande le chemin cible, résolu par `securejoin` comme n'importe quel autre chemin.
+
+Le spike vérifie que `/proc/<pid>/cgroup` contient bien l'ID du conteneur vu depuis l'agent conteneurisé (espace de noms cgroup privé) comme depuis le binaire sur l'hôte. Noyau requis pour `pidfd_open` : 5.3, déjà couvert par le 5.6+ exigé pour `openat2`.
 
 ### 5.2 Conteneur arrêté (`tarindex`)
 
@@ -114,7 +120,7 @@ spike/               code jetable de la semaine 1 (supprimé après le spike)
 2. Construction en un seul exemplaire par clé (verrou de type singleflight). Pendant la construction, `List` renvoie `ErrIndexing` avec la progression.
 3. `GetArchive("/")` lu en flux par `archive/tar` ; seuls les en-têtes sont gardés, le contenu est lu et jeté. Progression = octets lus / `SizeRootFs` (`Inspect` avec `size=true`).
 4. Index en mémoire : `map[dir][]Entry`. Au plus 3 index en cache (LRU), pour l'objectif de 50 Mo au repos hors index actif.
-5. `Open(path)` : `GetArchive(path)` et lecture de l'unique entrée. `Stat(path)` : `HEAD /archive` (en-tête `X-Docker-Container-Path-Stat`). Ni l'un ni l'autre n'attend l'index : seul `List` en a besoin, si bien qu'une écriture (§5.3) sur un conteneur arrêté ne déclenche pas d'indexation.
+5. `Open(path)` : `GetArchive(path)` et lecture de l'unique entrée. `Stat(path)` : `HEAD /archive` (en-tête `X-Docker-Container-Path-Stat`) ; le spike confirme que `HEAD` et `GET /archive` répondent sur un conteneur arrêté, sinon `Stat` lit l'index. Ni l'un ni l'autre n'attend l'index : seul `List` en a besoin, si bien qu'une écriture (§5.3) sur un conteneur arrêté ne déclenche pas d'indexation.
 6. Les entrées sous `/proc`, `/sys`, `/dev` sont ignorées.
 
 ### 5.3 Écriture (`files`)
@@ -168,9 +174,12 @@ L'agent a, de fait, les droits root sur l'hôte. Le README le dit en tête. Les 
 - **Jeton** : 32 octets de `crypto/rand`, encodés en base64url, affichés une seule fois au premier lancement. Stocké sous forme d'empreinte SHA-256 dans `<data-dir>/token.sha256`. `hublot reset-token` en génère un nouveau. Comparaison par `subtle.ConstantTimeCompare`.
 - **Tentatives** : 5 échecs par minute et par IP → `rate_limited` (429). Chaque échec est journalisé.
 - **Session** : 32 octets aléatoires, en mémoire, 12 h. Cookie `HttpOnly`, `SameSite=Strict`, `Secure` si TLS, `Path=/`.
-- **CSRF** : sur toute méthode autre que GET/HEAD, l'en-tête `Origin` doit être présent et correspondre à l'hôte servi, sinon `forbidden_origin`. Les GET, flux SSE compris, ne modifient rien : le cookie `SameSite=Strict` suffit (les navigateurs n'envoient pas toujours `Origin` sur un GET de même origine, l'exiger casserait le flux).
+- **CSRF** : sur toute méthode autre que GET/HEAD, l'en-tête `Origin` doit être présent, bien formé, différent de `null`, et égal à l'**origine de confiance** comparée en entier (schéma, hôte, port), sinon `forbidden_origin`. Origine de confiance : `--public-origin` si défini (obligatoire derrière un reverse proxy, qui change souvent le schéma), sinon `http(s)://` + l'en-tête `Host` de la requête, le schéma venant de la présence de TLS sur l'agent. Les en-têtes `X-Forwarded-*` ne sont jamais crus. Les GET, flux SSE compris, ne modifient rien : le cookie `SameSite=Strict` suffit (les navigateurs n'envoient pas toujours `Origin` sur un GET de même origine, l'exiger casserait le flux).
 - **En-têtes** : `Content-Security-Policy: default-src 'self'; img-src 'self' blob: data:; frame-ancestors 'none'`, `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`.
-- **XSS par contenu de conteneur** : l'agent ne sert jamais un fichier de conteneur avec un type exécutable par le navigateur (HTML, SVG, JavaScript). Voir §6.
+- **XSS par contenu de conteneur** : l'agent ne sert jamais un fichier de conteneur avec un type exécutable par le navigateur (HTML, SVG, XML, JavaScript). Règles :
+  - L'aperçu ne renvoie que `text/plain; charset=utf-8` ou l'un des quatre types d'image matricielle de §6, toujours avec `nosniff`. Un SVG est un document actif : il n'est **jamais** rendu comme image, ni dans `<img>`, ni dans `<object>`, ni dans `<iframe>`. Il s'affiche comme texte.
+  - Côté interface, le contenu d'un conteneur (fichiers, logs, noms de fichiers, variables d'env) passe toujours par l'échappement de Svelte. `{@html}` est interdit dans tout le code, et une règle ESLint le fait respecter.
+  - Le téléchargement force `Content-Disposition: attachment` et `application/octet-stream`.
 - **Secrets** : une variable est masquée si son nom contient (sans tenir compte de la casse) `PASSWORD`, `PASSWD`, `PASS`, `TOKEN`, `KEY`, `SECRET`, `CREDENTIAL`, `PRIVATE`, `DSN`, ou si sa valeur contient une URL avec identifiants (`://user:pass@`). Valeur masquée renvoyée : `null` avec `masked: true`.
 - **Lecture seule** : `--read-only` ; appliqué dans `files` et nulle part ailleurs (un seul point d'écriture).
 - **Journal d'audit** : `<data-dir>/audit.log`, une ligne JSON par événement : `{ts, action, container, path, result, error}`. Actions : `login.fail`, `env.reveal`, `file.write`, `file.upload`. Écrit avant et après chaque écriture.
@@ -186,6 +195,7 @@ Flags (chacun a son équivalent en variable `HUBLOT_*`) :
 | `--data-dir` | `/var/lib/hublot-kit` (`/data` dans l'image) |
 | `--read-only` | `false` |
 | `--tls-cert`, `--tls-key` | vides |
+| `--public-origin` | vide (ex. `https://hublot.mondomaine.fr` derrière un reverse proxy) |
 
 **Installation recommandée** (droits exacts fixés par le spike) :
 
@@ -226,12 +236,12 @@ Code jetable dans `spike/`, supprimé une fois les réponses écrites dans ce do
 
 | # | Question | Réussite | Si échec |
 |---|---|---|---|
-| 1 | Lister `/usr` d'une image distroless par `/proc/<pid>/root` + `securejoin` | 1 000 entrées en moins d'1 s ; le test d'évasion par lien échoue comme prévu | revoir §5.1 avant le socle |
+| 1 | Lister `/usr` d'une image distroless avec la séquence complète de §5.1 (pidfd, cgroup, `OpenatInRoot`, `Reopen`) | 1 000 entrées en moins d'1 s ; le test d'évasion par lien échoue comme prévu ; l'ID du conteneur apparaît dans `/proc/<pid>/cgroup` vu depuis l'agent conteneurisé | revoir §5.1 avant le socle |
 | 2 | `/changes` sur overlay2 et sur containerd | mêmes manipulations, mêmes résultats | F5 marqué « non pris en charge » sur le stockage en défaut en v0.1, avec message |
 | 3 | Droits minimaux sur Ubuntu (AppArmor) et Fedora (SELinux) | une commande `docker run` sans `--privileged` qui marche sur les deux | documenter l'option nécessaire (`--security-opt`) ou recommander le binaire + systemd sur la distribution concernée |
-| 4 | `GET /archive` sur `/` inclut-il les volumes d'un conteneur arrêté ? | réponse oui ou non | non → l'index affiche les points de montage vides avec une mention |
+| 4 | Sur un conteneur arrêté : `HEAD` et `GET /archive` répondent-ils, et `GET /archive` sur `/` inclut-il les volumes ? | réponses oui ou non | `HEAD` refusé → `Stat` lit l'index ; volumes absents → l'index affiche les points de montage vides avec une mention |
 
-Le spike confirme aussi le chemin d'import du SDK Docker et mesure le rythme réel pour recaler le planning.
+Le spike confirme aussi le chemin d'import du SDK Docker, la version de `filepath-securejoin` et ses noms de fonctions, et mesure le rythme réel pour recaler le planning.
 
 ## 12. Planning
 
