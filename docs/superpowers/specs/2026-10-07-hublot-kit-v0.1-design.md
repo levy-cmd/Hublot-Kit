@@ -105,47 +105,55 @@ Comparer deux `Inspect` ne suffit pas à prouver que la racine ouverte est celle
 
 1. `Inspect` → `State.Pid`. `Pid == 0` → bascule sur `tarindex`.
 2. `pidfd_open(pid)` → `pidfd`. Échec (process disparu) → `container_changed`.
-3. Lire `/proc/<pid>/cgroup` : l'ID complet du conteneur (64 caractères) doit y figurer comme **composant entier** du chemin, sous la forme `docker-<id>.scope` ou `docker/<id>`, sinon `container_changed`. Une sous-chaîne ne suffit pas ; un parent `..` (`/../<id>`, vu depuis un espace de noms cgroup privé) est refusé, d'où `--cgroupns=host` (§8). Ce contrôle prouve que le process épinglé par `pidfd` appartient au conteneur. Dans l'implémentation du socle, ancrer sur le **dernier** composant : sinon un conteneur à qui on a délégué ses cgroups pourrait créer `docker-A.scope/docker-<B>.scope` et passer pour B si le PID de B lui était réattribué (cas très étroit, le contrôle `pidfd` de l'étape 5 reste requis).
+3. Lire `/proc/<pid>/cgroup` : l'ID complet du conteneur (64 caractères) doit y figurer comme **composant entier** du chemin, sous la forme `docker-<id>.scope` ou `docker/<id>`, sinon `container_changed`. Une sous-chaîne ne suffit pas. Tout chemin qui contient un composant `..` est refusé, quelle que soit la forme (`/../<id>`, `/../docker-<id>.scope`…) : l'agent tourne toujours avec `--cgroupns=host` (§8) ou sur l'hôte. Ce contrôle prouve que le process épinglé par `pidfd` appartient au conteneur. Dans l'implémentation du socle, ancrer sur le **dernier** composant : sinon un conteneur à qui on a délégué ses cgroups pourrait créer `docker-A.scope/docker-<B>.scope` et passer pour B si le PID de B lui était réattribué (cas très étroit, le contrôle `pidfd` de l'étape 5 reste requis).
 4. Ouvrir `/proc/<pid>/root` en `O_PATH | O_DIRECTORY` → `rootfd`.
 5. `pidfd_send_signal(pidfd, 0)` doit réussir : le process est toujours vivant, donc le PID n'a pas été réattribué entre les étapes 2 et 4, et `rootfd` est bien sa racine. Sinon → fermer, `container_changed`.
-6. Ouvrir le chemin demandé par `pathrs.OpenatInRoot(rootfd, chemin)` (`github.com/cyphar/filepath-securejoin/pathrs-lite` v0.7.0, paquet `pathrs` ; le paquet racine n'exporte plus ces fonctions), qui renvoie un descripteur `O_PATH`. Puis :
+6. Ouvrir le chemin demandé par `pathrs.OpenatInRoot(rootfd, chemin)` (`github.com/cyphar/filepath-securejoin/pathrs-lite` v0.7.0, paquet `pathrs` ; le paquet racine n'exporte plus ces fonctions), qui renvoie un descripteur `O_PATH`. Puis, dans cet ordre :
+   - **Pseudo-système** : `fstatfs` du descripteur `O_PATH`, **avant tout `Reopen`**, pour un dossier comme pour un fichier, et aussi pour `Stat` → `forbidden_path` (étape 9).
    - **Dossier** : `pathrs.Reopen(handle, O_RDONLY|O_DIRECTORY)`, pour lister uniquement.
    - **Fichier** (`Open`, aperçu, téléchargement) : `fstat` du descripteur `O_PATH` ; tout ce qui n'est pas `S_IFREG` (périphérique, FIFO, socket) est refusé **avant** `Reopen` (`not_regular`). Puis `pathrs.Reopen(handle, O_RDONLY|O_NONBLOCK)`. Raison : root dans un conteneur peut créer par `mknod` un nœud de périphérique de l'hôte, et l'agent est hors du cgroup devices du conteneur : l'ouvrir lirait le périphérique de l'hôte.
 
    **Interdits** : `filepath.Join`, `os.Open` sur un chemin construit à la main, tout suivi de lien hors `pathrs`.
 7. `List` : sur le dossier rouvert, lire les noms, puis pour chaque nom `fstatat(dirfd, nom, AT_SYMLINK_NOFOLLOW)` et, pour un lien, `readlinkat(dirfd, nom)`. Tout se fait relativement au descripteur du dossier, avec un seul composant de chemin : aucun lien n'est suivi et rien ne peut sortir de la racine. Au-delà de 10 000 entrées : tronquer, `truncated = true`.
 8. Navigation sur un lien : l'interface demande le chemin cible, résolu par `pathrs.OpenatInRoot` comme n'importe quel autre chemin.
-9. **Pseudo-systèmes de fichiers non parcourables** (`/proc`, `/sys` et assimilés) : le listing de `/` les montre comme points de montage, on n'y entre pas. Raison : leurs pseudo-fichiers sont lus avec les privilèges hôte de l'agent (ex. `/proc/kallsyms` donne les vraies adresses du noyau). Le contrôle porte sur le **descripteur résolu**, pas sur le texte du chemin, donc un lien qui y mène est refusé aussi : après `pathrs.OpenatInRoot`, `fstatfs` du descripteur ; `f_type` parmi `PROC_SUPER_MAGIC`, `SYSFS_MAGIC`, `CGROUP_SUPER_MAGIC`, `CGROUP2_SUPER_MAGIC`, `DEBUGFS_MAGIC`, `TRACEFS_MAGIC`, `SECURITYFS_MAGIC`, `BPF_FS_MAGIC`, `CONFIGFS_MAGIC` → `forbidden_path`. S'applique à `List` comme à la lecture d'un fichier. Constantes de `golang.org/x/sys/unix`, sauf `CONFIGFS_MAGIC`, absente de x/sys v0.48.0 : constante locale `0x62656570` (`linux/magic.h`). `/dev` reste parcourable : le lister est sans danger, et ses nœuds de périphérique sont déjà refusés par la règle des fichiers réguliers (étape 6, `not_regular`).
+9. **Pseudo-systèmes de fichiers non parcourables** (`/proc`, `/sys` et assimilés) : le listing de `/` les montre comme points de montage, on n'y entre pas. Raison : leurs pseudo-fichiers sont lus avec les privilèges hôte de l'agent (ex. `/proc/kallsyms` donne les vraies adresses du noyau). Le contrôle porte sur le **descripteur résolu**, pas sur le texte du chemin, donc un lien qui y mène est refusé aussi : `fstatfs` du descripteur `O_PATH` (étape 6) ; `f_type` parmi les 13 types ci-dessous → `forbidden_path`. S'applique à `List`, `Stat` et à la lecture d'un fichier.
+   - Dans `golang.org/x/sys/unix` (v0.48.0) : `PROC_SUPER_MAGIC`, `SYSFS_MAGIC`, `CGROUP_SUPER_MAGIC`, `CGROUP2_SUPER_MAGIC`, `DEBUGFS_MAGIC`, `TRACEFS_MAGIC`, `SECURITYFS_MAGIC`, `BPF_FS_MAGIC`, `PSTOREFS_MAGIC`, `EFIVARFS_MAGIC`, `BINFMTFS_MAGIC`.
+   - Constantes locales, absentes de x/sys : `CONFIGFS_MAGIC = 0x62656570` (`include/uapi/linux/magic.h` du noyau actuel ; absente des en-têtes 6.12) et `FUSE_CTL_SUPER_MAGIC = 0x65735543` (`fs/fuse/control.c`, aucun en-tête uapi).
+
+   `/dev` reste parcourable : le lister est sans danger, et ses nœuds de périphérique sont déjà refusés par la règle des fichiers réguliers (étape 6, `not_regular`).
 
 Spike : avec `--cgroupns=host`, l'agent conteneurisé lit `0::/docker/<id>` (Docker Desktop, pilote cgroupfs) ou `0::/system.slice/docker-<id>.scope` (Ubuntu, pilote systemd) ; le binaire sur l'hôte marche aussi. Sans `--cgroupns=host`, Docker Desktop donne `0::/../<id>`, refusé. 1 000 entrées listées en 1 à 15 ms (Docker Desktop ; Ubuntu : 3 × 1 000 entrées OK, durées non extraites). Noyau requis pour `pidfd_open` : 5.3, déjà couvert par le 5.6+ exigé pour `openat2`.
 
 ### 5.2 Conteneur arrêté (`tarindex`)
 
 1. Clé de cache : `containerID + State.FinishedAt`. Un redémarrage puis un arrêt changent la clé.
-2. Construction en un seul exemplaire par clé (verrou de type singleflight). Pendant la construction, `List` renvoie `ErrIndexing` avec la progression.
+2. Construction en un seul exemplaire par clé (verrou de type singleflight). Pendant la construction, `List`, `Stat`, `Open` et le téléchargement d'un dossier renvoient `ErrIndexing` avec la progression (`indexing`, 202).
 3. `GetArchive("/")` lu en flux par `archive/tar` ; seuls les en-têtes sont gardés, le contenu est lu et jeté. Progression = octets lus / `SizeRootFs` (`Inspect` avec `size=true`).
 4. Index en mémoire : `map[dir][]Entry`. Au plus 3 index en cache (LRU), pour l'objectif de 50 Mo au repos hors index actif.
-5. `Stat(path)` : `HEAD /archive` (en-tête `X-Docker-Container-Path-Stat`), qui répond sur un conteneur arrêté (spike). Son `LinkTarget` est résolu par le démon : on ne s'en sert pas pour suivre un lien. `Open(path)` : `GetArchive(path)` et lecture de l'unique entrée. **`GET /archive` ne suit pas un lien en dernier composant** : il renvoie l'entrée du lien (typeflag `'2'`, `linkname` brut, taille 0). `tarindex` résout donc les liens lui-même, à partir de l'index, composant par composant : cible relative résolue depuis le dossier parent du lien, `..` bloqué à la racine, limite de sauts contre les boucles. On ne demande au démon que le chemin final ainsi résolu, jamais un `linkname` ou un `LinkTarget` tel quel. Seule la résolution d'un lien attend l'index, comme `List` : une écriture (§5.3) sur un chemin sans lien final ne déclenche pas d'indexation.
-6. Les entrées sous `/proc`, `/sys`, `/dev` sont ignorées. Écart assumé avec §5.1 étape 9 : le tar d'un conteneur arrêté ne contient de toute façon aucun pseudo-système de fichiers vivant.
+5. **Résolution** : tout chemin demandé est résolu composant par composant dans l'index. Chaque composant est cherché ; un lien rencontré est résolu avant de continuer : cible relative depuis le dossier parent du lien, cible absolue depuis la racine du conteneur, `..` bloqué à la racine, 40 sauts au plus sur toute la résolution, puis le parcours reprend. Seul le chemin entièrement résolu, sans lien, est envoyé à `GET` ou `HEAD /archive` ; jamais un `linkname` ou un `LinkTarget` tel quel. Raison : `GET /archive` ne suit pas un lien en dernier composant (il renvoie l'entrée du lien : typeflag `'2'`, `linkname` brut, taille 0), et le `LinkTarget` de `HEAD` est résolu par le démon. `Stat`, `Open` et le téléchargement d'un dossier attendent donc l'index, comme `List`.
+6. `Stat(path)` : entrée de l'index. `Open(path)` : `GetArchive(chemin résolu)` et lecture de l'unique entrée ; entrée caractère, bloc ou FIFO → `not_regular`. `Entry.LinkTarget` est toujours la cible brute : `linkname` de l'en-tête tar, jamais le `LinkTarget` de `HEAD`.
+7. Les entrées sous `/proc` et `/sys` sont ignorées : le tar d'un conteneur arrêté ne contient aucun pseudo-système vivant, ce qui suffit à la place du contrôle `fstatfs` de §5.1. `/dev` est montré : ses en-têtes sont sans danger, et `Open` refuse les périphériques.
 
-Spike : `GET /archive` de `/` sur un conteneur arrêté **inclut le contenu des volumes nommés** (Docker Desktop, Ubuntu containerd, Ubuntu overlay2) ; l'index les montre comme le reste. Mesuré sur alpine : 523 entrées, ~8,9 Mo lus, ~270 ms.
+Spike : `GET /archive` de `/` sur un conteneur arrêté **inclut le contenu des volumes nommés** (Docker Desktop, Ubuntu containerd, Ubuntu overlay2) ; l'index les montre comme le reste. `HEAD` et `GET /archive` répondent sur un conteneur arrêté. Mesuré sur alpine : 523 entrées, ~8,9 Mo lus, 217 à 276 ms.
 
 ### 5.3 Écriture (`files`)
 
 Ordre strict, dans une seule fonction :
 
 1. Mode lecture seule → `read_only`.
-2. Relire le fichier par `fsview`, calculer son SHA-256, comparer à `If-Match` → `conflict` si différent. Pour un nouveau fichier (envoi), `If-None-Match: *` → `conflict` s'il existe.
-3. `audit` : écrire l'intention.
-4. Construire un tar d'une entrée qui reprend `Mode`, `UID`, `GID` du fichier existant (nouveau fichier : `0644`, uid/gid du dossier parent), puis `PutArchive` sur le dossier parent.
-5. `audit` : écrire le résultat.
+2. Contrôler la cible par `fsview`. Édition : le dernier composant ne doit pas être un lien et la cible doit être un fichier régulier, sinon `not_regular`. Envoi : le dossier parent ne doit pas se résoudre dans un pseudo-système de fichiers (§5.1 étape 9), sinon `forbidden_path`. Conteneur arrêté : la résolution passe par l'index (§5.2), donc `indexing` tant qu'il se construit.
+3. Relire le fichier par `fsview`, calculer son SHA-256, comparer à `If-Match` → `conflict` si différent. Pour un nouveau fichier (envoi), `If-None-Match: *` → `conflict` s'il existe.
+4. `audit` : écrire l'intention.
+5. Construire un tar d'une entrée qui reprend `Mode`, `UID`, `GID` du fichier existant (nouveau fichier : `0644`, uid/gid du dossier parent), puis `PutArchive` sur le dossier parent.
+6. `audit` : écrire le résultat.
 
-Limite assumée : entre l'étape 2 et l'étape 4, un process du conteneur peut encore modifier le fichier. Pour un seul utilisateur, c'est acceptable.
+Limite assumée : entre l'étape 3 et l'étape 5, un process du conteneur peut encore modifier le fichier. Pour un seul utilisateur, c'est acceptable.
 
 ### 5.4 Téléchargement
 
-- Fichier : `fsview.Open`, relayé en flux.
-- Dossier : `GetArchive(path)` relayé tel quel en `.tar`, sans mise en mémoire.
+- Fichier : `fsview.Open` (contrôles `not_regular` et `forbidden_path`), relayé en flux.
+- Dossier, conteneur actif : résoudre le dossier par `pathrs.OpenatInRoot`, `fstatfs` du descripteur (`forbidden_path`, §5.1 étape 9), puis `GetArchive(path)` relayé tel quel en `.tar`, sans mise en mémoire.
+- Dossier, conteneur arrêté : chemin résolu par l'index (§5.2, `indexing` pendant la construction), puis `GetArchive(chemin résolu)` relayé de même.
 - Toujours `Content-Disposition: attachment`.
 
 ## 6. API
@@ -161,10 +169,10 @@ Préfixe `/api`, JSON. Erreur : `{"error": "<code>", "detail": "<texte libre pou
 | GET | `/api/containers/{id}` | F7, env masquées par l'agent |
 | POST | `/api/containers/{id}/env/reveal` | `{name}` → valeur en clair, journalisé |
 | GET | `/api/containers/{id}/fs?path=` | F2 liste ; `202 {"error":"indexing","progress":0.42}` pendant l'indexation ; `forbidden_path` |
-| GET | `/api/containers/{id}/fs/file?path=` | F2 aperçu : `text/plain` ou image, plafond 2 Mo, sinon `too_large` ; `not_regular`, `forbidden_path` ; en-tête `ETag` = SHA-256 |
-| GET | `/api/containers/{id}/fs/download?path=` | F3 ; pour un fichier : `not_regular`, `forbidden_path` |
-| PUT | `/api/containers/{id}/fs/file?path=` | F4 édition, `If-Match` obligatoire |
-| POST | `/api/containers/{id}/fs/upload?dir=` | F4 envoi, multipart, `If-None-Match: *` |
+| GET | `/api/containers/{id}/fs/file?path=` | F2 aperçu : `text/plain` ou image, plafond 2 Mo, sinon `too_large` ; `not_regular`, `forbidden_path`, `indexing` ; en-tête `ETag` = SHA-256 |
+| GET | `/api/containers/{id}/fs/download?path=` | F3 ; `indexing` (conteneur arrêté) ; fichier : `not_regular`, `forbidden_path` ; dossier : `forbidden_path` |
+| PUT | `/api/containers/{id}/fs/file?path=` | F4 édition, `If-Match` obligatoire ; `not_regular` (lien ou fichier non régulier), `indexing` |
+| POST | `/api/containers/{id}/fs/upload?dir=` | F4 envoi, multipart, `If-None-Match: *` ; `forbidden_path` (dossier dans un pseudo-système), `indexing` |
 | GET | `/api/containers/{id}/changes` | F5 `[{path, kind: "added"|"modified"|"deleted"}]` |
 | GET | `/api/containers/{id}/logs?tail=500` | F6 SSE : `{ts, stream: "stdout"|"stderr", line}` |
 | GET | `/api/containers/{id}/logs/download` | F6 fichier texte |
@@ -204,7 +212,7 @@ Flags (chacun a son équivalent en variable `HUBLOT_*`) :
 | `--tls-cert`, `--tls-key` | vides |
 | `--public-origin` | vide (ex. `https://hublot.mondomaine.fr` derrière un reverse proxy) |
 
-**Installation recommandée** (droits minimaux mesurés au spike sur Ubuntu, AppArmor actif avec le profil par défaut) :
+**Installation recommandée**. Minimum mesuré au spike sur Ubuntu (AppArmor actif, profil par défaut) : `--pid=host --cap-add SYS_PTRACE` + socket. `--cgroupns=host` s'y ajoute pour la portabilité (pilote cgroupfs) :
 
 ```sh
 docker run -d --name hublot-kit \
@@ -218,16 +226,16 @@ docker run -d --name hublot-kit \
 | Droit | Raison |
 |---|---|
 | `--pid=host` | voir `/proc/<pid>` des conteneurs |
-| `--cgroupns=host` | avec un espace de noms cgroup privé et le pilote cgroupfs, l'agent lit `/../<id>` et doit refuser (§5.1 étape 3) |
+| `--cgroupns=host` | pas requis sur Ubuntu (pilote systemd), imposé pour la portabilité : avec un espace de noms cgroup privé et le pilote cgroupfs (Docker Desktop), l'agent lit `/../<id>` et doit refuser (§5.1 étape 3) |
 | `--cap-add SYS_PTRACE` | obligatoire pour une cible qui tourne sous un autre uid : sans lui, `/proc/<pid>/root` renvoie `EACCES` |
 
 Pas de `--privileged`, aucun changement AppArmor. Fedora (SELinux) : en attente.
 
-**Alternative** : binaire des releases GitHub + service systemd, lancé en root (vérifié sur Ubuntu).
+**Alternative** : binaire des releases GitHub + service systemd, lancé en root. Binaire lancé en root hors conteneur : vérifié sur Ubuntu ; service systemd non testé.
 
 **Prérequis hôte** : Linux amd64 ou arm64, noyau 5.6+, Docker Engine avec API 1.44+, stockage overlay2 ou containerd.
 
-**Développement sur macOS** : Docker Desktop fait tourner Docker dans une machine virtuelle Linux ; `/proc/<pid>/root` n'existe que dans cette machine. L'agent se lance donc dans un conteneur pendant le développement (`docker compose` avec `--pid=host`, `--cgroupns=host`, `SYS_PTRACE` et le code monté ; `--cgroupns=host` est indispensable sur Docker Desktop, pilote cgroupfs), l'interface en `vite dev` sur le Mac avec un proxy vers l'agent.
+**Développement sur macOS** : Docker Desktop fait tourner Docker dans une machine virtuelle Linux ; `/proc/<pid>/root` n'existe que dans cette machine. L'agent se lance donc dans un conteneur pendant le développement (`docker compose` avec `pid: host`, `cgroup: host`, `cap_add: [SYS_PTRACE]` et le code monté ; `cgroup: host` est indispensable sur Docker Desktop, pilote cgroupfs), l'interface en `vite dev` sur le Mac avec un proxy vers l'agent.
 
 ## 9. Interface
 
@@ -240,7 +248,11 @@ Pas de `--privileged`, aucun changement AppArmor. Fedora (SELinux) : en attente.
 
 ## 10. Tests
 
-- **Sécurité d'abord, avant le code** : `procfs` testé sur un dossier temporaire servant de racine, avec liens piégés (absolu vers `/etc/passwd`, `../../`, boucle, lien vers lien). Aucune lecture ne doit sortir de la racine. Pas de Docker nécessaire.
+- **Sécurité d'abord, avant le code** : `procfs` testé sur un dossier temporaire servant de racine, avec liens piégés (absolu vers `/etc/passwd`, `../../`, boucle, lien vers lien). Aucune lecture ne doit sortir de la racine. Pas de Docker nécessaire. Cas obligatoires :
+  - `procfs` : nœud de périphérique et FIFO → `not_regular` ; la FIFO ne doit pas bloquer.
+  - `fstatfs` : avec `/` comme racine, `/proc/kallsyms` et un lien vers `/proc` → `forbidden_path`.
+  - `tarindex`, sur des tar en mémoire : lien relatif depuis le parent, lien absolu, `..` bloqué à la racine, chaîne de liens, lien sur un dossier intermédiaire, boucle arrêtée par la limite de sauts.
+  - `CgroupHasID` : sous-chaîne refusée, tout composant `..` refusé, `docker-A.scope/docker-<B>.scope` refusé une fois l'ancrage sur le dernier composant fait.
 - **Unitaires Go** : `tarindex` sur des tar générés en mémoire ; `files` (lecture seule, `If-Match`, ordre audit → écriture → audit) avec un faux `dockerx` ; `secrets` ; `auth` (temps constant, limitation) ; `api` par `httptest` (codes d'erreur, `Origin`, en-têtes, SVG servi en texte).
 - **Intégration** (tag `integration`) : vrai Docker sur GitHub Actions, conteneurs alpine et distroless ; matrice overlay2 / containerd configurée par `daemon.json`. Couvre F1 à F7 de bout en bout côté API, y compris conteneur arrêté.
 - **Interface** : Vitest pour la logique (i18n, formatage, état du diff) ; un seul parcours Playwright : connexion → liste → ouvrir un fichier → voir le diff.
@@ -254,7 +266,7 @@ Code jetable dans `spike/`, supprimé une fois les réponses écrites dans ce do
 |---|---|---|---|---|
 | 1 | Lister `/usr` d'une image distroless avec la séquence complète de §5.1 (pidfd, cgroup, `OpenatInRoot`, `Reopen`) | 1 000 entrées en moins d'1 s ; le test d'évasion par lien échoue comme prévu ; l'ID du conteneur apparaît dans `/proc/<pid>/cgroup` vu depuis l'agent conteneurisé | revoir §5.1 avant le socle | réussi avec `--cgroupns=host` : 1 000 entrées en 1 à 15 ms (Docker Desktop), aucune évasion ; sans ce flag, Docker Desktop donne `/../<id>`, refusé |
 | 2 | `/changes` sur overlay2 et sur containerd | mêmes manipulations, mêmes résultats | F5 marqué « non pris en charge » sur le stockage en défaut en v0.1, avec message | réussi : résultats identiques sur les deux |
-| 3 | Droits minimaux sur Ubuntu (AppArmor) et Fedora (SELinux) | une commande `docker run` sans `--privileged` qui marche sur les deux | documenter l'option nécessaire (`--security-opt`) ou recommander le binaire + systemd sur la distribution concernée | Ubuntu réussi : `--pid=host --cgroupns=host --cap-add SYS_PTRACE` (§8) ; Fedora en attente |
+| 3 | Droits minimaux sur Ubuntu (AppArmor) et Fedora (SELinux) | une commande `docker run` sans `--privileged` qui marche sur les deux | documenter l'option nécessaire (`--security-opt`) ou recommander le binaire + systemd sur la distribution concernée | Ubuntu réussi : minimum `--pid=host --cap-add SYS_PTRACE`, `--cgroupns=host` imposé pour la portabilité (§8) ; binaire en root hors conteneur vérifié, service systemd non testé ; Fedora en attente |
 | 4 | Sur un conteneur arrêté : `HEAD` et `GET /archive` répondent-ils, et `GET /archive` sur `/` inclut-il les volumes ? | réponses oui ou non | `HEAD` refusé → `Stat` lit l'index ; volumes absents → l'index affiche les points de montage vides avec une mention | oui et oui ; `GET` ne suit pas un lien final, `tarindex` résout les liens (§5.2) |
 
 Le spike confirme aussi le chemin d'import du SDK Docker (`github.com/moby/moby/client`) et l'API de `filepath-securejoin` v0.7.0 (`pathrs-lite` : `OpenatInRoot`, `Reopen`) ; voir §3.
@@ -277,11 +289,13 @@ Base 5 à 10 h par semaine. 12 semaines maintenues : le code du spike a été é
 
 | Risque | Parade |
 |---|---|
-| AppArmor ou SELinux bloquent `/proc/<pid>/root` dans un conteneur | Ubuntu (AppArmor, profil par défaut) : rien à changer (spike n°3). SELinux : en attente du passage Fedora. Repli binaire + systemd |
+| AppArmor ou SELinux bloquent `/proc/<pid>/root` dans un conteneur | Ubuntu (AppArmor, profil par défaut) : rien à changer (spike n°3). SELinux : en attente du passage Fedora. Repli : binaire lancé en root hors conteneur (vérifié sur Ubuntu ; service systemd non testé) |
 | Construction de l'index longue sur une grosse image | progression affichée ; cache par conteneur |
 | `/changes` incomplet sur containerd | risque levé : résultats identiques sur overlay2 et containerd (spike n°2) ; la matrice des tests d'intégration le garde sous contrôle |
 | Rythme d'apprentissage de Go plus lent que prévu | re-mesure après la première semaine du socle ; tâches petites |
-| Faille de lecture hors conteneur | tests d'évasion écrits avant le code ; `securejoin` obligatoire ; revue de toute PR qui touche `fsview` |
+| Faille de lecture hors conteneur | tests d'évasion écrits avant le code ; `pathrs-lite` (filepath-securejoin) obligatoire ; revue de toute PR qui touche `fsview` |
+| Pseudo-système de fichiers absent de la liste `fstatfs` (§5.1 étape 9) | liste de 13 types revue à chaque nouvelle version de noyau ciblée ; les fichiers non réguliers restent refusés quoi qu'il arrive |
+| Ancrage cgroup sur le dernier composant (reporté au socle) | test dédié (§10) ; contrôle `pidfd` de §5.1 étape 5 maintenu |
 
 ## 14. Décisions hors technique
 
