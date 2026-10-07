@@ -36,7 +36,7 @@ Hors v0.1, en plus de F8 à F10 : HTTPS par Let's Encrypt (la v0.1 accepte un ce
 |---|---|---|
 | Agent | Go, dernière version stable | SDK Docker officiel, binaire statique, objectif d'apprentissage |
 | Interface | SvelteKit + TypeScript, `adapter-static`, embarquée par `go:embed` | un seul binaire, rien d'autre à installer |
-| Lecture des fichiers, conteneur actif | `/proc/<pid>/root` côté hôte + `filepath-securejoin` | rapide, marche sur distroless et scratch |
+| Lecture des fichiers, conteneur actif | `/proc/<pid>/root` côté hôte + `filepath-securejoin/pathrs-lite` | rapide, marche sur distroless et scratch |
 | Lecture des fichiers, conteneur arrêté | index des en-têtes tar de `GET /archive` sur `/`, en cache | le conteneur arrêté est le cas « pourquoi mon app plante » |
 | Écriture | `PUT /containers/{id}/archive` uniquement | Docker résout le chemin ; marche sur conteneur arrêté ; aucune écriture ne dépend de notre code anti-liens |
 | Flux temps réel | SSE pour les logs ; WebSocket en v0.2 avec le terminal | un seul sens en v0.1, bibliothèque standard, reconnexion native |
@@ -44,7 +44,7 @@ Hors v0.1, en plus de F8 à F10 : HTTPS par Let's Encrypt (la v0.1 accepte un ce
 | Licence | MIT | adoption ; contributions réutilisables dans une future offre payante |
 | i18n | dictionnaire maison FR / EN côté interface, l'API renvoie des codes | pas de bibliothèque pour deux langues |
 
-**Dépendances Go autorisées** : le SDK Docker officiel (chemin d'import exact à confirmer au spike : `github.com/docker/docker/client` ou le module `github.com/moby/moby/client` selon la version), `github.com/cyphar/filepath-securejoin`, `golang.org/x/sys/unix`. Toute autre dépendance se justifie dans la PR.
+**Dépendances Go autorisées** : le SDK Docker officiel, module `github.com/moby/moby/client` (suit Docker 29 ; tire `github.com/moby/moby/api` pour les types ; `github.com/docker/docker` s'arrête à v28.5.2) ; `github.com/cyphar/filepath-securejoin` v0.7.0, sous-paquet `pathrs-lite` (paquet `pathrs`, tire `cyphar.com/go-pathrs` en indirect) ; `golang.org/x/sys/unix`. Toute autre dépendance se justifie dans la PR.
 
 **Dépendances interface** : SvelteKit, CodeMirror 6 (langages chargés à la demande : JSON, YAML, JavaScript, Python, shell, texte brut). Pas de bibliothèque de composants.
 
@@ -105,14 +105,19 @@ Comparer deux `Inspect` ne suffit pas à prouver que la racine ouverte est celle
 
 1. `Inspect` → `State.Pid`. `Pid == 0` → bascule sur `tarindex`.
 2. `pidfd_open(pid)` → `pidfd`. Échec (process disparu) → `container_changed`.
-3. Lire `/proc/<pid>/cgroup` : il doit contenir l'ID complet du conteneur (formes `docker-<id>.scope` et `/docker/<id>`), sinon `container_changed`. Ce contrôle prouve que le process épinglé par `pidfd` appartient au conteneur.
+3. Lire `/proc/<pid>/cgroup` : l'ID complet du conteneur (64 caractères) doit y figurer comme **composant entier** du chemin, sous la forme `docker-<id>.scope` ou `docker/<id>`, sinon `container_changed`. Une sous-chaîne ne suffit pas ; un parent `..` (`/../<id>`, vu depuis un espace de noms cgroup privé) est refusé, d'où `--cgroupns=host` (§8). Ce contrôle prouve que le process épinglé par `pidfd` appartient au conteneur. Dans l'implémentation du socle, ancrer sur le **dernier** composant : sinon un conteneur à qui on a délégué ses cgroups pourrait créer `docker-A.scope/docker-<B>.scope` et passer pour B si le PID de B lui était réattribué (cas très étroit, le contrôle `pidfd` de l'étape 5 reste requis).
 4. Ouvrir `/proc/<pid>/root` en `O_PATH | O_DIRECTORY` → `rootfd`.
 5. `pidfd_send_signal(pidfd, 0)` doit réussir : le process est toujours vivant, donc le PID n'a pas été réattribué entre les étapes 2 et 4, et `rootfd` est bien sa racine. Sinon → fermer, `container_changed`.
-6. Ouvrir le chemin demandé par `securejoin.OpenatInRoot(rootfd, chemin)`, qui renvoie lui aussi un descripteur `O_PATH`. Pour lire, le rouvrir par `securejoin.Reopen(handle, O_RDONLY)` (avec `O_DIRECTORY` pour un dossier). Version exacte de la bibliothèque et noms des fonctions à confirmer au spike (paquet `pathrs-lite` dans les versions récentes). **Interdits** : `filepath.Join`, `os.Open` sur un chemin construit à la main, tout suivi de lien hors `securejoin`.
-7. `List` : sur le dossier rouvert, lire les noms, puis pour chaque nom `fstatat(dirfd, nom, AT_SYMLINK_NOFOLLOW)` et, pour un lien, `readlinkat(dirfd, nom)`. Tout se fait relativement au descripteur du dossier, avec un seul composant de chemin : aucun lien n'est suivi et rien ne peut sortir de la racine. Au-delà de 10 000 entrées : tronquer, `truncated = true`.
-8. Navigation sur un lien : l'interface demande le chemin cible, résolu par `securejoin` comme n'importe quel autre chemin.
+6. Ouvrir le chemin demandé par `pathrs.OpenatInRoot(rootfd, chemin)` (`github.com/cyphar/filepath-securejoin/pathrs-lite` v0.7.0, paquet `pathrs` ; le paquet racine n'exporte plus ces fonctions), qui renvoie un descripteur `O_PATH`. Puis :
+   - **Dossier** : `pathrs.Reopen(handle, O_RDONLY|O_DIRECTORY)`, pour lister uniquement.
+   - **Fichier** (`Open`, aperçu, téléchargement) : `fstat` du descripteur `O_PATH` ; tout ce qui n'est pas `S_IFREG` (périphérique, FIFO, socket) est refusé **avant** `Reopen`. Puis `pathrs.Reopen(handle, O_RDONLY|O_NONBLOCK)`. Raison : root dans un conteneur peut créer par `mknod` un nœud de périphérique de l'hôte, et l'agent est hors du cgroup devices du conteneur : l'ouvrir lirait le périphérique de l'hôte.
 
-Le spike vérifie que `/proc/<pid>/cgroup` contient bien l'ID du conteneur vu depuis l'agent conteneurisé (espace de noms cgroup privé) comme depuis le binaire sur l'hôte. Noyau requis pour `pidfd_open` : 5.3, déjà couvert par le 5.6+ exigé pour `openat2`.
+   **Interdits** : `filepath.Join`, `os.Open` sur un chemin construit à la main, tout suivi de lien hors `pathrs`.
+7. `List` : sur le dossier rouvert, lire les noms, puis pour chaque nom `fstatat(dirfd, nom, AT_SYMLINK_NOFOLLOW)` et, pour un lien, `readlinkat(dirfd, nom)`. Tout se fait relativement au descripteur du dossier, avec un seul composant de chemin : aucun lien n'est suivi et rien ne peut sortir de la racine. Au-delà de 10 000 entrées : tronquer, `truncated = true`.
+8. Navigation sur un lien : l'interface demande le chemin cible, résolu par `pathrs.OpenatInRoot` comme n'importe quel autre chemin.
+9. `/proc`, `/sys` et `/dev` du conteneur ne sont **pas parcourables** : le listing de `/` les montre comme points de montage, on n'y entre pas. Raison : leurs pseudo-fichiers sont lus avec les privilèges hôte de l'agent (ex. `/proc/kallsyms` donne les vraies adresses du noyau). Le refus doit tenir aussi quand un lien mène dans ces dossiers : il porte sur le chemin résolu, pas sur le texte demandé (moyen exact fixé au socle).
+
+Spike : avec `--cgroupns=host`, l'agent conteneurisé lit `0::/docker/<id>` (Docker Desktop, pilote cgroupfs) ou `0::/system.slice/docker-<id>.scope` (Ubuntu, pilote systemd) ; le binaire sur l'hôte marche aussi. Sans `--cgroupns=host`, Docker Desktop donne `0::/../<id>`, refusé. 1 000 entrées listées en 1 à 15 ms. Noyau requis pour `pidfd_open` : 5.3, déjà couvert par le 5.6+ exigé pour `openat2`.
 
 ### 5.2 Conteneur arrêté (`tarindex`)
 
@@ -120,8 +125,10 @@ Le spike vérifie que `/proc/<pid>/cgroup` contient bien l'ID du conteneur vu de
 2. Construction en un seul exemplaire par clé (verrou de type singleflight). Pendant la construction, `List` renvoie `ErrIndexing` avec la progression.
 3. `GetArchive("/")` lu en flux par `archive/tar` ; seuls les en-têtes sont gardés, le contenu est lu et jeté. Progression = octets lus / `SizeRootFs` (`Inspect` avec `size=true`).
 4. Index en mémoire : `map[dir][]Entry`. Au plus 3 index en cache (LRU), pour l'objectif de 50 Mo au repos hors index actif.
-5. `Open(path)` : `GetArchive(path)` et lecture de l'unique entrée. `Stat(path)` : `HEAD /archive` (en-tête `X-Docker-Container-Path-Stat`) ; le spike confirme que `HEAD` et `GET /archive` répondent sur un conteneur arrêté, sinon `Stat` lit l'index. Ni l'un ni l'autre n'attend l'index : seul `List` en a besoin, si bien qu'une écriture (§5.3) sur un conteneur arrêté ne déclenche pas d'indexation.
-6. Les entrées sous `/proc`, `/sys`, `/dev` sont ignorées.
+5. `Stat(path)` : `HEAD /archive` (en-tête `X-Docker-Container-Path-Stat`), qui répond sur un conteneur arrêté (spike). Son `LinkTarget` est résolu par le démon : on ne s'en sert pas pour suivre un lien. `Open(path)` : `GetArchive(path)` et lecture de l'unique entrée. **`GET /archive` ne suit pas un lien en dernier composant** : il renvoie l'entrée du lien (typeflag `'2'`, `linkname` brut, taille 0). `tarindex` résout donc les liens lui-même, à partir de l'index, composant par composant : cible relative résolue depuis le dossier parent du lien, `..` bloqué à la racine, limite de sauts contre les boucles. On ne demande au démon que le chemin final ainsi résolu, jamais un `linkname` ou un `LinkTarget` tel quel. Seule la résolution d'un lien attend l'index, comme `List` : une écriture (§5.3) sur un chemin sans lien final ne déclenche pas d'indexation.
+6. Les entrées sous `/proc`, `/sys`, `/dev` sont ignorées (mêmes règles que §5.1 étape 9).
+
+Spike : `GET /archive` de `/` sur un conteneur arrêté **inclut le contenu des volumes nommés** (Docker Desktop, Ubuntu containerd, Ubuntu overlay2) ; l'index les montre comme le reste. Mesuré sur alpine : 523 entrées, ~8,9 Mo lus, ~270 ms.
 
 ### 5.3 Écriture (`files`)
 
@@ -197,22 +204,30 @@ Flags (chacun a son équivalent en variable `HUBLOT_*`) :
 | `--tls-cert`, `--tls-key` | vides |
 | `--public-origin` | vide (ex. `https://hublot.mondomaine.fr` derrière un reverse proxy) |
 
-**Installation recommandée** (droits exacts fixés par le spike) :
+**Installation recommandée** (droits minimaux mesurés au spike sur Ubuntu, AppArmor actif avec le profil par défaut) :
 
 ```sh
 docker run -d --name hublot-kit \
-  --pid=host --cap-add SYS_PTRACE \
+  --pid=host --cgroupns=host --cap-add SYS_PTRACE \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -v hublot-data:/data \
   -p 127.0.0.1:7878:7878 \
   ghcr.io/levy-cmd/hublot-kit:0.1
 ```
 
-**Alternative** : binaire des releases GitHub + service systemd, lancé en root.
+| Droit | Raison |
+|---|---|
+| `--pid=host` | voir `/proc/<pid>` des conteneurs |
+| `--cgroupns=host` | avec un espace de noms cgroup privé et le pilote cgroupfs, l'agent lit `/../<id>` et doit refuser (§5.1 étape 3) |
+| `--cap-add SYS_PTRACE` | obligatoire pour une cible qui tourne sous un autre uid : sans lui, `/proc/<pid>/root` renvoie `EACCES` |
+
+Pas de `--privileged`, aucun changement AppArmor. Fedora (SELinux) : en attente.
+
+**Alternative** : binaire des releases GitHub + service systemd, lancé en root (vérifié sur Ubuntu).
 
 **Prérequis hôte** : Linux amd64 ou arm64, noyau 5.6+, Docker Engine avec API 1.44+, stockage overlay2 ou containerd.
 
-**Développement sur macOS** : Docker Desktop fait tourner Docker dans une machine virtuelle Linux ; `/proc/<pid>/root` n'existe que dans cette machine. L'agent se lance donc dans un conteneur pendant le développement (`docker compose` avec `--pid=host`, `SYS_PTRACE` et le code monté), l'interface en `vite dev` sur le Mac avec un proxy vers l'agent.
+**Développement sur macOS** : Docker Desktop fait tourner Docker dans une machine virtuelle Linux ; `/proc/<pid>/root` n'existe que dans cette machine. L'agent se lance donc dans un conteneur pendant le développement (`docker compose` avec `--pid=host`, `--cgroupns=host`, `SYS_PTRACE` et le code monté ; `--cgroupns=host` est indispensable sur Docker Desktop, pilote cgroupfs), l'interface en `vite dev` sur le Mac avec un proxy vers l'agent.
 
 ## 9. Interface
 
@@ -235,18 +250,20 @@ docker run -d --name hublot-kit \
 
 Code jetable dans `spike/`, supprimé une fois les réponses écrites dans ce document. Quatre questions :
 
-| # | Question | Réussite | Si échec |
-|---|---|---|---|
-| 1 | Lister `/usr` d'une image distroless avec la séquence complète de §5.1 (pidfd, cgroup, `OpenatInRoot`, `Reopen`) | 1 000 entrées en moins d'1 s ; le test d'évasion par lien échoue comme prévu ; l'ID du conteneur apparaît dans `/proc/<pid>/cgroup` vu depuis l'agent conteneurisé | revoir §5.1 avant le socle |
-| 2 | `/changes` sur overlay2 et sur containerd | mêmes manipulations, mêmes résultats | F5 marqué « non pris en charge » sur le stockage en défaut en v0.1, avec message |
-| 3 | Droits minimaux sur Ubuntu (AppArmor) et Fedora (SELinux) | une commande `docker run` sans `--privileged` qui marche sur les deux | documenter l'option nécessaire (`--security-opt`) ou recommander le binaire + systemd sur la distribution concernée |
-| 4 | Sur un conteneur arrêté : `HEAD` et `GET /archive` répondent-ils, et `GET /archive` sur `/` inclut-il les volumes ? | réponses oui ou non | `HEAD` refusé → `Stat` lit l'index ; volumes absents → l'index affiche les points de montage vides avec une mention |
+| # | Question | Réussite | Si échec | Résultat |
+|---|---|---|---|---|
+| 1 | Lister `/usr` d'une image distroless avec la séquence complète de §5.1 (pidfd, cgroup, `OpenatInRoot`, `Reopen`) | 1 000 entrées en moins d'1 s ; le test d'évasion par lien échoue comme prévu ; l'ID du conteneur apparaît dans `/proc/<pid>/cgroup` vu depuis l'agent conteneurisé | revoir §5.1 avant le socle | réussi avec `--cgroupns=host` : 1 000 entrées en 1 à 15 ms, aucune évasion ; sans ce flag, Docker Desktop donne `/../<id>`, refusé |
+| 2 | `/changes` sur overlay2 et sur containerd | mêmes manipulations, mêmes résultats | F5 marqué « non pris en charge » sur le stockage en défaut en v0.1, avec message | réussi : résultats identiques sur les deux |
+| 3 | Droits minimaux sur Ubuntu (AppArmor) et Fedora (SELinux) | une commande `docker run` sans `--privileged` qui marche sur les deux | documenter l'option nécessaire (`--security-opt`) ou recommander le binaire + systemd sur la distribution concernée | Ubuntu réussi : `--pid=host --cgroupns=host --cap-add SYS_PTRACE` (§8) ; Fedora en attente |
+| 4 | Sur un conteneur arrêté : `HEAD` et `GET /archive` répondent-ils, et `GET /archive` sur `/` inclut-il les volumes ? | réponses oui ou non | `HEAD` refusé → `Stat` lit l'index ; volumes absents → l'index affiche les points de montage vides avec une mention | oui et oui ; `GET` ne suit pas un lien final, `tarindex` résout les liens (§5.2) |
 
-Le spike confirme aussi le chemin d'import du SDK Docker, la version de `filepath-securejoin` et ses noms de fonctions, et mesure le rythme réel pour recaler le planning.
+Le spike confirme aussi le chemin d'import du SDK Docker (`github.com/moby/moby/client`) et l'API de `filepath-securejoin` v0.7.0 (`pathrs-lite` : `OpenatInRoot`, `Reopen`) ; voir §3.
+
+**Résultats détaillés** : [2026-10-07-resultats-spike.md](../spikes/2026-10-07-resultats-spike.md). `spike/` est gardé jusqu'au passage Fedora.
 
 ## 12. Planning
 
-Base 5 à 10 h par semaine, à recaler après le spike.
+Base 5 à 10 h par semaine. 12 semaines maintenues : le code du spike a été écrit par des sous-agents, son rythme ne mesure pas celui de l'utilisateur en Go. Re-mesurer après la première semaine du socle et recaler à ce moment-là.
 
 | Phase | Semaines | Contenu | Jalon |
 |---|---|---|---|
@@ -260,10 +277,10 @@ Base 5 à 10 h par semaine, à recaler après le spike.
 
 | Risque | Parade |
 |---|---|
-| AppArmor ou SELinux bloquent `/proc/<pid>/root` dans un conteneur | spike n°3 ; repli binaire + systemd |
+| AppArmor ou SELinux bloquent `/proc/<pid>/root` dans un conteneur | Ubuntu (AppArmor, profil par défaut) : rien à changer (spike n°3). SELinux : en attente du passage Fedora. Repli binaire + systemd |
 | Construction de l'index longue sur une grosse image | progression affichée ; cache par conteneur |
-| `/changes` incomplet sur containerd | spike n°2 ; message clair plutôt qu'un diff faux |
-| Rythme d'apprentissage de Go plus lent que prévu | recalage après le spike ; tâches petites |
+| `/changes` incomplet sur containerd | risque levé : résultats identiques sur overlay2 et containerd (spike n°2) ; la matrice des tests d'intégration le garde sous contrôle |
+| Rythme d'apprentissage de Go plus lent que prévu | re-mesure après la première semaine du socle ; tâches petites |
 | Faille de lecture hors conteneur | tests d'évasion écrits avant le code ; `securejoin` obligatoire ; revue de toute PR qui touche `fsview` |
 
 ## 14. Décisions hors technique
