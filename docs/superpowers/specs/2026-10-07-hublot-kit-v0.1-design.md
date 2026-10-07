@@ -295,7 +295,7 @@ Code jetable dans `spike/`, supprimé une fois les réponses écrites dans ce do
 
 Le spike confirme aussi le chemin d'import du SDK Docker (`github.com/moby/moby/client`) et l'API de `filepath-securejoin` v0.7.0 (`pathrs-lite` : `OpenatInRoot`, `Reopen`) ; voir §3.
 
-**Résultats détaillés** : [2026-10-07-resultats-spike.md](../spikes/2026-10-07-resultats-spike.md). `spike/` est gardé jusqu'au passage Fedora.
+**Résultats détaillés** : [2026-10-07-resultats-spike.md](../spikes/2026-10-07-resultats-spike.md). Le code jetable du spike a été supprimé une fois tous les résultats consignés ; il est conservé dans l'historique git et dans ce document de résultats.
 
 ## 12. Planning
 
