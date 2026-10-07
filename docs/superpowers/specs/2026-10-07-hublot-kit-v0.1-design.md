@@ -1,7 +1,7 @@
 # Hublot-Kit v0.1 — Spec technique
 
 - **Date** : 2026-10-07
-- **Statut** : à valider
+- **Statut** : validée le 2026-10-07
 - **Cahier des charges (le quoi)** : https://claude.ai/code/artifact/86c33f3d-d4d1-4b9b-bae5-756b8276c139
 - **Ce document (le comment)** : architecture, contrats et règles d'implémentation de la v0.1. En cas d'écart, le cahier des charges fait foi sur le périmètre, cette spec sur la technique.
 
@@ -216,6 +216,7 @@ docker run -d --name hublot-kit \
 
 ## 9. Interface
 
+- Page `/servers` : affiche le seul serveur de la v0.1 (cet agent) et un bouton « Ajouter un serveur » désactivé, marqué « bientôt ». Elle prépare l'interface à la gestion de plusieurs serveurs : un agent par serveur, l'interface en contacte plusieurs. L'API de l'agent n'a donc pas besoin de changer.
 - Pages : `/login`, `/` (liste des conteneurs), `/c/[id]` avec quatre onglets : **Fichiers** (arborescence + aperçu + édition, marques du diff F5 dans l'arbre), **Changements** (liste F5), **Logs**, **Radiographie**.
 - Toute écriture passe par une boîte de dialogue de confirmation qui rappelle le conteneur et le chemin.
 - En lecture seule (`/api/meta`), les boutons d'écriture n'apparaissent pas.
@@ -250,7 +251,7 @@ Base 5 à 10 h par semaine, à recaler après le spike.
 | Phase | Semaines | Contenu | Jalon |
 |---|---|---|---|
 | Spike | 1 | §11 | feu vert technique |
-| Socle | 2 à 4 | dépôt, CI, agent, auth, audit, F1, squelette interface | |
+| Socle | 2 à 4 | dépôt, CI, agent, auth, audit, F1, squelette interface, page `/servers` | |
 | Explorateur | 5 à 9 | F2, F3, F4, F5 | démo : un diagnostic complet sans terminal |
 | Observation | 10 | F6, F7 | |
 | Lancement | 11 à 12 | docs FR/EN, GoReleaser, image GHCR, release | v0.1 publique |
@@ -265,7 +266,7 @@ Base 5 à 10 h par semaine, à recaler après le spike.
 | Rythme d'apprentissage de Go plus lent que prévu | recalage après le spike ; tâches petites |
 | Faille de lecture hors conteneur | tests d'évasion écrits avant le code ; `securejoin` obligatoire ; revue de toute PR qui touche `fsview` |
 
-## 14. Questions encore ouvertes (non bloquantes pour la v0.1)
+## 14. Décisions hors technique
 
-- Prévoir dès maintenant une page de connexion à plusieurs serveurs, même désactivée ? Proposition : non (YAGNI).
-- Modèle à terme : gratuit, puis version payante pour les équipes. Aucun impact sur la v0.1.
+- Plusieurs serveurs : page `/servers` désactivée dès la v0.1 (§9), aucune préparation côté agent.
+- Modèle à terme : gratuit, puis une version payante pour les équipes. Aucun impact sur la v0.1.
