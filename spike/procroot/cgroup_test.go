@@ -16,6 +16,9 @@ func TestCgroupHasID(t *testing.T) {
 		{"0::/../docker-" + id + ".scope\n", true}, // vu depuis un espace de noms cgroup privé
 		{"0::/\n", false},
 		{"0::/docker/" + id[:12] + "\n", false},
+		{"0::/system.slice/not" + id + "evil.scope\n", false},
+		{"0::/docker/" + id + "x\n", false},
+		{"0::/docker/" + id + "/child\n", true},
 	}
 	for _, c := range cases {
 		if got := CgroupHasID(c.cgroup, id); got != c.want {

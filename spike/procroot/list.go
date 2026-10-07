@@ -4,6 +4,7 @@ package procroot
 
 import (
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"os"
@@ -33,6 +34,9 @@ func openIn(root *os.File, path string, flags int) (*os.File, error) {
 // List returns at most max entries of dir. Entries are stat'ed relative to the
 // directory's descriptor, one path component at a time: no symlink is followed.
 func List(root *os.File, dir string, max int) ([]Entry, bool, error) {
+	if max < 0 {
+		return nil, false, errors.New("max must be >= 0")
+	}
 	d, err := openIn(root, dir, unix.O_RDONLY|unix.O_DIRECTORY)
 	if err != nil {
 		return nil, false, err
@@ -77,7 +81,20 @@ func List(root *os.File, dir string, max int) ([]Entry, bool, error) {
 
 // ReadFile reads at most 1 MiB of path, resolved inside root.
 func ReadFile(root *os.File, path string) ([]byte, error) {
-	f, err := openIn(root, path, unix.O_RDONLY)
+	h, err := pathrs.OpenatInRoot(root, path)
+	if err != nil {
+		return nil, err
+	}
+	defer h.Close()
+	var st unix.Stat_t
+	if err := unix.Fstat(int(h.Fd()), &st); err != nil {
+		return nil, err
+	}
+	if st.Mode&unix.S_IFMT != unix.S_IFREG {
+		return nil, fmt.Errorf("%w: %s", ErrNotRegular, path)
+	}
+	// O_NONBLOCK: never block on a file that was swapped for a FIFO after the check.
+	f, err := pathrs.Reopen(h, unix.O_RDONLY|unix.O_NONBLOCK|unix.O_CLOEXEC)
 	if err != nil {
 		return nil, err
 	}

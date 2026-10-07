@@ -3,10 +3,15 @@
 package procroot
 
 import (
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"golang.org/x/sys/unix"
 )
 
 func must(t *testing.T, err error) {
@@ -30,7 +35,7 @@ func mkRoot(t *testing.T) (root *os.File, rootPath, marker string) {
 
 func assertNoEscape(t *testing.T, b []byte, err error) {
 	t.Helper()
-	if err == nil || strings.Contains(string(b), "HOST-SECRET") {
+	if !errors.Is(err, fs.ErrNotExist) || strings.Contains(string(b), "HOST-SECRET") {
 		t.Fatalf("ESCAPE: read %q err=%v", b, err)
 	}
 }
@@ -57,8 +62,12 @@ func TestReadFileRelativeSymlinkStaysInRoot(t *testing.T) {
 }
 
 func TestReadFileDotDotPathStaysInRoot(t *testing.T) {
-	root, _, marker := mkRoot(t)
-	b, err := ReadFile(root, strings.Repeat("../", 20)+strings.TrimPrefix(marker, "/"))
+	root, rp, marker := mkRoot(t)
+	dotdot := strings.Repeat("../", 20) + strings.TrimPrefix(marker, "/")
+	if b, err := os.ReadFile(rp + "/" + dotdot); err != nil || string(b) != "HOST-SECRET" {
+		t.Fatalf("control: the naive read should escape, got %q %v", b, err)
+	}
+	b, err := ReadFile(root, dotdot)
 	assertNoEscape(t, b, err)
 }
 
@@ -130,5 +139,68 @@ func TestListTruncates(t *testing.T) {
 	must(t, err)
 	if len(entries) != 15 || truncated {
 		t.Fatalf("want 15 entries not truncated, got %d truncated=%v", len(entries), truncated)
+	}
+}
+
+func TestReadFileRegularInRoot(t *testing.T) {
+	root, rp, _ := mkRoot(t)
+	must(t, os.MkdirAll(filepath.Join(rp, "d"), 0o755))
+	must(t, os.WriteFile(filepath.Join(rp, "d", "f.txt"), []byte("in-root"), 0o644))
+	b, err := ReadFile(root, "/d/f.txt")
+	must(t, err)
+	if string(b) != "in-root" {
+		t.Fatalf("got %q", b)
+	}
+}
+
+func TestIntermediateSymlinkDirStaysInRoot(t *testing.T) {
+	root, rp, marker := mkRoot(t)
+	must(t, os.Symlink(filepath.Dir(marker), filepath.Join(rp, "evil-dir")))
+	if b, err := os.ReadFile(filepath.Join(rp, "evil-dir", "MARKER")); err != nil || string(b) != "HOST-SECRET" {
+		t.Fatalf("control: the naive read should escape, got %q %v", b, err)
+	}
+	b, err := ReadFile(root, "evil-dir/MARKER")
+	assertNoEscape(t, b, err)
+	entries, _, err := List(root, "evil-dir", 10)
+	if !errors.Is(err, fs.ErrNotExist) || len(entries) != 0 {
+		t.Fatalf("ESCAPE: List returned %v err=%v", entries, err)
+	}
+}
+
+func readWithTimeout(t *testing.T, root *os.File, name string) error {
+	t.Helper()
+	done := make(chan error, 1)
+	go func() { _, err := ReadFile(root, name); done <- err }()
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(2 * time.Second):
+		t.Fatal("ReadFile blocked on a non-regular file")
+		return nil
+	}
+}
+
+func TestReadFileRefusesDevice(t *testing.T) {
+	root, rp, _ := mkRoot(t)
+	if err := unix.Mknod(filepath.Join(rp, "dev"), unix.S_IFCHR|0o666, int(unix.Mkdev(1, 5))); err != nil {
+		t.Skipf("mknod not permitted: %v", err)
+	}
+	if err := readWithTimeout(t, root, "dev"); !errors.Is(err, ErrNotRegular) {
+		t.Fatalf("want ErrNotRegular, got %v", err)
+	}
+}
+
+func TestReadFileRefusesFIFO(t *testing.T) {
+	root, rp, _ := mkRoot(t)
+	must(t, unix.Mkfifo(filepath.Join(rp, "fifo"), 0o644))
+	if err := readWithTimeout(t, root, "fifo"); !errors.Is(err, ErrNotRegular) {
+		t.Fatalf("want ErrNotRegular, got %v", err)
+	}
+}
+
+func TestListNegativeMax(t *testing.T) {
+	root, _, _ := mkRoot(t)
+	if _, _, err := List(root, "/", -1); err == nil {
+		t.Fatal("negative max must fail")
 	}
 }

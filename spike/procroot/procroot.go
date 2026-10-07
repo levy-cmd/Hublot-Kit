@@ -3,6 +3,7 @@
 package procroot
 
 import (
+	"errors"
 	"fmt"
 	"os"
 
@@ -28,6 +29,9 @@ func Open(pid int, containerID string) (*os.File, error) {
 
 	fd, err := unix.Open(fmt.Sprintf("/proc/%d/root", pid), unix.O_PATH|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
 	if err != nil {
+		if errors.Is(err, unix.ENOENT) || errors.Is(err, unix.ESRCH) {
+			return nil, fmt.Errorf("%w: open root of pid %d: %v", ErrChanged, pid, err)
+		}
 		return nil, fmt.Errorf("open root of pid %d: %w", pid, err)
 	}
 	// Still alive => the PID was not recycled between pidfd_open and the open above.
