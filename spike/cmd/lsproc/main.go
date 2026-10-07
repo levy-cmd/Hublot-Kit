@@ -40,8 +40,15 @@ func main() {
 	if !ct.State.Running {
 		fatal("container is not running")
 	}
-	cg, _ := os.ReadFile(fmt.Sprintf("/proc/%d/cgroup", ct.State.Pid))
-	fmt.Printf("container %s pid=%d cgroup=%q\n", ct.ID[:12], ct.State.Pid, strings.TrimSpace(string(cg)))
+	cg, cgErr := os.ReadFile(fmt.Sprintf("/proc/%d/cgroup", ct.State.Pid))
+	if cgErr != nil {
+		fmt.Printf("cgroup read error: %v\n", cgErr)
+	}
+	shortID := ct.ID
+	if len(shortID) > 12 {
+		shortID = shortID[:12]
+	}
+	fmt.Printf("container %s pid=%d cgroup=%q\n", shortID, ct.State.Pid, strings.TrimSpace(string(cg)))
 
 	start := time.Now()
 	root, err := procroot.Open(ct.State.Pid, ct.ID)
