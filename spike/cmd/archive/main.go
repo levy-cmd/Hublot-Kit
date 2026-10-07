@@ -32,6 +32,28 @@ func fatal(format string, a ...any) {
 	os.Exit(1)
 }
 
+// probeGet fetches /archive for path and describes the first tar entry.
+func probeGet(ctx context.Context, dc *dockerapi.Client, id, path string) {
+	rc, err := dc.GetArchive(ctx, id, path)
+	if err != nil {
+		fmt.Printf("RESULT GET %s: err=%v\n", path, err)
+		return
+	}
+	defer rc.Close()
+	tr := tar.NewReader(rc)
+	h, err := tr.Next()
+	if err != nil {
+		fmt.Printf("RESULT GET %s: tar err=%v\n", path, err)
+		return
+	}
+	fmt.Printf("RESULT GET %s: typeflag=%q(%d) name=%q linkname=%q size=%d\n",
+		path, h.Typeflag, h.Typeflag, h.Name, h.Linkname, h.Size)
+	if h.Typeflag == tar.TypeReg || h.Typeflag == tar.TypeRegA {
+		line, err := bufio.NewReader(tr).ReadString('\n')
+		fmt.Printf("RESULT GET %s: first line %q err=%v\n", path, strings.TrimSpace(line), err)
+	}
+}
+
 func main() {
 	if len(os.Args) != 2 {
 		fatal("usage: archive <container>")
@@ -53,22 +75,11 @@ func main() {
 	st, err := dc.ArchiveStat(ctx, id, "/etc/os-release")
 	fmt.Printf("RESULT HEAD /etc/os-release: %+v err=%v\n", st, err)
 
-	rc, err := dc.GetArchive(ctx, id, "/etc/os-release")
-	if err != nil {
-		fmt.Printf("RESULT GET /etc/os-release: err=%v\n", err)
-	} else {
-		tr := tar.NewReader(rc)
-		if _, err := tr.Next(); err == nil {
-			line, _ := bufio.NewReader(tr).ReadString('\n')
-			fmt.Printf("RESULT GET /etc/os-release: first line %q\n", strings.TrimSpace(line))
-		} else {
-			fmt.Printf("RESULT GET /etc/os-release: tar err=%v\n", err)
-		}
-		rc.Close()
-	}
+	probeGet(ctx, dc, id, "/etc/os-release")
+	probeGet(ctx, dc, id, "/usr/lib/os-release")
 
 	start := time.Now()
-	rc, err = dc.GetArchive(ctx, id, "/")
+	rc, err := dc.GetArchive(ctx, id, "/")
 	if err != nil {
 		fatal("GET archive /: %v", err)
 	}
@@ -85,9 +96,12 @@ func main() {
 			fatal("tar: %v", err)
 		}
 		entries++
-		inRoot = inRoot || strings.HasSuffix(h.Name, "in-root.txt")
-		inVolume = inVolume || strings.HasSuffix(h.Name, "in-volume.txt")
+		if h.Typeflag == tar.TypeReg || h.Typeflag == tar.TypeRegA {
+			name := strings.TrimLeft(strings.TrimPrefix(h.Name, "./"), "/")
+			inRoot = inRoot || name == "in-root.txt"
+			inVolume = inVolume || name == "data/in-volume.txt"
+		}
 	}
-	fmt.Printf("RESULT index /: %d entries, %d bytes, %s\n", entries, cr.n, time.Since(start))
+	fmt.Printf("RESULT index /: %d entries, %d bytes read through tar end, %s\n", entries, cr.n, time.Since(start))
 	fmt.Printf("RESULT in-root.txt present=%v, in-volume.txt (volume) present=%v\n", inRoot, inVolume)
 }
