@@ -68,7 +68,6 @@ internal/
   api/               routes HTTP, SSE, en-têtes de sécurité, vérification d'Origin
   web/               go:embed du build SvelteKit
 web/                 application SvelteKit
-spike/               code jetable de la semaine 1 (supprimé après le spike)
 ```
 
 **Frontières**
@@ -229,12 +228,13 @@ Flags (chacun a son équivalent en variable `HUBLOT_*`) :
 | `--tls-cert`, `--tls-key` | vides |
 | `--public-origin` | vide (ex. `https://hublot.mondomaine.fr` derrière un reverse proxy) |
 
-**Installation recommandée**. Minimum mesuré par le spike sur Ubuntu (AppArmor actif) pour des cibles sous le profil `docker-default`, et identique sur Fedora (SELinux `enforcing`) : `--pid=host --cap-add SYS_PTRACE` + socket. `--cgroupns=host` est requis par le socle partout où l'agent tourne en conteneur, car tout `..` est refusé (§5.1 étape 3) ; il n'est inutile que pour le binaire lancé sur l'hôte. `--security-opt apparmor=unconfined` est requis pour explorer les cibles `--privileged` ou `apparmor=unconfined` sur un hôte AppArmor (spike n°3b) ; il est sans effet sur un hôte SELinux. La même commande sert aux deux familles (mesuré sur Ubuntu et Fedora) :
+**Installation recommandée**. Minimum mesuré par le spike sur Ubuntu (AppArmor actif) pour des cibles sous le profil `docker-default`, et identique sur Fedora (SELinux `enforcing`) : `--pid=host --cap-add SYS_PTRACE` + socket. `--cgroupns=host` est requis par le socle partout où l'agent tourne en conteneur, car tout `..` est refusé (§5.1 étape 3) ; il n'est inutile que pour le binaire lancé sur l'hôte. `--security-opt apparmor=unconfined` est requis pour explorer les cibles `--privileged` ou `apparmor=unconfined` sur un hôte AppArmor (spike n°3b) ; il est sans effet sur un hôte sans AppArmor. `--security-opt label=disable` est sans effet sur un hôte sans SELinux. La même commande sert aux deux familles (mesuré sur Ubuntu et Fedora) :
 
 ```sh
 docker run -d --name hublot-kit \
   --pid=host --cgroupns=host --cap-add SYS_PTRACE \
   --security-opt apparmor=unconfined \
+  --security-opt label=disable \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -v hublot-data:/data \
   -p 127.0.0.1:7878:7878 \
@@ -247,7 +247,7 @@ docker run -d --name hublot-kit \
 | `--cgroupns=host` | requis partout : avec un espace de noms cgroup privé, l'agent lit `/../<id>` (pilote cgroupfs, Docker Desktop) ou `/../docker-<id>.scope` (pilote systemd, Ubuntu), et le socle refuse tout composant `..` (§5.1 étape 3). Le spike passait sans ce flag sur Ubuntu parce qu'il acceptait encore `..` |
 | `--cap-add SYS_PTRACE` | obligatoire pour une cible qui tourne sous un autre uid (mesuré : sans lui, `/proc/<pid>/root` renvoie `EACCES`), et aussi, par la règle d'accès ptrace du noyau, pour une cible qui détient des capacités que l'agent n'a pas |
 | `--security-opt apparmor=unconfined` | le profil `docker-default` de l'agent n'autorise la lecture ptrace que vers des pairs `docker-default` : une cible `--privileged` ou `apparmor=unconfined` tourne `unconfined`, et `/proc/<pid>/root` renvoie `EACCES` (mesuré sur Ubuntu, `dmesg` : `apparmor="DENIED" operation="ptrace" profile="docker-default" … peer="unconfined"`). Avec ce flag, les deux cibles sont listées, sans évasion. Sans ce flag, ces cibles seules échouent : sur `EACCES` à l'ouverture de `/proc/<pid>/root`, l'agent renvoie `internal` avec un détail qui nomme les deux causes mesurées (`--cap-add SYS_PTRACE` absent, ou cible non confinée sans `--security-opt apparmor=unconfined`). Sur Fedora, sans effet (profil AppArmor vide), sans gêne non plus |
-| SELinux (Fedora) : rien à ajouter | Docker désactive l'étiquetage SELinux de tout conteneur lancé avec `--pid=host` (`HostConfig.SecurityOpt` = `[label=disable]`) : l'agent tourne en `spc_t`, lit `/proc/<pid>/root` de cibles `container_t`, `--privileged`, `label=disable` ou root `--privileged`, et se connecte au socket monté sans `:z` (mesuré sur Fedora 44, 16 cas sur 16, aucun AVC). `--security-opt label=disable` explicite est donc redondant, et sans gêne (mesuré sur les deux familles). Ne jamais forcer un type (`label=type:…`) : un agent `container_t` est refusé dès le socket (`avc: denied { write } … scontext=…container_t… tcontext=…container_var_run_t… tclass=sock_file`) |
+| SELinux : `--security-opt label=disable` | Docker l'applique déjà implicitement à un conteneur lancé avec `--pid=host` (observé : `ps -Z` → `spc_t`, `HostConfig.SecurityOpt=[label=disable]`, Docker 29.8.2 ; ce n'est pas un contrat documenté) : l'agent tourne en `spc_t`, lit `/proc/<pid>/root` de cibles `container_t`, `--privileged`, `label=disable` ou root `--privileged`, et se connecte au socket monté sans `:z` (mesuré sur Fedora 44, 16 cas sur 16, aucun AVC). Le flag explicite supprime cette dépendance ; mesuré sans gêne sur les deux familles (Ubuntu `d-*` 4/4, Fedora `c-*`/`d-*` 4/4). Aucune autre option `label=…` (toute option `label=` désactive le comportement implicite) : un agent `container_t` est refusé dès le socket (`avc: denied { write } … scontext=…container_t… tcontext=…container_var_run_t… tclass=sock_file`) |
 
 Pas de `--privileged`. L'agent est déjà root sur l'hôte de fait (§7) : lever son confinement AppArmor, ou tourner en `spc_t` sous SELinux, ne change pas ce qu'il peut faire, seulement les cibles qu'il peut lire. Sur un hôte sans AppArmor (Fedora), `--security-opt apparmor=unconfined` est accepté et sans effet : une seule commande pour Ubuntu et Fedora. Podman et Docker rootless : non mesurés.
 
@@ -284,13 +284,13 @@ Pas de `--privileged`. L'agent est déjà root sur l'hôte de fait (§7) : lever
 
 ## 11. Spike (semaine 1)
 
-Code jetable dans `spike/`, supprimé une fois les réponses écrites dans ce document. Quatre questions :
+Code jetable dans `spike/`, supprimé ensuite ; il reste dans l'historique git (parent du commit 72e1b50, branche `spike/semaine-1`) ; ses résultats sont dans le document de résultats. Quatre questions :
 
 | # | Question | Réussite | Si échec | Résultat |
 |---|---|---|---|---|
 | 1 | Lister `/usr` d'une image distroless avec la séquence complète de §5.1 (pidfd, cgroup, `OpenatInRoot`, `Reopen`) | 1 000 entrées en moins d'1 s ; le test d'évasion par lien échoue comme prévu ; l'ID du conteneur apparaît dans `/proc/<pid>/cgroup` vu depuis l'agent conteneurisé | revoir §5.1 avant le socle | réussi avec `--cgroupns=host` : 1 000 entrées en 1 à 15 ms (Docker Desktop), aucune évasion ; sans ce flag, Docker Desktop donne `/../<id>`, refusé |
 | 2 | `/changes` sur overlay2 et sur containerd | mêmes manipulations, mêmes résultats | F5 marqué « non pris en charge » sur le stockage en défaut en v0.1, avec message | réussi : résultats identiques sur les deux |
-| 3 | Droits minimaux sur Ubuntu (AppArmor) et Fedora (SELinux) | une commande `docker run` sans `--privileged` qui marche sur les deux | documenter l'option nécessaire (`--security-opt`) ou recommander le binaire + systemd sur la distribution concernée | Ubuntu réussi : minimum mesuré `--pid=host --cap-add SYS_PTRACE` pour des cibles `docker-default`, `--cgroupns=host` requis par le socle partout ; cibles `--privileged` ou `apparmor=unconfined` : `EACCES` (refus AppArmor `ptrace`) sauf avec `--security-opt apparmor=unconfined` sur l'agent (n°3b) (§8) ; binaire en root hors conteneur vérifié, service systemd non testé. Fedora (SELinux `enforcing`) réussi : même minimum, rien à ajouter pour SELinux (Docker pose `label=disable` sur un conteneur `--pid=host`, l'agent tourne en `spc_t`) ; `apparmor=unconfined` sans effet ; les 4 cibles non confinées OK (n°3b) ; binaire root hors conteneur vérifié. Une seule commande `docker run` pour les deux familles (§8) |
+| 3 | Droits minimaux sur Ubuntu (AppArmor) et Fedora (SELinux) | une commande `docker run` sans `--privileged` qui marche sur les deux | documenter l'option nécessaire (`--security-opt`) ou recommander le binaire + systemd sur la distribution concernée | Ubuntu réussi : minimum mesuré `--pid=host --cap-add SYS_PTRACE` pour des cibles `docker-default`, `--cgroupns=host` requis par le socle partout ; cibles `--privileged` ou `apparmor=unconfined` : `EACCES` (refus AppArmor `ptrace`) sauf avec `--security-opt apparmor=unconfined` sur l'agent (n°3b) (§8) ; binaire en root hors conteneur vérifié, service systemd non testé. Fedora (SELinux `enforcing`) réussi : même minimum, `--security-opt label=disable` ajouté explicitement par prudence (sans effet mesuré ; Docker le pose déjà sur un conteneur `--pid=host`, l'agent tourne en `spc_t`) ; `apparmor=unconfined` sans effet ; les 4 cibles non confinées OK (n°3b) ; binaire root hors conteneur vérifié. Une seule commande `docker run` pour les deux familles (§8) |
 | 4 | Sur un conteneur arrêté : `HEAD` et `GET /archive` répondent-ils, et `GET /archive` sur `/` inclut-il les volumes ? | réponses oui ou non | volumes absents → l'index affiche les points de montage vides avec une mention | oui et oui ; `GET` ne suit pas un lien final, `tarindex` résout les liens (§5.2) |
 
 Le spike confirme aussi le chemin d'import du SDK Docker (`github.com/moby/moby/client`) et l'API de `filepath-securejoin` v0.7.0 (`pathrs-lite` : `OpenatInRoot`, `Reopen`) ; voir §3.
@@ -313,7 +313,7 @@ Base 5 à 10 h par semaine. 12 semaines maintenues : le code du spike a été é
 
 | Risque | Parade |
 |---|---|
-| AppArmor ou SELinux bloquent `/proc/<pid>/root` dans un conteneur | Ubuntu (AppArmor) : cibles `docker-default`, rien à changer (spike n°3) ; cibles `--privileged` ou `apparmor=unconfined`, refus AppArmor `ptrace`, levé par `--security-opt apparmor=unconfined` sur l'agent, dans la commande recommandée (spike n°3b, §8). Fedora (SELinux `enforcing`) : rien à changer, `--pid=host` fait tourner l'agent en `spc_t` (Docker pose `label=disable`), toutes les cibles mesurées lisibles, aucun AVC (spike n°3 et 3b) ; risque résiduel : si Docker cessait de lever l'étiquetage pour `--pid=host`, l'agent `container_t` perdrait d'abord le socket (refus AVC mesuré) → ajouter `--security-opt label=disable`. Repli : binaire lancé en root hors conteneur (vérifié sur Ubuntu et Fedora ; service systemd non testé) |
+| AppArmor ou SELinux bloquent `/proc/<pid>/root` dans un conteneur | Ubuntu (AppArmor) : cibles `docker-default`, rien à changer (spike n°3) ; cibles `--privileged` ou `apparmor=unconfined`, refus AppArmor `ptrace`, levé par `--security-opt apparmor=unconfined` sur l'agent, dans la commande recommandée (spike n°3b, §8). Fedora (SELinux `enforcing`) : levé par le flag explicite `--security-opt label=disable` (Docker le pose déjà pour `--pid=host`, l'agent tourne en `spc_t`, toutes les cibles mesurées lisibles, aucun AVC : spike n°3 et 3b). Repli : binaire lancé en root hors conteneur (vérifié sur Ubuntu et Fedora ; service systemd non testé) |
 | Construction de l'index longue sur une grosse image | progression affichée ; cache par conteneur |
 | `/changes` incomplet sur containerd | risque levé : résultats identiques sur overlay2 et containerd (spike n°2) ; la matrice des tests d'intégration le garde sous contrôle |
 | Rythme d'apprentissage de Go plus lent que prévu | re-mesure après la première semaine du socle ; tâches petites |
