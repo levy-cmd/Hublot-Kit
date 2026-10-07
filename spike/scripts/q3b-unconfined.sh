@@ -16,7 +16,7 @@ OUT="$MARK/q3b-$(hostname)"; mkdir -p "$OUT"
 MIN_FLAGS="--pid=host --cgroupns=host --cap-add SYS_PTRACE"
 TARGETS="spike-priv spike-unconf spike-nolabel spike-rootpriv"
 
-cleanup() { docker rm -f $TARGETS >/dev/null 2>&1 || true; }
+cleanup() { docker rm -f $TARGETS $(docker ps -aq --filter name=spike-agent- 2>/dev/null) >/dev/null 2>&1 || true; }
 trap cleanup EXIT
 
 docker build -q -t hublot-spike . >/dev/null
@@ -33,22 +33,35 @@ for t in $TARGETS; do
   echo "RESULT target $t: user=$(docker inspect -f '{{.Config.User}}' "$t") apparmor=$(docker inspect -f '{{.AppArmorProfile}}' "$t") label=$(docker inspect -f '{{.ProcessLabel}}' "$t") privileged=$(docker inspect -f '{{.HostConfig.Privileged}}' "$t")"
 done
 
+HAVE_AUSEARCH=no; command -v ausearch >/dev/null 2>&1 && HAVE_AUSEARCH=yes
+AUDITD=absent
+if command -v systemctl >/dev/null 2>&1; then
+  AUDITD=$(systemctl is-active auditd 2>/dev/null || true)
+  case "$AUDITD" in active) ;; "") AUDITD=absent ;; *) AUDITD=inactive ;; esac
+fi
+echo "RESULT audit: ausearch=$HAVE_AUSEARCH auditd=$AUDITD"
+
 FAILED=0
 SUMMARY=""
 
 # run_case <label> <target> <agent flags>: one agent run, logged, verdict line.
 run_case() {
   local label="$1" target="$2" flags="$3" log="$OUT/$1.log" rc=0 ok=1
+  local t0; t0=$(date +%H:%M:%S)
   echo "== $label (agent: $flags)"
   # shellcheck disable=SC2086  # flags are split on purpose
-  docker run --rm $flags \
+  docker create --name "spike-agent-$label" $flags \
     -v /var/run/docker.sock:/var/run/docker.sock \
-    -v "$MARK/marker:/tmp/HOST_MARKER:ro" \
-    hublot-spike lsproc "$target" /usr/many evil >"$log" 2>&1 || rc=$?
+    -v "$MARK/marker:/tmp/HOST_MARKER:ro,z" \
+    hublot-spike lsproc "$target" /usr/many evil >/dev/null
+  docker start -a "spike-agent-$label" >"$log" 2>&1 || rc=$?
+  # the profile and label are only populated once the container has started
+  echo "RESULT agent $label: apparmor=$(docker inspect -f '{{.AppArmorProfile}}' "spike-agent-$label") label=$(docker inspect -f '{{.ProcessLabel}}' "spike-agent-$label")"
+  docker rm -f "spike-agent-$label" >/dev/null 2>&1 || true
   cat "$log"
   [ "$rc" -eq 0 ] || { echo "EXIT $rc (case: $label)"; ok=0; }
   grep -q "RESULT list /usr/many: 1000" "$log" || ok=0
-  grep "RESULT securejoin read evil:" "$log" | grep -q "no such file" || ok=0
+  grep -qE 'RESULT securejoin read evil:.*no such file' "$log" || ok=0
   ! grep -q "securejoin read.*HOST-SECRET" "$log" || ok=0
   if [ "$ok" -eq 1 ]; then
     echo "RESULT case $label: OK"
@@ -60,10 +73,14 @@ run_case() {
 "
     FAILED=1
     {
-      echo "=== denials after $label ($(date -u +%FT%TZ))"
+      echo "=== case $label (start $t0, flags: $flags)"
+      echo "--- dmesg (non attribuable)"
       dmesg 2>&1 | grep -iE 'apparmor|avc' | tail -20 || true
-      if command -v ausearch >/dev/null 2>&1; then
-        ausearch -m avc -ts recent 2>/dev/null | tail -20 || true
+      echo "--- ausearch -m avc -ts $t0"
+      if [ "$HAVE_AUSEARCH" = yes ] && [ "$AUDITD" = active ]; then
+        ausearch -m avc -ts "$t0" 2>/dev/null | tail -20 || true
+      else
+        echo "AVC capture indisponible (ausearch=$HAVE_AUSEARCH auditd=$AUDITD)"
       fi
     } >> "$OUT/q3b-denials.txt"
   fi
