@@ -22,6 +22,14 @@ func Handler() http.Handler {
 
 func NewHandler(files fs.FS) http.Handler {
 	fileServer := http.FileServerFS(files)
+	staticExts := map[string]bool{
+		".js": true, ".mjs": true, ".css": true, ".map": true,
+		".png": true, ".jpg": true, ".jpeg": true, ".gif": true,
+		".webp": true, ".svg": true, ".ico": true,
+		".woff": true, ".woff2": true, ".ttf": true,
+		".json": true, ".txt": true, ".webmanifest": true,
+	}
+
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		p := strings.TrimPrefix(path.Clean(r.URL.Path), "/")
 
@@ -38,7 +46,6 @@ func NewHandler(files fs.FS) http.Handler {
 		if p != "" {
 			if st, err := fs.Stat(files, p); err == nil && !st.IsDir() {
 				// File exists, serve it
-				w.Header().Set("Content-Type", contentType(p))
 				if strings.HasPrefix(p, "_app/immutable/") {
 					w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 				}
@@ -46,14 +53,15 @@ func NewHandler(files fs.FS) http.Handler {
 				return
 			}
 
-			// File doesn't exist: return 404 if it looks like an asset
-			if isAssetPath(p) {
+			// File doesn't exist: return 404 only for known static asset extensions or _app/ paths
+			// Never 404 for c/ paths (container names may have dots)
+			if !strings.HasPrefix(p, "c/") && (strings.HasPrefix(p, "_app/") || staticExts[strings.ToLower(path.Ext(p))]) {
 				http.NotFound(w, r)
 				return
 			}
 		}
 
-		// SPA fallback: serve index.html for extension-less paths
+		// SPA fallback: serve index.html
 		index, err := fs.ReadFile(files, "index.html")
 		if err != nil {
 			http.Error(w, "interface non compilée : lancez `make web`", http.StatusServiceUnavailable)
@@ -63,30 +71,4 @@ func NewHandler(files fs.FS) http.Handler {
 		w.Header().Set("Cache-Control", "no-cache")
 		w.Write(index)
 	})
-}
-
-func isAssetPath(p string) bool {
-	// Paths starting with _app/ are assets
-	if strings.HasPrefix(p, "_app/") {
-		return true
-	}
-	// Paths with a dot in the last segment (file extensions) are assets
-	lastSegment := p
-	if idx := strings.LastIndex(p, "/"); idx >= 0 {
-		lastSegment = p[idx+1:]
-	}
-	return strings.Contains(lastSegment, ".")
-}
-
-func contentType(p string) string {
-	if strings.HasSuffix(p, ".js") {
-		return "application/javascript"
-	}
-	if strings.HasSuffix(p, ".css") {
-		return "text/css"
-	}
-	if strings.HasSuffix(p, ".html") {
-		return "text/html; charset=utf-8"
-	}
-	return "application/octet-stream"
 }

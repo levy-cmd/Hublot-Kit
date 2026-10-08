@@ -11,6 +11,7 @@ import (
 var site = fstest.MapFS{
 	"index.html":          {Data: []byte("<!doctype html><title>Hublot</title>")},
 	"_app/immutable/a.js": {Data: []byte("console.log(1)")},
+	"favicon.png":         {Data: []byte("\x89PNG")},
 }
 
 func get(h http.Handler, path string) *httptest.ResponseRecorder {
@@ -56,8 +57,8 @@ func TestMissingAssetWithDot(t *testing.T) {
 	}
 }
 
-func TestMissingFaviconWithDot(t *testing.T) {
-	rec := get(NewHandler(site), "/favicon.png")
+func TestMissingImageWithDot(t *testing.T) {
+	rec := get(NewHandler(site), "/missing.png")
 	if rec.Code != 404 {
 		t.Fatalf("got %d, want 404", rec.Code)
 	}
@@ -89,5 +90,38 @@ func TestHeadRequest(t *testing.T) {
 	NewHandler(site).ServeHTTP(rec, httptest.NewRequest("HEAD", "/login", nil))
 	if rec.Code != 200 {
 		t.Fatalf("got %d, want 200", rec.Code)
+	}
+}
+
+func TestContainerNameWithDot(t *testing.T) {
+	for _, p := range []string{"/c/web.1", "/c/redis-7.2"} {
+		rec := get(NewHandler(site), p)
+		if rec.Code != 200 || !strings.Contains(rec.Body.String(), "<title>Hublot</title>") {
+			t.Errorf("%s: got %d", p, rec.Code)
+		}
+		if rec.Header().Get("Cache-Control") != "no-cache" {
+			t.Errorf("%s: Cache-Control %q, want no-cache", p, rec.Header().Get("Cache-Control"))
+		}
+	}
+}
+
+func TestMissingAppJs(t *testing.T) {
+	rec := get(NewHandler(site), "/app.js")
+	if rec.Code != 404 {
+		t.Fatalf("got %d, want 404", rec.Code)
+	}
+}
+
+func TestMissingAppNoExt(t *testing.T) {
+	rec := get(NewHandler(site), "/_app/x")
+	if rec.Code != 404 {
+		t.Fatalf("got %d, want 404", rec.Code)
+	}
+}
+
+func TestExistingFaviconContentType(t *testing.T) {
+	rec := get(NewHandler(site), "/favicon.png")
+	if rec.Code != 200 || rec.Header().Get("Content-Type") != "image/png" {
+		t.Fatalf("got %d with Content-Type %q", rec.Code, rec.Header().Get("Content-Type"))
 	}
 }
