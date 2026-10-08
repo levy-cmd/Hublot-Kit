@@ -6,71 +6,192 @@
 >
 > **Apprendre Go :** les tâches marquées 🎓 (1 et 2) n'utilisent que la bibliothèque standard, sans Linux ni Docker. Elles se codent bien à la main en suivant le plan.
 >
-> **Vérifié avant rédaction :** le code Go de ce plan a été compilé et testé sur une copie du dépôt (macOS, conteneur `golang` root et non-root, Docker Desktop, intégration comprise) ; le code de l'interface a passé `npm run check`, `eslint`, Vitest et `npm run build`, puis a été parcouru dans Chrome sans tête contre l'agent lancé par `scripts/dev-agent.sh` (liste, lien vers un fichier, `/proc`, lien vers un dossier, `link_in_path` au téléchargement, aucune erreur console). Les VM Lima n'ont pas été lancées : la tâche 14 le fait.
+> **Vérifié avant rédaction (après les corrections de revue) :** le code Go de ce plan a été compilé et testé sur une copie du dépôt, sur macOS et sous Linux dans un conteneur `golang`, en root comme en non-root, avec `-race` et avec `-tags integration` sur Docker Desktop. Les états intermédiaires ont été rejoués : après la tâche 4, 20 tests rouges sur 21 ; les tâches 5 et 6 compilent et passent. Les nouveaux tests ont été éprouvés par mutation : un `Reopen` placé avant le contrôle du type, l'absence de `pidfd_send_signal` ou un créneau rendu avant la copie les font échouer. Le code de l'interface a passé `npm run check`, `eslint`, Vitest et `npm run build`. Il a aussi été parcouru dans Chrome sans tête, contre l'agent lancé par `scripts/dev-agent.sh` : liste, lien vers un fichier, `/proc`, téléchargement de `/` refusé avec son message, `/etc` accepté, `link_in_path` sur un dossier atteint par un lien, aucune erreur console. Le scénario C1 (bind du `/proc` de l'hôte) n'a **pas** été rejoué contre un vrai dockerd : il ne se teste qu'avec le faux client. Les VM Lima n'ont pas été lancées : la tâche 16 le fait.
 
-**Goal:** Sur un conteneur qui tourne, l'utilisateur parcourt toute l'arborescence, voit la taille, les droits et le propriétaire de chaque entrée, prévisualise un fichier texte ou une image, et télécharge un fichier ou un dossier (tar), sans qu'aucune lecture puisse sortir de la racine du conteneur.
+**Goal:** Sur un conteneur qui tourne, l'utilisateur parcourt toute l'arborescence. Il voit la taille, les droits et le propriétaire de chaque entrée, prévisualise un fichier texte ou une image, et télécharge un fichier ou un dossier (tar). Aucune lecture, ni de l'agent ni de Docker, ne peut sortir de la racine du conteneur vers l'hôte.
 
-**Architecture:** Nouveau paquet `internal/fsview` : l'interface `FS` (spec §4) et sa première implémentation `procfs` (spec §5.1) : pidfd + ancrage cgroup + `/proc/<pid>/root` en `O_PATH`, puis `pathrs-lite` pour toute résolution, `fstatfs` contre les pseudo-systèmes, fichiers réguliers seulement, `openat2 RESOLVE_NO_SYMLINKS` pour les chemins sans lien. `dockerx` gagne `Inspect` et `GetArchive`. `api` expose trois routes GET (§6) derrière une garde par conteneur (délai et plafond, §13). L'interface SvelteKit gagne la page `/c/[id]`, onglet Fichiers.
+**Architecture:** Nouveau paquet `internal/fsview`. Il porte l'interface `FS` (spec §4) et sa première implémentation `procfs` (spec §5.1) :
+- pidfd + ancrage cgroup + `/proc/<pid>/root` en `O_PATH` ;
+- `pathrs-lite` pour toute résolution ;
+- `fstatfs` contre les pseudo-systèmes ;
+- fichiers réguliers seulement ;
+- `openat2 RESOLVE_NO_SYMLINKS` pour les chemins sans lien ;
+- contrôle des montages avant tout tar de dossier (binds de l'hôte, `mountinfo`).
+
+`dockerx` gagne `Inspect` (avec les montages), `GetArchive` et `VolumeOptions`. `api` expose trois routes GET (§6) derrière une garde par conteneur (délai et plafond, §13). L'interface SvelteKit gagne la page `/c/[id]`, onglet Fichiers.
 
 **Tech Stack:** Go 1.27 (stdlib `net/http`), `github.com/moby/moby/client` v0.6.1, `github.com/cyphar/filepath-securejoin` v0.7.0 (`pathrs-lite`), `golang.org/x/sys` v0.48.0 ; SvelteKit 3 / Svelte 5, Vitest.
 
-**Spec:** `docs/superpowers/specs/2026-10-07-hublot-kit-v0.1-design.md` (§4, §5.1, §5.4, §6, §7, §8, §9, §10, §13). Résultats du spike : `docs/superpowers/spikes/2026-10-07-resultats-spike.md` (le code `procroot` du spike, parent du commit `72e1b50`, sert de base à `procfs`).
+**Spec:** `docs/superpowers/specs/2026-10-07-hublot-kit-v0.1-design.md` (§4, §5.1, §5.2 étape 7, §5.4, §6, §7, §8, §9, §10, §13). Résultats du spike : `docs/superpowers/spikes/2026-10-07-resultats-spike.md`. Le code `procroot` du spike (parent du commit `72e1b50`) sert de base à `procfs`.
+
+## Décisions de revue
+
+Revue du plan par un relecteur Opus et par Codex, constats vérifiés. Une ligne par décision, avec la tâche qui l'applique.
+
+- **C1 (critique) :** télécharger `/host` d'un conteneur lancé avec `-v /proc:/host/proc` archive le `/proc` de l'hôte (`/proc/kcore`, 254 Tio, dockerd bloqué). Avant tout `GetArchive` de dossier, `CheckArchive` applique :
+  - (a) la règle des binds de §5.2 étape 7 sur `Inspect.Mounts`, volumes `local` en `o=bind|rbind` + `device=` compris ;
+  - (b) `/proc/<pid>/mountinfo`, lu pour le process épinglé par le pidfd : aucun pseudo-système ni FUSE sur, sous ou au-dessus du dossier.
+
+  Échec → `forbidden_path` qui nomme le bind ou le montage. Les tests passent par le faux client et vérifient qu'aucun `GetArchive` n'est appelé. → Tâches 3 (`Mounts`, `VolumeOptions`), 7, 12 ; spec §5.4 et §13 (tâche 12).
+- **Bind d'un dossier ordinaire de l'hôte (conteneur actif) :** pas de refus en lecture ni au listing. L'utilisateur est root de fait, et les pseudo-systèmes et périphériques restent refusés. Une phrase le dit dans la spec §7. → Tâche 12.
+- **I1 :** test `inotify` `IN_OPEN` sur la FIFO et le nœud de périphérique ; zéro événement exigé (le refus précède `Reopen`). → Tâche 4.
+- **I2 :** cible `--pid=host` : `Open`, `List` et `StatNoLinks` sur `/proc/1/root/…` et par un lien `/m -> /proc/1/root` → erreur, jamais de contenu. Écrit d'abord en test unitaire avec `/` comme racine (tâche 4), confirmé sur Docker (tâche 8).
+- **I3 (= Codex n°5) :** `Inspect` d'abord, borné à 10 s ; la garde FUSE compte par ID complet. → Tâche 10.
+- **I4 :** points d'injection `readCgroup` et `afterRootOpen` ; un test tue le process entre l'ouverture de sa racine et `pidfd_send_signal`, et attend `ErrContainerChanged`. → Tâche 6.
+- **Codex n°4 :** le créneau de la garde reste pris pendant toute la copie (fichier et dossier), jusqu'au vrai retour de la lecture. Un test lance plusieurs téléchargements sur un lecteur bloqué. → Tâches 9, 12.
+- **M1 :** « mauvaise erreur » est signalée à part d'« ÉVASION ». → Tâche 4.
+- **M2 :** mode `&check=1`, qui fait tous les contrôles et répond `204` sans `GetArchive` ; l'interface l'utilise avant de télécharger. → Tâches 12, 13.
+- **M3 :** la vue est fermée dès l'ouverture d'un fichier. → Tâche 12.
+- **M4 :** `ELOOP` (boucle, lien magique) → `not_found`. → Tâche 9.
+- **M5 :** la spec §8 cite les scripts au lieu de `docker compose`. → Tâche 15.
+- **M6 :** la limite Q6 entre dans la spec §13. → Tâche 12.
+- **M7 :** l'ancienne tâche 13 est scindée en tâche 14 (page) et tâche 15 (agent de dev, essai manuel, README).
+- **M8 :** ne pas pousser entre les tâches 4 et 5. → Tâche 4.
+- **Q1 à Q7 :** recommandations conservées (le relecteur est d'accord), à confirmer par l'utilisateur.
 
 ## Découpage de la phase Explorateur (semaines 5 à 9)
 
-La phase couvre quatre fonctions indépendantes à tester (lecture conteneur actif, lecture conteneur arrêté, diff, écriture). Elle est découpée en trois plans ; chacun livre un logiciel qui marche et se teste seul.
+La phase couvre quatre fonctions indépendantes à tester : lecture d'un conteneur actif, lecture d'un conteneur arrêté, diff, écriture. Elle est découpée en trois plans ; chacun livre un logiciel qui marche et se teste seul.
 
-| Plan | Fichier | Périmètre | Durée visée |
-|---|---|---|---|
-| **1 (ce plan)** | `2026-10-08-explorateur-1-procfs.md` | `fsview` (interface, `procfs`), `dockerx.Inspect`/`GetArchive`, routes `GET /fs`, `/fs/file`, `/fs/download` sur conteneur actif, garde FUSE, onglet Fichiers en lecture | 2 semaines |
-| 2 | `2026-10-08-explorateur-2-tarindex-diff.md` (à écrire) | `tarindex` (§5.2) : tests d'évasion et de résolution d'abord (tar en mémoire : liens relatifs/absolus, `..` bloqué, `..` après dossier lié, chaîne, boucle à 40 sauts, liens physiques), binds de l'hôte (§5.2 étape 7, tests d'abord), cache LRU 3 + clé `ID + FinishedAt`, construction unique, progression plafonnée à 99 %, plafonds 4 Gio / 5 min → `too_large`, `202 indexing` et sa barre de progression (attention : `api()` côté interface traite tout `res.ok` comme un succès, un `202` doit y être reconnu) ; `StatNoLinks` par l'index ; `fsview.For` bascule sur `tarindex` (retrait de `ErrStopped`) ; F5 : `dockerx.Changes`, `GET /changes`, onglet Changements, marques du diff dans l'explorateur ; le parcours Playwright unique (§10) ; matrice CI overlay2 / containerd | 1,5 à 2 semaines |
-| 3 | `2026-10-08-explorateur-3-ecriture.md` (à écrire) | F4 (§5.3) : paquet `files`, tests d'abord (lecture seule, `If-Match`, ordre audit → écriture → audit, `link_in_path` final et parent, `not_regular`, `forbidden_path`, `invalid_name`, lien pendant, chemin exact envoyé à `PutArchive`, index retiré du cache) ; `dockerx.PutArchive` ; `PUT /fs/file`, `POST /fs/upload` ; CodeMirror 6 (langages à la demande), boîte de confirmation qui rappelle conteneur et chemin, boutons cachés en lecture seule ; à trancher : plafond de taille d'un envoi et d'une édition (la spec n'en fixe pas) | 1,5 semaine |
+| Plan | Fichier | Durée visée |
+|---|---|---|
+| **1 (ce plan)** | `2026-10-08-explorateur-1-procfs.md` | 2 semaines |
+| 2 | `2026-10-08-explorateur-2-tarindex-diff.md` (à écrire) | 1,5 à 2 semaines |
+| 3 | `2026-10-08-explorateur-3-ecriture.md` (à écrire) | 1,5 semaine |
 
-L'ordre 1 → 2 → 3 diffère de l'ordre « procfs, écriture, tarindex » envisagé : l'écriture sur conteneur arrêté (§5.3 étape 2) passe par l'index, donc l'écrire avant `tarindex` obligerait à livrer F4 à moitié puis à y revenir (voir Q3).
+**Plan 1 (ce plan) :**
+- `fsview` (interface, `procfs`, contrôle des montages) ;
+- `dockerx.Inspect` (avec `Mounts`), `GetArchive`, `VolumeOptions` ;
+- routes `GET /fs`, `/fs/file`, `/fs/download` sur conteneur actif ;
+- garde FUSE ;
+- onglet Fichiers en lecture.
+
+**Plan 2 (tarindex + F5) :**
+- `tarindex` (§5.2), tests d'évasion et de résolution écrits d'abord, sur des tar en mémoire : liens relatifs et absolus, `..` bloqué, `..` après un dossier lié, chaîne, boucle à 40 sauts, liens physiques ;
+- binds de l'hôte (§5.2 étape 7) : réutiliser `fsview.HostBind` de ce plan, tests d'abord ;
+- cache LRU 3 avec la clé `ID + FinishedAt`, construction unique, progression plafonnée à 99 %, plafonds 4 Gio / 5 min → `too_large` ;
+- `202 indexing` et sa barre de progression. Attention : `api()` côté interface traite tout `res.ok` comme un succès, un `202` doit y être reconnu ;
+- `StatNoLinks` et `CheckArchive` par l'index ; `fsview.For` bascule sur `tarindex`, ce qui retire `ErrStopped` ;
+- F5 : `dockerx.Changes`, `GET /changes`, onglet Changements, marques du diff dans l'explorateur ;
+- le parcours Playwright unique (§10) et la matrice CI overlay2 / containerd.
+
+**Plan 3 (écriture F4, §5.3) :**
+- paquet `files`, tests écrits d'abord : lecture seule, `If-Match`, ordre audit → écriture → audit, `link_in_path` final et parent, `not_regular`, `forbidden_path`, `invalid_name`, lien pendant, chemin exact envoyé à `PutArchive`, index retiré du cache ;
+- `dockerx.PutArchive` ; `PUT /fs/file`, `POST /fs/upload` ;
+- CodeMirror 6 (langages chargés à la demande), boîte de confirmation qui rappelle conteneur et chemin, boutons cachés en lecture seule ;
+- à trancher : plafond de taille d'un envoi et d'une édition (la spec n'en fixe pas).
+
+L'ordre 1 → 2 → 3 diffère de l'ordre « procfs, écriture, tarindex » envisagé. L'écriture sur un conteneur arrêté (§5.3 étape 2) passe par l'index : l'écrire avant `tarindex` obligerait à livrer F4 à moitié puis à y revenir (voir Q3).
 
 ## Questions ouvertes
 
-Le plan suit la recommandation de chaque question ; une réponse différente change la tâche indiquée.
+Le plan suit la recommandation de chaque question. Pour Q1 à Q7, la recommandation est retenue et reste à confirmer par l'utilisateur ; une réponse différente change la tâche indiquée.
 
-- **Q1 — « Arborescence complète » (F2, §9).** Arbre dépliable, ou un dossier à la fois avec fil d'Ariane ? *Recommandation :* un dossier à la fois + fil d'Ariane + lien « dossier parent », l'état dans l'URL (`?path=…&file=…`). Marche au téléphone (§9), retour arrière du navigateur, liens partageables ; un arbre dépliable reste possible plus tard sans changer l'API. → Tâche 13.
-- **Q2 — Interface `fsview.FS` (§4).** La spec liste `List`, `Stat`, `Open`. Il faut aussi (a) libérer le descripteur de la racine (`procfs` garde `rootfd` ouvert) et (b) le contrôle « aucun lien sur toute la chaîne » de §5.3 étape 2 / §5.4, que `procfs` fait par `openat2` et `tarindex` fera par l'index. *Recommandation :* ajouter `StatNoLinks(ctx, path) (Entry, error)` et `Close() error` à l'interface, et le reporter dans la spec §4. → Tâche 1, étape 5.
-- **Q3 — Ordre des plans 2 et 3.** Voir ci-dessus. *Recommandation :* `tarindex` + F5 avant l'écriture.
-- **Q4 — Conteneur arrêté pendant le plan 1.** `tarindex` n'arrive qu'au plan 2. *Recommandation :* `fsview.ErrStopped` temporaire → `501` code `internal` (aucun code de §6 ne dit « pas encore ») ; l'interface n'affiche pas l'explorateur pour un conteneur arrêté et dit que ça arrive à l'étape suivante. Le plan 2 retire `ErrStopped`, la clé i18n `container.stoppedSoon` et le cas `501`. → Tâches 1, 8, 13.
-- **Q5 — Aperçu d'un fichier binaire (§6 « pas d'aperçu texte »).** La spec ne dit pas ce que répond la route. *Recommandation :* `200`, `Content-Type: application/octet-stream`, **corps vide**, avec l'`ETag` ; l'interface affiche « fichier binaire » et propose le téléchargement. → Tâche 10.
-- **Q6 — Noms de fichiers non UTF-8.** JSON ne transporte que de l'UTF-8 : Go remplace les octets invalides par U+FFFD, donc le nom affiché ne permet plus d'ouvrir le fichier (`not_found`). *Recommandation :* limite assumée en v0.1, à ajouter aux risques (§13) ; le listing ne casse pas (testé tâche 5). Alternative plus lourde : un champ `nameB64`. → aucune tâche.
-- **Q7 — cgroup v1 (plusieurs lignes dans `/proc/<pid>/cgroup`).** §5.1 étape 3 parle « du chemin ». *Recommandation (codée tâche 2) :* chaque ligne est ancrée séparément ; une ligne sans composant de forme ID Docker (contrôleur v1 resté à `/`) ne prouve rien et est ignorée ; un `..`, une ligne mal formée ou un ancrage sur un autre ID refusent tout ; au moins une ligne doit correspondre. En cgroup v2 (une seule ligne `0::`), c'est exactement la règle de la spec.
+- **Q1 — « Arborescence complète » (F2, §9).** Arbre dépliable, ou un dossier à la fois avec fil d'Ariane ?
+  - *Recommandation (retenue, à confirmer) :* un dossier à la fois, avec fil d'Ariane, lien « dossier parent » et l'état dans l'URL (`?path=…&file=…`). Ça marche au téléphone (§9), avec le retour arrière du navigateur et des liens partageables. Un arbre dépliable reste possible plus tard sans changer l'API. → Tâche 14.
+- **Q2 — Interface `fsview.FS` (§4).** La spec liste `List`, `Stat`, `Open`. Il faut aussi :
+  - (a) libérer les descripteurs de la racine et du pidfd ;
+  - (b) le contrôle « aucun lien sur toute la chaîne » de §5.3 étape 2 et §5.4 ;
+  - (c) le contrôle des montages avant un tar (C1).
+
+  *Recommandation (retenue, à confirmer) :* ajouter `StatNoLinks(ctx, path) (Entry, error)`, `CheckArchive(ctx, dir) error` et `Close() error` à l'interface, et les reporter dans la spec §4. → Tâche 1, étape 5.
+- **Q3 — Ordre des plans 2 et 3.** Voir ci-dessus.
+  - *Recommandation (retenue, à confirmer) :* `tarindex` + F5 avant l'écriture.
+- **Q4 — Conteneur arrêté pendant le plan 1.** `tarindex` n'arrive qu'au plan 2.
+  - *Recommandation (retenue, à confirmer) :* `fsview.ErrStopped` temporaire → `501` code `internal`, car aucun code de §6 ne dit « pas encore ».
+  - L'interface n'affiche pas l'explorateur d'un conteneur arrêté et annonce qu'il arrive à l'étape suivante.
+  - Le plan 2 retire `ErrStopped`, la clé i18n `container.stoppedSoon` et le cas `501`. → Tâches 1, 9, 14.
+- **Q5 — Aperçu d'un fichier binaire (§6, « pas d'aperçu texte »).** La spec ne dit pas ce que répond la route.
+  - *Recommandation (retenue, à confirmer) :* `200`, `Content-Type: application/octet-stream`, corps vide, avec l'`ETag`. L'interface affiche « fichier binaire » et propose le téléchargement. → Tâche 11.
+- **Q6 — Noms de fichiers non UTF-8.** JSON ne transporte que de l'UTF-8 : Go remplace les octets invalides par U+FFFD. Le nom affiché ne permet donc plus d'ouvrir le fichier (`not_found`).
+  - *Recommandation (retenue, à confirmer) :* limite assumée en v0.1, reportée dans la spec §13 à la tâche 12 (M6). Le listing ne casse pas (tâche 5), et les lignes du tableau sont indexées par position (tâche 14).
+- **Q7 — cgroup v1 (plusieurs lignes dans `/proc/<pid>/cgroup`).** §5.1 étape 3 parle « du chemin ».
+  - *Recommandation (retenue, à confirmer, codée à la tâche 2) :* chaque ligne est ancrée séparément.
+  - Une ligne sans composant de forme ID Docker (contrôleur v1 resté à `/`) ne prouve rien et est ignorée.
+  - Un `..`, une ligne mal formée ou un ancrage sur un autre ID refusent tout. Au moins une ligne doit correspondre.
+  - En cgroup v2 (une seule ligne `0::`), c'est exactement la règle de la spec.
+- **Q8 (nouvelle, issue de C1) — Le `/` d'un conteneur actif.** La règle (b) de C1 refuse le tar de `/`, `/proc` et `/sys` d'un conteneur actif, parce que son propre `/proc` est monté dessous. Or une mesure sûre (tâche 8, `TestIntegrationMeasureOwnProcInArchive`, Docker Desktop, Docker 29) montre que le tar d'un conteneur actif **ne voit pas** son propre `/proc` : seuls les binds et volumes y sont montés. Le refus de `/` est donc plus strict que nécessaire.
+  - On ne peut pas l'assouplir simplement : dans `mountinfo`, le `/proc` du conteneur et un bind du `/proc` de l'hôte ont le même type.
+  - *Recommandation :* garder la règle stricte en v0.1. L'interface explique de télécharger un sous-dossier. Mesurer de nouveau sur `hk-ubuntu` (tâche 16) avant tout assouplissement, par exemple ne compter que les montages situés sous une destination d'`Inspect.Mounts`.
 
 ## Décisions de ce plan (la spec ne tranche pas)
 
-- **Statuts HTTP** (la spec fixe `202 indexing`, `400 invalid_name`, `429`) : `not_found` 404, `forbidden_path` 403, `container_changed` 409, `not_regular` 422, `link_in_path` 422, `too_large` 413, `docker_unavailable` 503, `internal` 500 ; garde FUSE : plafond atteint 503 `internal`, délai dépassé 504 `internal` ; `ErrStopped` 501 `internal` (temporaire, Q4). Reporté dans la spec §6 à la tâche 8.
-- **Forme JSON de `GET /fs`** : `{path, type, entries, truncated}`. `type` vaut `"dir"` pour un dossier ; pour un autre chemin (lien vers un fichier, lien profond), `type` donne la nature du chemin résolu et `entries` est vide : l'interface en affiche l'aperçu. Une entrée : `{name, type, size, mode, uid, gid, modTime, linkTarget?}` ; `mode` = bits Unix `0o7777` (permissions + setuid/setgid/sticky), l'interface les met en forme comme `ls`.
-- **Chemins** : toute route nettoie `?path=` par `path.Clean("/" + p)` (`fsview.CleanPath`) avant usage ; un octet nul → `404 not_found`. L'identifiant `{id}` doit correspondre à `^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$` (il part dans les URL de l'API Docker) ; le nom est résolu en ID complet par `Inspect`, et seul l'ID complet sert ensuite (`OpenFS`, `GetArchive`).
-- **Navigation sur un lien (§5.1 étape 8)** : l'interface calcule la cible comme texte (absolue telle quelle, relative depuis le dossier du lien, `..` résolu lexicalement) et la demande ; l'agent la résout par `pathrs`. Comme on navigue toujours vers les cibles, le dossier courant ne contient en pratique pas de lien et le résultat lexical coïncide avec celui du noyau ; sinon on tombe sur un autre dossier **du conteneur**, jamais hors de la racine.
-- **Aperçu** : « 2 Mo » = 2 Mio (2 097 152 octets) ; au-delà `413 too_large`. Le contenu est lu dans la garde puis servi ; `ETag` = `"<sha256 hex>"` (forme HTTP, entre guillemets).
-- **Garde FUSE (§13)** : au plus 4 opérations de fichiers simultanées par conteneur, abandon après 10 s (la goroutine bloquée garde son créneau jusqu'à son vrai retour, ce qui borne leur nombre). Limite assumée : la *copie* d'un téléchargement (après les contrôles) n'est pas sous la garde ; un fichier FUSE bloqué en cours de copie bloque cette seule requête.
-- **Téléchargement** : `Content-Disposition` construit par `mime.FormatMediaType` (RFC 2231 pour les noms non ASCII ou à caractères de contrôle) ; dossier → `<nom>.tar`, racine → `rootfs.tar`. Les erreurs arrivent en JSON avant tout octet : l'interface vérifie d'abord (`checkDownload`), puis laisse le navigateur télécharger.
-- **Développement sur macOS** : `scripts/test-linux.sh` (tests Go en root dans un conteneur `golang`, avec les droits de l'agent recommandé) et `scripts/dev-agent.sh` (l'agent dans un conteneur) remplacent le `docker compose` évoqué au §8 : un seul fichier chacun, pas de service à maintenir.
+- **Statuts HTTP.** La spec fixe `202 indexing`, `400 invalid_name` et `429`. Le plan ajoute :
+
+  | Code | Statut |
+  |---|---|
+  | `not_found` | 404 |
+  | `forbidden_path` | 403 |
+  | `container_changed` | 409 |
+  | `not_regular`, `link_in_path` | 422 |
+  | `too_large` | 413 |
+  | `docker_unavailable` | 503 |
+  | `internal` | 500 ; garde FUSE : 503 si le plafond est atteint, 504 si le délai est dépassé ; `ErrStopped` : 501 (temporaire, Q4) |
+
+  Reporté dans la spec §6 à la tâche 9.
+- **Forme JSON de `GET /fs`.**
+  - Réponse : `{path, type, entries, truncated}`.
+  - `type` vaut `"dir"` pour un dossier. Pour un autre chemin (lien vers un fichier, lien profond), `type` donne la nature du chemin résolu et `entries` est vide : l'interface en affiche l'aperçu.
+  - Une entrée : `{name, type, size, mode, uid, gid, modTime, linkTarget?}`. `mode` porte les bits Unix `0o7777` (permissions + setuid/setgid/sticky) ; l'interface les met en forme comme `ls`.
+- **Chemins et identifiants.**
+  - Toute route nettoie `?path=` par `path.Clean("/" + p)` (`fsview.CleanPath`) avant usage ; un octet nul → `404 not_found`.
+  - `{id}` doit correspondre à `^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$`, car il part dans les URL de l'API Docker.
+  - `Inspect` résout ensuite l'identifiant, borné à 10 s. Seul l'ID complet sert après : garde, `OpenFS`, `GetArchive`.
+- **Navigation sur un lien (§5.1 étape 8).**
+  - L'interface calcule la cible comme texte : absolue telle quelle, relative depuis le dossier du lien, `..` résolu lexicalement. L'agent la résout ensuite par `pathrs`.
+  - Comme on navigue toujours vers les cibles, le dossier courant ne contient en pratique pas de lien, et le résultat lexical coïncide avec celui du noyau.
+  - Sinon, on tombe sur un autre dossier **du conteneur**, jamais hors de la racine.
+- **Aperçu.** « 2 Mo » = 2 Mio (2 097 152 octets) ; au-delà, `413 too_large`. L'`ETag` vaut `"<sha256 hex>"` (forme HTTP, entre guillemets).
+- **Garde FUSE (§13).**
+  - Au plus 4 opérations de fichiers simultanées par conteneur (ID complet), abandon après 10 s.
+  - Un créneau n'est libéré qu'au vrai retour du travail : une goroutine abandonnée le garde jusqu'à son retour, un téléchargement jusqu'à la fin de sa copie (Codex n°4).
+  - Un fichier FUSE bloqué en pleine copie bloque donc cette requête et un créneau, jamais plus de 4 par conteneur.
+- **Téléchargement.**
+  - `Content-Disposition` est construit par `mime.FormatMediaType` (RFC 2231 pour les noms non ASCII ou à caractères de contrôle). Dossier → `<nom>.tar`.
+  - Toutes les erreurs arrivent en JSON avant le premier octet. `&check=1` fait tous les contrôles et répond `204` sans rien lire.
+  - Dossier d'un conteneur actif : `StatNoLinks`, puis `CheckArchive` (C1), puis `GetArchive` de l'ID complet et du chemin nettoyé.
+- **Développement sur macOS.** Deux scripts remplacent le `docker compose` du §8 (spec mise à jour à la tâche 15) : un seul fichier chacun, pas de service à maintenir.
+  - `scripts/test-linux.sh` : tests Go en root dans un conteneur `golang`, avec les droits de l'agent recommandé ;
+  - `scripts/dev-agent.sh` : l'agent dans un conteneur.
 
 ## Global Constraints
 
-- Module Go : `github.com/levy-cmd/hublot-kit`. Dépendances Go autorisées (§3) : `github.com/moby/moby/client` (et ses dépendances, dont `github.com/containerd/errdefs`, qui passe en directe), `github.com/cyphar/filepath-securejoin` **v0.7.0** (sous-paquet `pathrs-lite`, paquet `pathrs`), `golang.org/x/sys` **v0.48.0**. Aucune autre.
-- **Accès aux fichiers d'un conteneur (CLAUDE.md, §5)** : uniquement `pathrs.OpenatInRoot` / `pathrs.Reopen` sur le descripteur de la racine, `openat2` avec `RESOLVE_IN_ROOT`, ou `fstatat`/`readlinkat` relatifs à un descripteur de dossier avec un seul composant. **Jamais** `filepath.Join`, `os.Open`, `os.Stat`, `os.ReadFile` sur un chemin du conteneur. Le paquet `path` ne sert qu'à manipuler du texte (nettoyer, nom de base). Les tests construisent leurs pièges avec des chemins de l'hôte : c'est permis, le code testé ne les voit jamais.
-- **Tests d'évasion avant le code qu'ils protègent** (CLAUDE.md) : voir le tableau « Ordre » ci-dessous.
-- Code Linux dans des fichiers `_linux.go` (`//go:build linux`), repli `_other.go` (`//go:build !linux`) : `go test ./cmd/... ./internal/...` compile et passe sur macOS.
-- Erreurs API : `{"error": "<code>", "detail": "<texte>"}`, codes de §6 uniquement.
-- Listing plafonné à 10 000 entrées (`truncated`). Aperçu : 2 Mio ; binaire = octet nul dans les 8 192 premiers octets ; images PNG, JPEG, GIF, WebP seulement ; SVG, HTML, XML toujours en `text/plain; charset=utf-8`. Téléchargement : `Content-Disposition: attachment` + `application/octet-stream`.
-- Interface : `{@html}` interdit ; textes dans `web/src/lib/i18n/fr.ts` et `en.ts`, mêmes clés ; imports `#lib/….ts` dans les `.svelte` (SvelteKit 3, pas de `$lib`) ; `goto(url, { replace, reset })` (SvelteKit 3 n'a plus `keepFocus`/`noScroll`).
-- Node ≥ 22.17 : sur le Mac, préfixer les commandes `npm`/`npx` par `export PATH=/opt/homebrew/bin:$PATH` (le Node par défaut du shell est trop ancien).
-- Docker Desktop depuis le Mac : `DOCKER_HOST=unix://$HOME/.docker/run/docker.sock`.
-- Commits en français, terminés par une ligne vide puis `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
+- **Module et dépendances Go.**
+  - Module : `github.com/levy-cmd/hublot-kit`.
+  - Dépendances autorisées (§3) : `github.com/moby/moby/client` et ses dépendances (dont `github.com/containerd/errdefs`, qui passe en directe) ; `github.com/cyphar/filepath-securejoin` **v0.7.0** (sous-paquet `pathrs-lite`, paquet `pathrs`) ; `golang.org/x/sys` **v0.48.0**. Aucune autre.
+- **Accès aux fichiers d'un conteneur (CLAUDE.md, §5).**
+  - Permis : `pathrs.OpenatInRoot` / `pathrs.Reopen` sur le descripteur de la racine ; `openat2` avec `RESOLVE_IN_ROOT` ; `fstatat`/`readlinkat` relatifs à un descripteur de dossier, avec un seul composant.
+  - **Jamais** `filepath.Join`, `os.Open`, `os.Stat`, `os.ReadFile` sur un chemin du conteneur. Les fichiers `/proc/<pid>/cgroup` et `/proc/<pid>/mountinfo` sont des fichiers de l'hôte, lus pour le process épinglé par le pidfd, qui doit être vivant après la lecture.
+  - Le paquet `path` ne sert qu'à manipuler du texte (nettoyer, nom de base). Les tests construisent leurs pièges avec des chemins de l'hôte : c'est permis, le code testé ne les voit jamais.
+- **Tests d'évasion avant le code qu'ils protègent (CLAUDE.md)** : voir le tableau « Ordre » ci-dessous.
+- **Code Linux.** Il vit dans des fichiers `_linux.go` (`//go:build linux`), avec un repli `_other.go` (`//go:build !linux`) : `go test ./cmd/... ./internal/...` compile et passe sur macOS.
+- **Erreurs API :** `{"error": "<code>", "detail": "<texte>"}`, codes de §6 uniquement.
+- **Limites des routes de fichiers.**
+  - Listing plafonné à 10 000 entrées (`truncated`).
+  - Aperçu : 2 Mio. Binaire = octet nul dans les 8 192 premiers octets. Images : PNG, JPEG, GIF, WebP seulement ; SVG, HTML et XML toujours en `text/plain; charset=utf-8`.
+  - Téléchargement : `Content-Disposition: attachment` + `application/octet-stream`.
+- **Interface.**
+  - `{@html}` interdit.
+  - Textes dans `web/src/lib/i18n/fr.ts` et `en.ts`, avec les mêmes clés.
+  - Imports `#lib/….ts` dans les `.svelte` (SvelteKit 3, pas de `$lib`).
+  - `goto(url, { replace, reset })` : SvelteKit 3 n'a plus `keepFocus`/`noScroll`.
+- **Node ≥ 22.17.** Sur le Mac, préfixer les commandes `npm`/`npx` par `export PATH=/opt/homebrew/bin:$PATH` (le Node par défaut du shell est trop ancien).
+- **Docker Desktop depuis le Mac :** `DOCKER_HOST=unix://$HOME/.docker/run/docker.sock`.
+- **Commits** en français, terminés par une ligne vide puis `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
 
 ## Review Focus
 
-1. **Noms de fichiers inhabituels** (espace, retour à la ligne, emoji, `"`, `;`, octet non UTF-8) : listés sans erreur, téléchargés sous leur vrai nom. → Tâche 5 `TestListOddNames` ; tâche 11 `TestDownloadOddFileName`.
-2. **`?path=` maladroit ou hostile** (vide, relatif, `..`, `//`, `/` final, `%2F`, octet nul) : nettoyé, jamais hors racine, octet nul → `404`. → Tâche 4 `TestEvasionDotDotPath` ; tâche 9 `TestFSListCleansPath`, `TestFSNULInPath`.
-3. **Identifiant de conteneur hostile dans l'URL** (`.hidden`, `a%2Fb`, `%2E%2E`) : `404`, aucune vue ouverte, rien n'atteint l'API Docker. → Tâche 9 `TestFSBadContainerRef`.
-4. **Conteneur redémarré, arrêté ou supprimé entre deux clics** : `container_changed` / `not_found` / message « arrêté », bouton « Recharger », jamais une page blanche ; après un redémarrage, l'exploration repart avec le nouveau PID. → Tâche 6 (`OpenRoot`) ; tâche 7 `TestIntegrationProcFSAfterRestart`, `TestIntegrationForStoppedContainer` ; tâche 9 `TestFSListErrors` ; tâche 13 (bouton Recharger).
-5. **Très gros dossier et fichiers aux limites** : > 10 000 entrées → tronqué + bandeau ; fichier vide et fichier d'exactement 2 Mio → aperçu ; 2 Mio + 1 → `too_large`. → Tâche 5 `TestListTruncatesAtMaxEntries` ; tâche 10 `TestPreviewSizeLimit` ; tâche 13 (bandeau `files.truncated`).
+1. **Noms de fichiers inhabituels** (espace, retour à la ligne, emoji, `"`, `;`, octet non UTF-8) : listés sans erreur, téléchargés sous leur vrai nom. → Tâche 5 `TestListOddNames` ; tâche 12 `TestDownloadOddFileName`.
+2. **`?path=` maladroit ou hostile** (vide, relatif, `..`, `//`, `/` final, `%2F`, octet nul) : nettoyé, jamais hors racine ; octet nul → `404`. → Tâche 4 `TestEvasionDotDotPath` ; tâche 10 `TestFSListCleansPath`, `TestFSNULInPath`.
+3. **Identifiant de conteneur hostile dans l'URL** (`.hidden`, `a%2Fb`, `%2E%2E`) : `404`, aucune vue ouverte, rien n'atteint l'API Docker. → Tâche 10 `TestFSBadContainerRef`.
+4. **Conteneur redémarré, arrêté ou supprimé entre deux clics.**
+   - Attendu : `container_changed` / `not_found` / message « arrêté », avec un bouton « Recharger », jamais une page blanche.
+   - Après un redémarrage, l'exploration repart avec le nouveau PID.
+   - → Tâche 6 `TestOpenRootDetectsDeadProcess` ; tâche 8 `TestIntegrationProcFSAfterRestart`, `TestIntegrationForStoppedContainer` ; tâche 10 `TestFSListErrors` ; tâche 14 (bouton Recharger).
+5. **Très gros dossier et fichiers aux limites.**
+   - Plus de 10 000 entrées → listing tronqué, avec un bandeau.
+   - Fichier vide et fichier d'exactement 2 Mio → aperçu ; 2 Mio + 1 → `too_large`.
+   - → Tâche 5 `TestListTruncatesAtMaxEntries` ; tâche 11 `TestPreviewSizeLimit` ; tâche 14 (bandeau `files.truncated`).
 
 ## Ordre : chaque test d'évasion précède le code qu'il protège
 
@@ -79,12 +200,15 @@ Le plan suit la recommandation de chaque question ; une réponse différente cha
 | Ancrage cgroup (§5.1 ét. 3, §10) | Tâche 2, étape 1 | Tâche 2, étape 3 |
 | Liens piégés, `..`, boucle, lien vers lien, dossier lié (§5.1 ét. 6–8, §10) | Tâche 4 (commit des tests rouges) | Tâche 5 |
 | Fichiers non réguliers : FIFO sans blocage, socket, périphérique (§5.1 ét. 6) | Tâche 4 | Tâche 5 |
+| Refus **avant** `Reopen` : zéro `IN_OPEN` sur la FIFO et le périphérique (revue I1) | Tâche 4 (`TestRefusalHappensBeforeReopen`) | Tâche 5 |
+| Liens magiques `/proc/<pid>/root`, directs ou par un lien (revue I2) | Tâche 4 (`TestMagicLinksNeverFollowed`, racine `/`) | Tâche 5 ; confirmé sur une cible `--pid=host` à la tâche 8 |
 | Pseudo-systèmes par `fstatfs`, lien vers `/proc` (§5.1 ét. 9) | Tâche 4 | Tâche 5 |
-| Chemin sans lien pour le téléchargement d'un dossier (§5.4) | Tâche 4 (`TestStatNoLinks`) | Tâche 5 (`StatNoLinks`) ; tâche 11 (route) |
-| PID réattribué, mauvais cgroup (§5.1 ét. 2–5) | Tâche 6, étape 1 | Tâche 6, étape 3 |
-| Contenu actif servi en texte (§7) | Tâche 10, étape 1 | Tâche 10, étape 3 |
+| Chemin sans lien pour le téléchargement d'un dossier (§5.4) | Tâche 4 (`TestStatNoLinks`) | Tâche 5 (`StatNoLinks`) ; tâche 12 (route) |
+| PID réattribué, mauvais cgroup, process mort avant `pidfd_send_signal` (§5.1 ét. 2–5, revue I4) | Tâche 6, étape 1 | Tâche 6, étape 3 |
+| Tar d'un dossier qui traverserait l'hôte : binds, pseudo-systèmes, FUSE (§5.2 ét. 7, §5.4, revue C1) | Tâche 7, étape 1 (faux client, process de test) | Tâche 7, étape 3 ; route : tâche 12, étape 1 → étape 2 (aucun `GetArchive` dans les cas refusés) |
+| Contenu actif servi en texte (§7) | Tâche 11, étape 1 | Tâche 11, étape 2 |
 
-Entre la tâche 4 et la tâche 5, `go test ./internal/fsview/` échoue **sous Linux** : c'est voulu (les tests sont relus seuls, avant l'implémentation). Sur macOS, ces fichiers ne sont pas compilés.
+Entre la tâche 4 et la tâche 5, `go test ./internal/fsview/` échoue **sous Linux** : c'est voulu, les tests sont relus seuls avant l'implémentation. Sur macOS, ces fichiers ne sont pas compilés. **Ne pas pousser la branche entre les tâches 4 et 5** (M8).
 
 ## Où tester
 
@@ -95,34 +219,36 @@ Entre la tâche 4 et la tâche 5, `go test ./internal/fsview/` échoue **sous Li
 | **Linux root** (conteneur `golang`, droits de l'agent recommandé, §8) | `scripts/test-linux.sh <arguments de go test>` (créé tâche 4) ; tout : `make test-linux` |
 | **VM Ubuntu (AppArmor)** | `limactl start hk-ubuntu && limactl shell --workdir "$PWD" hk-ubuntu -- sudo scripts/test-linux.sh -race -tags integration ./cmd/... ./internal/...` |
 | **VM Fedora (SELinux)** | idem avec `hk-fedora` |
-| **CI** | job `go` (Linux non root : tests d'évasion, le test du périphérique se saute) ; job `integration` (root sur l'hôte : tout) — rien à changer dans `ci.yml` |
+| **CI** | job `go` (Linux non root) : tests d'évasion, les tests de périphérique se sautent ; job `integration` (root sur l'hôte) : tout. Rien à changer dans `ci.yml`. |
 
 ## Structure des fichiers
 
 ```
-internal/fsview/fsview.go            interface FS, Entry, erreurs, ModeFromUnix/UnixPerm, CleanPath
-internal/fsview/cgroup.go            CgroupHasID, NoteCgroupNamespace, changed()
-internal/fsview/pseudofs_linux.go    les 15 pseudo-systèmes refusés (fstatfs)
-internal/fsview/procfs_linux.go      procFS : List, Stat, Open, StatNoLinks, Close
-internal/fsview/root_linux.go        OpenRoot (pidfd + cgroup + /proc/<pid>/root), openProcFS
-internal/fsview/procfs_other.go      repli hors Linux
-internal/fsview/for.go               For(ctx, docker, id)
-internal/fsview/memfs.go             MemFS : faux FS pour les tests d'autres paquets
-internal/fsview/*_test.go            dont procfs_test.go (évasion), integration_test.go (tag integration)
-internal/dockerx/dockerx.go          + Inspect, GetArchive, ErrNotFound, ErrUnavailable
-internal/dockerx/fake.go             + Infos, Archives, ArchiveCalls
-internal/api/fsguard.go              garde FUSE (délai, plafond par conteneur)
-internal/api/fserr.go                erreurs → codes §6
-internal/api/fs.go                   fsRequest, openFS, GET /fs
-internal/api/fs_preview.go           GET /fs/file
-internal/api/fs_download.go          GET /fs/download
-internal/api/integration_test.go     bout en bout (tag integration)
-cmd/hublot/main.go                   + contrôle cgroupns au démarrage
+internal/fsview/fsview.go                 interface FS, Entry, erreurs, ModeFromUnix/UnixPerm, CleanPath
+internal/fsview/cgroup.go                 CgroupHasID, NoteCgroupNamespace, changed()
+internal/fsview/pseudofs_linux.go         les 15 pseudo-systèmes refusés (fstatfs)
+internal/fsview/procfs_linux.go           procFS : List, Stat, Open, StatNoLinks, Close
+internal/fsview/procfs_archive_linux.go   procFS.CheckArchive (binds + mountinfo)
+internal/fsview/mounts.go                 HostBind, PseudoMountUnder (portables)
+internal/fsview/root_linux.go             openRoot/OpenRoot (pidfd + cgroup + /proc/<pid>/root), openProcFS
+internal/fsview/procfs_other.go           repli hors Linux
+internal/fsview/for.go                    For(ctx, docker, id)
+internal/fsview/memfs.go                  MemFS : faux FS pour les tests d'autres paquets
+internal/fsview/*_test.go                 dont procfs_test.go (évasion), integration_test.go (tag integration)
+internal/dockerx/dockerx.go               + Inspect (Mounts), GetArchive, VolumeOptions, ErrNotFound, ErrUnavailable
+internal/dockerx/fake.go                  + Infos, Archives, ArchiveCalls, Volumes
+internal/api/fsguard.go                   garde FUSE (délai, plafond par ID complet, créneau rendu au vrai retour)
+internal/api/fserr.go                     erreurs → codes §6
+internal/api/fs.go                        fsRequest (Inspect d'abord), GET /fs
+internal/api/fs_preview.go                GET /fs/file
+internal/api/fs_download.go               GET /fs/download (&check=1)
+internal/api/integration_test.go          bout en bout (tag integration)
+cmd/hublot/main.go                        + contrôle cgroupns au démarrage
 scripts/test-linux.sh, scripts/test.Dockerfile, scripts/dev-agent.sh
-web/src/lib/api.ts                   + listDir, previewFile, downloadUrl, checkDownload
-web/src/lib/files.ts                 chemins, formatMode, formatSize, sortEntries
+web/src/lib/api.ts                        + listDir, previewFile, downloadUrl, checkDownload
+web/src/lib/files.ts                      chemins, formatMode, formatSize, sortEntries
 web/src/lib/components/FileBrowser.svelte, FilePreview.svelte
-web/src/routes/c/[id]/+page.svelte   page du conteneur, onglet Fichiers
+web/src/routes/c/[id]/+page.svelte        page du conteneur, onglet Fichiers
 ```
 
 ---
@@ -137,7 +263,7 @@ web/src/routes/c/[id]/+page.svelte   page du conteneur, onglet Fichiers
 
 **Interfaces:**
 - Consumes: rien
-- Produces: `type EntryType string` (`TypeFile`, `TypeDir`, `TypeSymlink`, `TypeOther`) ; `type Entry struct { Name string; Type EntryType; Size int64; Mode fs.FileMode; UID, GID int; ModTime time.Time; LinkTarget string }` ; `const MaxEntries = 10_000` ; `type FS interface { List(ctx, dir string) ([]Entry, bool, error); Stat(ctx, path string) (Entry, error); Open(ctx, path string) (io.ReadCloser, error); StatNoLinks(ctx, path string) (Entry, error); Close() error }` ; erreurs `ErrNotDir`, `ErrNotRegular`, `ErrForbiddenPath`, `ErrLinkInPath`, `ErrContainerChanged`, `ErrTooLarge`, `ErrStopped` ; `func CleanPath(p string) string` ; `func ModeFromUnix(m uint32) fs.FileMode` ; `func UnixPerm(m fs.FileMode) uint32`
+- Produces: `type EntryType string` (`TypeFile`, `TypeDir`, `TypeSymlink`, `TypeOther`) ; `type Entry struct { Name string; Type EntryType; Size int64; Mode fs.FileMode; UID, GID int; ModTime time.Time; LinkTarget string }` ; `const MaxEntries = 10_000` ; `type FS interface { List(ctx, dir string) ([]Entry, bool, error); Stat(ctx, path string) (Entry, error); Open(ctx, path string) (io.ReadCloser, error); StatNoLinks(ctx, path string) (Entry, error); CheckArchive(ctx, dir string) error; Close() error }` ; erreurs `ErrNotDir`, `ErrNotRegular`, `ErrForbiddenPath`, `ErrLinkInPath`, `ErrContainerChanged`, `ErrTooLarge`, `ErrStopped` ; `func CleanPath(p string) string` ; `func ModeFromUnix(m uint32) fs.FileMode` ; `func UnixPerm(m fs.FileMode) uint32`
 
 > **À comprendre :** `st_mode` (Linux) et le mode d'un en-tête tar rangent setuid, setgid et sticky dans les bits `0o4000`, `0o2000`, `0o1000`. `fs.FileMode` de Go les range ailleurs (`fs.ModeSetuid`…, des bits hauts). Un simple `fs.FileMode(st.Mode & 0o7777)` perdrait donc ces trois drapeaux sans erreur : d'où une conversion explicite, testée bit par bit (spec §4). Un chemin « absent » se signale par une erreur qui vérifie `errors.Is(err, fs.ErrNotExist)` : pas besoin d'erreur maison.
 
@@ -255,7 +381,12 @@ type FS interface {
 	// StatNoLinks stats CleanPath(path) and refuses a symbolic link anywhere
 	// in it, last component included (ErrLinkInPath): spec §5.3 step 2, §5.4.
 	StatNoLinks(ctx context.Context, path string) (Entry, error)
-	// Close releases the view (procfs: the container root descriptor).
+	// CheckArchive refuses (ErrForbiddenPath) the tar of directory dir when
+	// Docker would read the host through it: a bind of the host's /, /proc,
+	// /sys or /dev (spec §5.2 step 7), or a pseudo filesystem or FUSE mount on,
+	// under or above dir (spec §5.4). Called before every GetArchive of a directory.
+	CheckArchive(ctx context.Context, dir string) error
+	// Close releases the view (procfs: the root and pidfd descriptors).
 	Close() error
 }
 
@@ -325,7 +456,7 @@ Expected: PASS (3 tests, dont 5 sous-tests de bits).
 - [ ] **Step 5: Reporter l'interface dans la spec (Q2)**
 
 Dans `docs/superpowers/specs/2026-10-07-hublot-kit-v0.1-design.md` :
-- §4, arborescence : remplacer `fsview.go          type FS interface { List, Stat, Open } + types Entry` par `fsview.go          type FS interface { List, Stat, Open, StatNoLinks, Close } + types Entry`.
+- §4, arborescence : remplacer `fsview.go          type FS interface { List, Stat, Open } + types Entry` par `fsview.go          type FS interface { List, Stat, Open, StatNoLinks, CheckArchive, Close } + types Entry`.
 - §4, bloc de l'interface : remplacer le bloc `type FS interface { … }` par :
 
 ```go
@@ -335,7 +466,10 @@ Dans `docs/superpowers/specs/2026-10-07-hublot-kit-v0.1-design.md` :
       Open(ctx context.Context, path string) (io.ReadCloser, error)
       // chemin nettoyé, aucun lien sur toute la chaîne (§5.3 étape 2, §5.4)
       StatNoLinks(ctx context.Context, path string) (Entry, error)
-      Close() error // procfs : ferme le descripteur de la racine
+      // avant tout GetArchive d'un dossier : ni bind de l'hôte (§5.2 étape 7),
+      // ni pseudo-système ou FUSE sur, sous ou au-dessus du dossier (§5.4)
+      CheckArchive(ctx context.Context, dir string) error
+      Close() error // procfs : ferme les descripteurs de la racine et du pidfd
   }
 ```
 
@@ -564,7 +698,7 @@ EOF
 
 ---
 
-### Task 3: `dockerx` : `Inspect`, `GetArchive`, erreurs classées
+### Task 3: `dockerx` : `Inspect` (avec les montages), `GetArchive`, `VolumeOptions`, erreurs classées
 
 **Où tester :** macOS (unitaires) ; Docker Desktop (intégration).
 
@@ -573,9 +707,9 @@ EOF
 
 **Interfaces:**
 - Consumes: rien de nouveau
-- Produces: `type ContainerInfo struct { ID, Name string; Running bool; Pid int }` ; `var ErrNotFound, ErrUnavailable error` ; dans `Client` : `Inspect(ctx, id string) (ContainerInfo, error)` (nom, ID court ou complet) et `GetArchive(ctx, id, path string) (io.ReadCloser, error)` ; `Fake` gagne `Infos map[string]ContainerInfo` (clé : ID complet ou nom), `Archives map[string][]byte` (clé `id + ":" + path`), `ArchiveCalls []string`
+- Produces: `type ContainerInfo struct { ID, Name string; Running bool; Pid int; Mounts []Mount }` ; `type Mount struct { Type, Name, Source, Destination, Driver string }` ; `var ErrNotFound, ErrUnavailable error` ; dans `Client` : `Inspect(ctx, id string) (ContainerInfo, error)` (nom, ID court ou complet), `GetArchive(ctx, id, path string) (io.ReadCloser, error)`, `VolumeOptions(ctx, name string) (map[string]string, error)` ; `Fake` gagne `Infos map[string]ContainerInfo` (clé : ID complet ou nom), `Archives map[string][]byte` (clé `id + ":" + path`), `ArchiveCalls []string`, `Volumes map[string]map[string]string`
 
-> **À comprendre :** le SDK renvoie des erreurs typées par `github.com/containerd/errdefs` (`cerrdefs.IsNotFound`). `dockerx` les classe en deux sentinelles : `ErrNotFound` (conteneur ou chemin absent → `404 not_found`) et `ErrUnavailable` (tout le reste → `503 docker_unavailable`). On enveloppe avec `%v` et non `%w` pour l'erreur d'origine : un socket absent est un `ENOENT`, qui ne doit jamais passer pour un fichier absent du conteneur.
+> **À comprendre :** le SDK renvoie des erreurs typées par `github.com/containerd/errdefs` (`cerrdefs.IsNotFound`). `dockerx` les classe en deux sentinelles : `ErrNotFound` (conteneur ou chemin absent → `404 not_found`) et `ErrUnavailable` (tout le reste → `503 docker_unavailable`). On enveloppe avec `%v` et non `%w` pour l'erreur d'origine : un socket absent est un `ENOENT`, qui ne doit jamais passer pour un fichier absent du conteneur. `Mounts` et `VolumeOptions` servent au contrôle des binds de l'hôte (tâche 7, revue C1) : un volume `local` créé avec `o=bind` et `device=/proc` est un bind déguisé, et seules ses options le disent.
 
 - [ ] **Step 1: Écrire les tests unitaires qui échouent**
 
@@ -588,6 +722,7 @@ import (
 	"fmt"
 	"io"
 	"net/netip"
+	"reflect"
 	"testing"
 	"time"
 
@@ -600,11 +735,21 @@ et ajouter à la fin :
 
 ```go
 func TestFromInspect(t *testing.T) {
-	got := fromInspect(container.InspectResponse{ID: "abc", Name: "/web", State: &container.State{Running: true, Pid: 42}})
-	if got != (ContainerInfo{ID: "abc", Name: "web", Running: true, Pid: 42}) {
+	got := fromInspect(container.InspectResponse{
+		ID: "abc", Name: "/web", State: &container.State{Running: true, Pid: 42},
+		Mounts: []container.MountPoint{
+			{Type: "bind", Source: "/proc", Destination: "/host/proc"},
+			{Type: "volume", Name: "data", Source: "/var/lib/docker/volumes/data/_data", Destination: "/data", Driver: "local"},
+		},
+	})
+	want := ContainerInfo{ID: "abc", Name: "web", Running: true, Pid: 42, Mounts: []Mount{
+		{Type: "bind", Source: "/proc", Destination: "/host/proc"},
+		{Type: "volume", Name: "data", Source: "/var/lib/docker/volumes/data/_data", Destination: "/data", Driver: "local"},
+	}}
+	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %+v", got)
 	}
-	if got := fromInspect(container.InspectResponse{ID: "x"}); got.Running || got.Pid != 0 {
+	if got := fromInspect(container.InspectResponse{ID: "x"}); got.Running || got.Pid != 0 || got.Mounts != nil {
 		t.Fatalf("a nil State must read as stopped: %+v", got)
 	}
 }
@@ -639,6 +784,13 @@ func TestFakeInspectAndArchive(t *testing.T) {
 	}
 	if _, err := f.GetArchive(context.Background(), "full", "/absent"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("absent path: %v", err)
+	}
+	f.Volumes = map[string]map[string]string{"v": {"o": "bind", "device": "/srv"}}
+	if opts, err := f.VolumeOptions(context.Background(), "v"); err != nil || opts["device"] != "/srv" {
+		t.Fatalf("volume: %v %v", opts, err)
+	}
+	if _, err := f.VolumeOptions(context.Background(), "nope"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("absent volume: %v", err)
 	}
 }
 ```
@@ -693,6 +845,16 @@ type ContainerInfo struct {
 	Name    string // without the leading "/"
 	Running bool
 	Pid     int // 0 when the container does not run
+	Mounts  []Mount
+}
+
+// Mount is one entry of Inspect.Mounts (binds and volumes).
+type Mount struct {
+	Type        string // "bind", "volume", "tmpfs"…
+	Name        string // volume name
+	Source      string // host path of a bind
+	Destination string // path in the container
+	Driver      string // volume driver ("local"…)
 }
 
 // ErrNotFound: no such container (or no such path, for an archive).
@@ -710,6 +872,9 @@ type Client interface {
 	// GetArchive streams the tar of path (GET /containers/{id}/archive).
 	// The caller closes it.
 	GetArchive(ctx context.Context, id, path string) (io.ReadCloser, error)
+	// VolumeOptions returns the driver options of a named volume
+	// (GET /volumes/{name}, field Options), e.g. o=bind, device=/proc.
+	VolumeOptions(ctx context.Context, name string) (map[string]string, error)
 }
 
 type engine struct{ c *client.Client }
@@ -802,6 +967,11 @@ func fromInspect(c container.InspectResponse) ContainerInfo {
 		info.Running = c.State.Running
 		info.Pid = c.State.Pid
 	}
+	for _, m := range c.Mounts {
+		info.Mounts = append(info.Mounts, Mount{
+			Type: string(m.Type), Name: m.Name, Source: m.Source, Destination: m.Destination, Driver: m.Driver,
+		})
+	}
 	return info
 }
 
@@ -811,6 +981,14 @@ func (e *engine) GetArchive(ctx context.Context, id, path string) (io.ReadCloser
 		return nil, wrap(err)
 	}
 	return res.Content, nil
+}
+
+func (e *engine) VolumeOptions(ctx context.Context, name string) (map[string]string, error) {
+	res, err := e.c.VolumeInspect(ctx, name, client.VolumeInspectOptions{})
+	if err != nil {
+		return nil, wrap(err)
+	}
+	return res.Volume.Options, nil
 }
 
 // wrap classifies a daemon error for the API (not_found / docker_unavailable).
@@ -844,7 +1022,9 @@ type Fake struct {
 	Archives map[string][]byte
 	// ArchiveCalls records every GetArchive call as id + ":" + path.
 	ArchiveCalls []string
-	Err          error
+	// Volumes answers VolumeOptions, by volume name.
+	Volumes map[string]map[string]string
+	Err     error
 }
 
 func (f *Fake) ListContainers(context.Context) ([]Container, error) {
@@ -876,6 +1056,16 @@ func (f *Fake) GetArchive(_ context.Context, id, path string) (io.ReadCloser, er
 		return nil, fmt.Errorf("%w : %s:%s", ErrNotFound, id, path)
 	}
 	return io.NopCloser(bytes.NewReader(b)), nil
+}
+
+func (f *Fake) VolumeOptions(_ context.Context, name string) (map[string]string, error) {
+	if f.Err != nil {
+		return nil, f.Err
+	}
+	if opts, ok := f.Volumes[name]; ok {
+		return opts, nil
+	}
+	return nil, fmt.Errorf("%w : volume %s", ErrNotFound, name)
 }
 ```
 
@@ -924,17 +1114,53 @@ func TestInspectAndArchiveRealDocker(t *testing.T) {
 		t.Fatalf("absent path: %v", err)
 	}
 }
+
+func TestMountsAndVolumeOptionsRealDocker(t *testing.T) {
+	vol, name := "hublot-it-vol", "hublot-it-mounts"
+	exec.Command("docker", "rm", "-f", name).Run()
+	exec.Command("docker", "volume", "rm", "-f", vol).Run()
+	// A local volume that is a bind in disguise (spec §5.2 step 7). Creating it
+	// mounts nothing; the container below mounts it on /data.
+	if out, err := exec.Command("docker", "volume", "create", "--opt", "type=none", "--opt", "o=bind",
+		"--opt", "device=/tmp", vol).CombinedOutput(); err != nil {
+		t.Fatalf("docker volume create: %v %s", err, out)
+	}
+	t.Cleanup(func() { exec.Command("docker", "volume", "rm", "-f", vol).Run() })
+	if out, err := exec.Command("docker", "run", "-d", "--name", name, "-v", vol+":/data", "alpine:3", "sleep", "300").CombinedOutput(); err != nil {
+		t.Fatalf("docker run: %v %s", err, out)
+	}
+	t.Cleanup(func() { exec.Command("docker", "rm", "-f", name).Run() })
+
+	c, err := New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	info, err := c.Inspect(ctx, name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(info.Mounts) != 1 || info.Mounts[0].Type != "volume" || info.Mounts[0].Name != vol ||
+		info.Mounts[0].Driver != "local" || info.Mounts[0].Destination != "/data" {
+		t.Fatalf("mounts: %+v", info.Mounts)
+	}
+	opts, err := c.VolumeOptions(ctx, vol)
+	if err != nil || opts["o"] != "bind" || opts["device"] != "/tmp" {
+		t.Fatalf("options: %v %v", opts, err)
+	}
+}
 ```
 
 Run: `DOCKER_HOST=unix://$HOME/.docker/run/docker.sock go test -tags integration ./internal/dockerx/ -run RealDocker -v`
-Expected: PASS (2 tests). Un `GET /archive` sur un chemin absent répond 404 : c'est bien `ErrNotFound`.
+Expected: PASS (3 tests). Un `GET /archive` sur un chemin absent répond 404 : c'est bien `ErrNotFound`. Le volume du troisième test est un bind de `/tmp` (sans danger) : il ne fait que lire ses options.
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add internal/dockerx go.mod go.sum
 git commit -F - <<'EOF'
-explorateur: dockerx.Inspect et GetArchive, erreurs classées introuvable / indisponible
+explorateur: dockerx.Inspect avec les montages, GetArchive, VolumeOptions, erreurs classées
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 EOF
@@ -952,11 +1178,19 @@ EOF
 
 **Interfaces:**
 - Consumes: `FS`, `Entry`, `MaxEntries`, erreurs (tâche 1)
-- Produces: `func NewProcFS(root *os.File) FS` (Linux ; prend possession de `root`) — squelette ici, implémenté tâche 5 ; `scripts/test-linux.sh [args de go test]` ; cible `make test-linux`
+- Produces: `func NewProcFS(root *os.File) FS` (Linux ; prend possession de `root`). C'est un squelette ici, implémenté à la tâche 5. Aussi : `scripts/test-linux.sh [args de go test]` et la cible `make test-linux`.
 
-> **À comprendre :** ces tests sont la protection principale de l'agent (spec §10, §13). Ils sont écrits et relus **seuls**, avant l'implémentation, pour qu'on ne les taille pas sur le code. Chaque piège a un *contrôle* : la lecture naïve par le chemin de l'hôte doit, elle, sortir de la racine ; sinon le piège ne prouve rien. Une racine de conteneur est simulée par un dossier temporaire ouvert en `O_PATH|O_DIRECTORY`, comme `/proc/<pid>/root`. Les tests des pseudo-systèmes prennent la vraie racine `/` de la machine de test, dont `/proc` et `/sys` sont réels. Le squelette renvoie une erreur partout : tous les tests échouent, sauf `TestSymlinkLoopFails` qui n'exige qu'une erreur.
+> **À comprendre :** ces tests sont la protection principale de l'agent (spec §10, §13).
 >
-> `scripts/test-linux.sh` lance `go test` dans un conteneur `golang` avec les droits de l'agent recommandé (§8) : root, `CAP_MKNOD` (défaut de Docker), `--pid=host --cgroupns=host --cap-add SYS_PTRACE`, AppArmor et SELinux levés, socket Docker monté, client `docker` installé (les tests d'intégration créent leurs cibles avec). Il marche tel quel avec Docker Desktop et dans les VM Lima.
+> - Ils sont écrits et relus **seuls**, avant l'implémentation, pour qu'on ne les taille pas sur le code.
+> - Chaque piège a un *contrôle* : la lecture naïve par le chemin de l'hôte, elle, doit sortir de la racine ; sinon le piège ne prouve rien.
+> - `assertNoEscape` distingue deux échecs (revue M1) : « ÉVASION » si le secret de l'hôte a été lu, « mauvaise erreur » si l'appel a échoué autrement qu'attendu.
+> - Une racine de conteneur est simulée par un dossier temporaire ouvert en `O_PATH|O_DIRECTORY`, comme `/proc/<pid>/root`.
+> - Les tests des pseudo-systèmes et des liens magiques prennent la vraie racine `/` de la machine de test, dont `/proc` et `/sys` sont réels. Suivre `/proc/1/root` y ramènerait sur un fichier lisible : le test exige une erreur (revue I2).
+> - `TestRefusalHappensBeforeReopen` (revue I1) surveille la FIFO et le nœud de périphérique par `inotify`. Un refus correct ne les ouvre **jamais** en lecture : zéro `IN_OPEN`. Une ouverture `O_PATH` n'en produit pas ; si le noyau en produisait, le test se sauterait avec un message.
+> - Le squelette renvoie une erreur partout : 20 tests sur 21 échouent. Seul `TestSymlinkLoopFails` passe, car il n'exige qu'une erreur.
+>
+> `scripts/test-linux.sh` lance `go test` dans un conteneur `golang` avec les droits de l'agent recommandé (§8) : root, `CAP_MKNOD` (défaut de Docker), `--pid=host --cgroupns=host --cap-add SYS_PTRACE`, AppArmor et SELinux levés, socket Docker monté. Le client `docker` y est installé : les tests d'intégration créent leurs cibles avec. Le script marche tel quel avec Docker Desktop et dans les VM Lima.
 
 - [ ] **Step 1: Le banc de test Linux**
 
@@ -1043,6 +1277,8 @@ func (p *procFS) Open(context.Context, string) (io.ReadCloser, error) { return n
 func (p *procFS) StatNoLinks(context.Context, string) (Entry, error) {
 	return Entry{}, errNotImplemented
 }
+
+func (p *procFS) CheckArchive(context.Context, string) error { return errNotImplemented }
 ```
 
 - [ ] **Step 3: Écrire les tests d'évasion**
@@ -1062,6 +1298,7 @@ package fsview
 import (
 	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
@@ -1121,11 +1358,16 @@ func control(t *testing.T, hostPath string) {
 	}
 }
 
-// assertNoEscape: the read failed with "not found" and never saw the secret.
+// assertNoEscape: the read never saw the secret (ÉVASION otherwise), and
+// failed with "not found" (a wrong error is reported apart: it is a bug, not
+// an escape).
 func assertNoEscape(t *testing.T, b []byte, err error) {
 	t.Helper()
-	if !errors.Is(err, fs.ErrNotExist) || bytes.Contains(b, []byte("HOST-SECRET")) {
-		t.Fatalf("ÉVASION : lu %q, err=%v", b, err)
+	if bytes.Contains(b, []byte("HOST-SECRET")) {
+		t.Fatalf("ÉVASION : le secret de l'hôte a été lu (%q)", b)
+	}
+	if !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("mauvaise erreur : %v (attendu fs.ErrNotExist ; pas d'évasion)", err)
 	}
 }
 
@@ -1176,12 +1418,17 @@ func TestEvasionIntermediateSymlinkDir(t *testing.T) {
 	control(t, filepath.Join(rp, "evil-dir", "MARKER"))
 	b, err := readAll(fsys, "/evil-dir/MARKER")
 	assertNoEscape(t, b, err)
-	if _, err := fsys.Stat(ctx, "/evil-dir/MARKER"); !errors.Is(err, fs.ErrNotExist) {
-		t.Fatalf("ÉVASION : Stat err=%v", err)
+	if e, err := fsys.Stat(ctx, "/evil-dir/MARKER"); err == nil {
+		t.Fatalf("ÉVASION : Stat a vu le fichier de l'hôte (%+v)", e)
+	} else if !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("mauvaise erreur pour Stat : %v", err)
 	}
 	entries, _, err := fsys.List(ctx, "/evil-dir")
-	if !errors.Is(err, fs.ErrNotExist) || len(entries) != 0 {
-		t.Fatalf("ÉVASION : List a rendu %v err=%v", entries, err)
+	if len(entries) != 0 {
+		t.Fatalf("ÉVASION : List a rendu le dossier de l'hôte %v", entries)
+	}
+	if !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("mauvaise erreur pour List : %v", err)
 	}
 }
 
@@ -1441,6 +1688,80 @@ func TestStatNoLinks(t *testing.T) {
 		t.Errorf("/proc/kallsyms : %v, attendu ErrForbiddenPath", err)
 	}
 }
+
+// countOpens returns the number of IN_OPEN events on hostPath while fn runs.
+// An O_PATH open (pathrs.OpenatInRoot) generates none; a Reopen for reading does.
+func countOpens(t *testing.T, hostPath string, fn func()) int {
+	t.Helper()
+	in, err := unix.InotifyInit1(unix.IN_NONBLOCK | unix.IN_CLOEXEC)
+	must(t, err)
+	defer unix.Close(in)
+	_, err = unix.InotifyAddWatch(in, hostPath, unix.IN_OPEN)
+	must(t, err)
+	fn()
+	buf := make([]byte, 64*unix.SizeofInotifyEvent)
+	n, err := unix.Read(in, buf)
+	if err != nil || n <= 0 {
+		return 0 // EAGAIN: no event
+	}
+	count := 0
+	for off := 0; off+unix.SizeofInotifyEvent <= n; count++ {
+		nameLen := binary.NativeEndian.Uint32(buf[off+12:]) // struct inotify_event.len
+		off += unix.SizeofInotifyEvent + int(nameLen)
+	}
+	return count
+}
+
+// The refusal of a non-regular file must happen on the O_PATH descriptor,
+// before any Reopen: the FIFO and the device node are never opened for
+// reading (zero IN_OPEN), not just closed right after.
+func TestRefusalHappensBeforeReopen(t *testing.T) {
+	fsys, rp, _ := newRoot(t)
+	reg := filepath.Join(rp, "reg")
+	must(t, os.WriteFile(reg, []byte("x"), 0o644))
+	if n := countOpens(t, reg, func() { fsys.Stat(ctx, "/reg") }); n != 0 {
+		t.Skipf("ce noyau signale IN_OPEN pour un O_PATH (%d événements) : test non concluant", n)
+	}
+	if n := countOpens(t, reg, func() { readAll(fsys, "/reg") }); n == 0 {
+		t.Fatal("contrôle : la lecture d'un fichier régulier doit produire un IN_OPEN")
+	}
+	t.Run("fifo", func(t *testing.T) {
+		fifo := filepath.Join(rp, "fifo")
+		must(t, unix.Mkfifo(fifo, 0o644))
+		if n := countOpens(t, fifo, func() { openWithTimeout(t, fsys, "/fifo") }); n != 0 {
+			t.Fatalf("FIFO ouverte %d fois : le refus doit précéder Reopen", n)
+		}
+	})
+	t.Run("device", func(t *testing.T) {
+		dev := filepath.Join(rp, "dev")
+		if err := unix.Mknod(dev, unix.S_IFCHR|0o666, int(unix.Mkdev(1, 3))); err != nil {
+			t.Skipf("mknod refusé (%v) : ce test demande CAP_MKNOD (scripts/test-linux.sh, job CI privilégié)", err)
+		}
+		if n := countOpens(t, dev, func() { openWithTimeout(t, fsys, "/dev") }); n != 0 {
+			t.Fatalf("périphérique ouvert %d fois : le refus doit précéder Reopen", n)
+		}
+	})
+}
+
+// A magic link (/proc/<pid>/root) leads out of any root: never followed,
+// directly or through an ordinary link. The test machine's "/" is the root:
+// following /proc/1/root would land on a readable file.
+func TestMagicLinksNeverFollowed(t *testing.T) {
+	host := openTestRoot(t, "/")
+	dir := t.TempDir()
+	must(t, os.Symlink("/proc/1/root", filepath.Join(dir, "m")))
+	for _, p := range []string{"/proc/1/root/etc/hostname", "/proc/self/root/etc/hostname", dir + "/m/etc/hostname"} {
+		if b, err := readAll(host, p); err == nil {
+			t.Errorf("%s lu (%d octets) : un lien magique ne doit jamais être suivi", p, len(b))
+		}
+	}
+	if entries, _, err := host.List(ctx, dir+"/m"); err == nil {
+		t.Errorf("List par un lien magique : %d entrées", len(entries))
+	}
+	if _, err := host.StatNoLinks(ctx, dir+"/m/etc"); !errors.Is(err, ErrLinkInPath) {
+		t.Errorf("StatNoLinks par un lien magique : %v", err)
+	}
+}
 ```
 
 - [ ] **Step 4: Vérifier qu'ils échouent sous Linux, et que macOS ne casse pas**
@@ -1451,10 +1772,10 @@ Expected (macOS) : PASS (les fichiers `_linux` ne sont pas compilés).
 Run: `GOOS=linux go vet ./internal/fsview/`
 Expected : aucune sortie.
 
-Run: `scripts/test-linux.sh ./internal/fsview/ 2>&1 | grep -E '^(--- FAIL|ok|FAIL)'`
-Expected : `--- FAIL` pour les 18 tests de `procfs_test.go` (tous sauf `TestSymlinkLoopFails`), message `procfs : pas encore implémenté`. Aucun test ne doit échouer sur un message `ÉVASION` *avec* `HOST-SECRET` lu : ce serait un piège mal construit.
+Run: `scripts/test-linux.sh ./internal/fsview/ -v 2>&1 | grep -cE '^--- FAIL'`
+Expected : `20`. Seul `TestSymlinkLoopFails` passe ; les messages disent `procfs : pas encore implémenté`. Aucun échec ne doit porter `ÉVASION` : ce serait un piège mal construit.
 
-- [ ] **Step 5: Commit (tests rouges, voulu)**
+- [ ] **Step 5: Commit (tests rouges, voulu ; ne pas pousser avant la tâche 5)**
 
 ```bash
 git add scripts Makefile internal/fsview go.mod go.sum
@@ -1462,7 +1783,8 @@ git commit -F - <<'EOF'
 explorateur: tests d'évasion de procfs (rouges) et banc de test Linux
 
 Les tests précèdent le code qu'ils protègent (CLAUDE.md) : procfs est un
-squelette qui échoue partout ; la tâche suivante l'implémente.
+squelette qui échoue partout ; la tâche suivante l'implémente. Ne pas
+pousser la branche avant la tâche 5.
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 EOF
@@ -1475,14 +1797,24 @@ EOF
 **Où tester :** Linux root (`scripts/test-linux.sh`) ; Linux non root (comme le job CI `go`).
 
 **Files:**
-- Create: `internal/fsview/pseudofs_linux.go`
+- Create: `internal/fsview/pseudofs_linux.go`, `internal/fsview/procfs_archive_linux.go` (garde fermée, remplacée tâche 7)
 - Modify: `internal/fsview/procfs_linux.go` (remplace le squelette), `go.mod`, `go.sum`
 
 **Interfaces:**
-- Consumes: tests de la tâche 4 ; `ModeFromUnix`, `CleanPath`, erreurs (tâche 1)
-- Produces: `NewProcFS(root *os.File) FS` complet ; `checkNotPseudo(fd int, path string) error` (interne)
+- Consumes: tests de la tâche 4 ; `ModeFromUnix`, `CleanPath`, erreurs (tâche 1) ; `dockerx.Client`, `dockerx.Mount` (tâche 3)
+- Produces:
+  - `NewProcFS(root *os.File) FS` complet ;
+  - `type procFS struct { root *os.File; pid, pidfd int; docker dockerx.Client; mounts []dockerx.Mount }` (interne, `pidfd = -1` sans process) ;
+  - `checkNotPseudo(fd int, path string) error` (interne) ;
+  - `CheckArchive` qui refuse tout jusqu'à la tâche 7.
 
-> **À comprendre :** toute résolution de chemin passe par `pathrs.OpenatInRoot(root, chemin)` : la bibliothèque suit les liens *dans* la racine (un lien absolu repart de la racine du conteneur, `..` s'arrête à elle). On obtient un descripteur `O_PATH`, qui ne permet pas de lire mais sur lequel on fait `fstatfs` (pseudo-système → `forbidden_path`) et `fstat` (pas un fichier régulier → `not_regular`) **avant** `pathrs.Reopen`, la seule façon d'obtenir un descripteur lisible. Le listing ne suit rien : `fstatat(dirfd, nom, AT_SYMLINK_NOFOLLOW)` et `readlinkat(dirfd, nom)`, un seul composant à la fois. `StatNoLinks` passe par `openat2` avec `RESOLVE_IN_ROOT|RESOLVE_NO_SYMLINKS|RESOLVE_NO_MAGICLINKS` : le noyau répond `ELOOP` au premier lien rencontré, dernier composant compris.
+> **À comprendre :** toute résolution de chemin passe par `pathrs.OpenatInRoot(root, chemin)`. La bibliothèque suit les liens *dans* la racine : un lien absolu repart de la racine du conteneur, `..` s'arrête à elle, un lien magique (`/proc/<pid>/root`) est refusé (`ELOOP`).
+>
+> - On obtient un descripteur `O_PATH`, qui ne permet pas de lire. On fait dessus `fstatfs` (pseudo-système → `forbidden_path`) et `fstat` (pas un fichier régulier → `not_regular`), **avant** `pathrs.Reopen`, la seule façon d'obtenir un descripteur lisible.
+> - Le listing ne suit rien : `fstatat(dirfd, nom, AT_SYMLINK_NOFOLLOW)` et `readlinkat(dirfd, nom)`, un seul composant à la fois.
+> - `StatNoLinks` passe par `openat2` avec `RESOLVE_IN_ROOT|RESOLVE_NO_SYMLINKS|RESOLVE_NO_MAGICLINKS` : le noyau répond `ELOOP` au premier lien rencontré, dernier composant compris.
+> - `Open` ne renvoie jamais un `*os.File` nul enveloppé dans l'interface (piège Go : une interface qui contient un pointeur nul n'est pas `nil`).
+> - Les champs `pid`, `pidfd`, `docker` et `mounts` servent au contrôle des montages (tâches 6 et 7). D'ici là, `CheckArchive` **refuse tout** (fermé par défaut) : aucun téléchargement de dossier ne peut passer avant que le contrôle existe.
 
 - [ ] **Step 1: Les pseudo-systèmes**
 
@@ -1563,18 +1895,35 @@ import (
 
 	pathrs "github.com/cyphar/filepath-securejoin/pathrs-lite"
 	"golang.org/x/sys/unix"
+
+	"github.com/levy-cmd/hublot-kit/internal/dockerx"
 )
 
 // procFS reads a running container through a descriptor on its root
 // (spec §5.1). Every path goes through pathrs.OpenatInRoot or openat2
 // RESOLVE_IN_ROOT: never filepath.Join, never os.Open on a container path.
-type procFS struct{ root *os.File }
+type procFS struct {
+	root *os.File
+	// Set by openProcFS for a real container (CheckArchive needs them);
+	// pidfd is -1 for a view built by NewProcFS.
+	pid    int
+	pidfd  int
+	docker dockerx.Client
+	mounts []dockerx.Mount
+}
 
-// NewProcFS serves the tree under root, a descriptor on the container's root
-// directory (O_PATH is enough). It takes ownership of root: Close closes it.
-func NewProcFS(root *os.File) FS { return &procFS{root: root} }
+// NewProcFS serves the tree under root, a descriptor on a root directory
+// (O_PATH is enough), without any process behind it: tests use it with a
+// temporary directory. It takes ownership of root: Close closes it.
+func NewProcFS(root *os.File) FS { return &procFS{root: root, pidfd: -1} }
 
-func (p *procFS) Close() error { return p.root.Close() }
+func (p *procFS) Close() error {
+	if p.pidfd >= 0 {
+		unix.Close(p.pidfd)
+		p.pidfd = -1
+	}
+	return p.root.Close()
+}
 
 // resolve opens name inside the root, links followed without ever leaving it,
 // as an O_PATH handle, then refuses pseudo filesystems before any Reopen
@@ -1660,7 +2009,11 @@ func (p *procFS) Open(_ context.Context, name string) (io.ReadCloser, error) {
 		return nil, fmt.Errorf("%w : %s", ErrNotRegular, name)
 	}
 	// O_NONBLOCK: never block if the file was swapped for a FIFO meanwhile.
-	return pathrs.Reopen(h, unix.O_RDONLY|unix.O_NONBLOCK|unix.O_CLOEXEC)
+	f, err := pathrs.Reopen(h, unix.O_RDONLY|unix.O_NONBLOCK|unix.O_CLOEXEC)
+	if err != nil {
+		return nil, err // never a typed nil *os.File inside the interface
+	}
+	return f, nil
 }
 
 func (p *procFS) StatNoLinks(_ context.Context, name string) (Entry, error) {
@@ -1709,15 +2062,34 @@ func entryFromStat(name string, st *unix.Stat_t) Entry {
 }
 ```
 
+`internal/fsview/procfs_archive_linux.go` :
+
+```go
+//go:build linux
+
+package fsview
+
+import (
+	"context"
+	"errors"
+)
+
+// Fails closed until task 7 (mount checks before a tar) replaces this file:
+// no directory download can pass meanwhile.
+func (p *procFS) CheckArchive(context.Context, string) error {
+	return errors.New("contrôle des montages : pas encore implémenté (tâche 7)")
+}
+```
+
 - [ ] **Step 3: Vérifier en root**
 
-Run: `go mod tidy && GOOS=linux go vet ./internal/fsview/ && scripts/test-linux.sh ./internal/fsview/ -v 2>&1 | grep -E '^(--- |ok|FAIL)'`
-Expected : `--- PASS` partout, y compris `TestOpenRefusesDevice` (root a `CAP_MKNOD`), `ok … internal/fsview`. `go.mod` montre `github.com/cyphar/filepath-securejoin v0.7.0` et `cyphar.com/go-pathrs v0.2.5 // indirect`.
+Run: `go mod tidy && GOOS=linux go vet ./internal/fsview/ && scripts/test-linux.sh ./internal/fsview/ -v 2>&1 | grep -E '^(--- |    --- |ok|FAIL)'`
+Expected : `--- PASS` partout, y compris `TestOpenRefusesDevice` et `TestRefusalHappensBeforeReopen/device` (root a `CAP_MKNOD`) ; `ok … internal/fsview`. `go.mod` montre `github.com/cyphar/filepath-securejoin v0.7.0` et `cyphar.com/go-pathrs v0.2.5 // indirect`.
 
 - [ ] **Step 4: Vérifier en non-root avec le détecteur de courses (comme le job CI `go`)**
 
-Run: `docker run --rm --user 1000:1000 -e GOCACHE=/tmp/gocache -e HOME=/tmp -v "$PWD":/src -w /src -v hublot-gomod:/go/pkg/mod:ro hublot-test go test -race ./internal/fsview/ -v 2>&1 | grep -E '^(--- (FAIL|SKIP)|ok)|mknod'`
-Expected : `--- SKIP: TestOpenRefusesDevice` avec le message `mknod refusé (operation not permitted) : ce test demande CAP_MKNOD…`, puis `ok`.
+Run: `docker run --rm --user 1000:1000 -e GOCACHE=/tmp/gocache -e HOME=/tmp -v "$PWD":/src -w /src -v hublot-gomod:/go/pkg/mod:ro hublot-test go test -race ./internal/fsview/ -v 2>&1 | grep -E '^(--- (FAIL|SKIP)|    --- (FAIL|SKIP)|ok)|mknod'`
+Expected : `--- SKIP: TestOpenRefusesDevice` et `--- SKIP: TestRefusalHappensBeforeReopen/device`, chacun avec le message `mknod refusé (operation not permitted) : ce test demande CAP_MKNOD…`, puis `ok`.
 
 Run (macOS) : `go test ./internal/...`
 Expected : PASS.
@@ -1744,10 +2116,25 @@ EOF
 - Modify: `cmd/hublot/main.go`, `cmd/hublot/main_test.go`
 
 **Interfaces:**
-- Consumes: `CgroupHasID`, `NoteCgroupNamespace`, `changed` (tâche 2) ; `NewProcFS` (tâche 5) ; `dockerx.Client.Inspect`, `dockerx.ErrNotFound`, `dockerx.Fake.Infos` (tâche 3)
-- Produces: `func OpenRoot(pid int, containerID string) (*os.File, error)` (Linux) ; `func For(ctx context.Context, docker dockerx.Client, id string) (FS, error)` ; `openProcFS(pid int, id string) (FS, error)` (interne, Linux et repli) ; dans `main` : `var selfCgroup func() ([]byte, error)`
+- Consumes: `CgroupHasID`, `NoteCgroupNamespace`, `changed` (tâche 2) ; `procFS` (tâche 5) ; `dockerx.Client.Inspect`, `dockerx.ContainerInfo` (avec `Mounts`), `dockerx.ErrNotFound`, `dockerx.Fake.Infos` (tâche 3)
+- Produces:
+  - `func OpenRoot(pid int, containerID string) (*os.File, error)` (Linux) et `openRoot(pid, id) (*os.File, pidfd int, error)` (interne) ;
+  - points d'injection de test `var readCgroup func(pid int) ([]byte, error)` et `var afterRootOpen func()` ;
+  - `func For(ctx context.Context, docker dockerx.Client, id string) (FS, error)` et `openProcFS(docker dockerx.Client, info dockerx.ContainerInfo) (FS, error)` (interne, Linux et repli) ;
+  - dans `main` : `var selfCgroup func() ([]byte, error)`.
 
-> **À comprendre :** comparer deux `Inspect` ne prouve rien : un PID peut être réattribué entre-temps. Le **pidfd** désigne un process précis : s'il meurt, `pidfd_send_signal(pidfd, 0)` échoue, même si un autre process reprend son numéro. Séquence (§5.1 étapes 2 à 5) : `pidfd_open` → lire `/proc/<pid>/cgroup` (fichier de l'hôte, pas du conteneur) et `CgroupHasID` → ouvrir `/proc/<pid>/root` en `O_PATH` → `pidfd_send_signal(0)` doit réussir. Un `EACCES` à l'ouverture a deux causes mesurées par le spike (§8) : le message les nomme. Au démarrage, `0::/` dans `/proc/self/cgroup` signale un espace de noms privé : avertissement, et toute erreur `container_changed` porte ensuite l'indice `--cgroupns=host`.
+> **À comprendre :** comparer deux `Inspect` ne prouve rien : un PID peut être réattribué entre-temps. Le **pidfd** désigne un process précis : s'il meurt, `pidfd_send_signal(pidfd, 0)` échoue, même si un autre process reprend son numéro.
+>
+> La séquence suit §5.1, étapes 2 à 5 :
+> 1. `pidfd_open` ;
+> 2. lire `/proc/<pid>/cgroup` (fichier de l'hôte, pas du conteneur) et appeler `CgroupHasID` ;
+> 3. ouvrir `/proc/<pid>/root` en `O_PATH` ;
+> 4. `pidfd_send_signal(0)` doit réussir.
+>
+> - La vue garde le pidfd ouvert : la tâche 7 s'en sert pour lire `mountinfo` du même process.
+> - Deux points d'injection rendent l'étape 4 testable sans Docker (revue I4). `readCgroup` donne au propre enfant du test (`sleep`) le cgroup d'un conteneur. `afterRootOpen` tue cet enfant, puis le récolte, juste après l'ouverture de sa racine : son PID est alors libre, et seul le pidfd peut le détecter.
+> - Un `EACCES` à l'ouverture a deux causes mesurées par le spike (§8) : le message les nomme.
+> - Au démarrage, `0::/` dans `/proc/self/cgroup` signale un espace de noms privé. L'agent affiche un avertissement, et toute erreur `container_changed` porte ensuite l'indice `--cgroupns=host`.
 
 - [ ] **Step 1: Écrire les tests qui échouent**
 
@@ -1761,6 +2148,7 @@ package fsview
 import (
 	"errors"
 	"os"
+	"os/exec"
 	"strings"
 	"testing"
 )
@@ -1783,6 +2171,33 @@ func TestOpenRootRejectsShortID(t *testing.T) {
 	_, err := OpenRoot(os.Getpid(), "abc")
 	if !errors.Is(err, ErrContainerChanged) {
 		t.Fatalf("attendu ErrContainerChanged, reçu %v", err)
+	}
+}
+
+// Spec §5.1 step 5: a process that dies between the open of its root and the
+// liveness check must be detected (its PID may already belong to another
+// process). The test pins one of its own children, gives it the container's
+// cgroup through the readCgroup seam, and kills it at the afterRootOpen seam.
+func TestOpenRootDetectsDeadProcess(t *testing.T) {
+	id := strings.Repeat("ab", 32)
+	cmd := exec.Command("sleep", "30")
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { cmd.Process.Kill(); cmd.Wait() })
+	oldCgroup, oldHook := readCgroup, afterRootOpen
+	t.Cleanup(func() { readCgroup, afterRootOpen = oldCgroup, oldHook })
+	readCgroup = func(int) ([]byte, error) { return []byte("0::/docker/" + id + "\n"), nil }
+
+	root, err := OpenRoot(cmd.Process.Pid, id) // control: alive, the sequence succeeds
+	if err != nil {
+		t.Fatalf("contrôle : %v", err)
+	}
+	root.Close()
+
+	afterRootOpen = func() { cmd.Process.Kill(); cmd.Wait() } // dead and reaped: its PID is free
+	if _, err := OpenRoot(cmd.Process.Pid, id); !errors.Is(err, ErrContainerChanged) {
+		t.Fatalf("process mort après l'ouverture de sa racine : %v, attendu ErrContainerChanged", err)
 	}
 }
 ```
@@ -1862,8 +2277,8 @@ func TestRunNoWarningOnHostCgroup(t *testing.T) {
 
 - [ ] **Step 2: Vérifier qu'ils échouent**
 
-Run: `go test ./internal/fsview/ ./cmd/hublot/`
-Expected: FAIL à la compilation (`undefined: For`, `undefined: selfCgroup`).
+Run: `go test ./internal/fsview/ ./cmd/hublot/ ; GOOS=linux go vet ./internal/fsview/`
+Expected : FAIL à la compilation (`undefined: For`, `undefined: selfCgroup`, puis sous Linux `undefined: OpenRoot`, `undefined: readCgroup`).
 
 - [ ] **Step 3: Écrire le code**
 
@@ -1880,53 +2295,76 @@ import (
 	"os"
 
 	"golang.org/x/sys/unix"
+
+	"github.com/levy-cmd/hublot-kit/internal/dockerx"
 )
 
-// OpenRoot returns an O_PATH descriptor on the root directory of the
-// container whose main process is pid (spec §5.1 steps 2 to 5). The pidfd pins
-// the process: a PID reused between the checks is detected at step 5.
-func OpenRoot(pid int, containerID string) (*os.File, error) {
+// Test seams of spec §5.1 steps 3 and 5: tests give a fake cgroup content to
+// a process of their own, and kill it between the open of its root and the
+// liveness check.
+var (
+	readCgroup = func(pid int) ([]byte, error) {
+		return os.ReadFile(fmt.Sprintf("/proc/%d/cgroup", pid)) // a host file, not a container path
+	}
+	afterRootOpen = func() {}
+)
+
+// openRoot runs spec §5.1 steps 2 to 5 and returns an O_PATH descriptor on the
+// root directory of the container whose main process is pid, and the pidfd
+// that pins this process. The caller closes both.
+func openRoot(pid int, containerID string) (*os.File, int, error) {
 	pidfd, err := unix.PidfdOpen(pid, 0)
 	if err != nil {
-		return nil, changed("pidfd_open(%d) : %v", pid, err)
+		return nil, -1, changed("pidfd_open(%d) : %v", pid, err)
 	}
-	defer unix.Close(pidfd)
-
-	// /proc/<pid>/cgroup is a host file, not a container path.
-	cg, err := os.ReadFile(fmt.Sprintf("/proc/%d/cgroup", pid))
+	fail := func(err error) (*os.File, int, error) {
+		unix.Close(pidfd)
+		return nil, -1, err
+	}
+	cg, err := readCgroup(pid)
 	if err != nil {
-		return nil, changed("lecture du cgroup du pid %d : %v", pid, err)
+		return fail(changed("lecture du cgroup du pid %d : %v", pid, err))
 	}
 	if !CgroupHasID(string(cg), containerID) {
-		return nil, changed("le pid %d n'est pas dans le cgroup du conteneur %.12s", pid, containerID)
+		return fail(changed("le pid %d n'est pas dans le cgroup du conteneur %.12s", pid, containerID))
 	}
-
 	fd, err := unix.Open(fmt.Sprintf("/proc/%d/root", pid), unix.O_PATH|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
 	switch {
 	case errors.Is(err, unix.ENOENT), errors.Is(err, unix.ESRCH):
-		return nil, changed("ouverture de /proc/%d/root : %v", pid, err)
+		return fail(changed("ouverture de /proc/%d/root : %v", pid, err))
 	case errors.Is(err, unix.EACCES):
-		return nil, fmt.Errorf("ouverture de /proc/%d/root : %w ; causes mesurées (spec §8) : "+
+		return fail(fmt.Errorf("ouverture de /proc/%d/root : %w ; causes mesurées (spec §8) : "+
 			"--cap-add SYS_PTRACE absent, ou cible non confinée (--privileged, apparmor=unconfined) "+
-			"sans --security-opt apparmor=unconfined sur l'agent", pid, err)
+			"sans --security-opt apparmor=unconfined sur l'agent", pid, err))
 	case err != nil:
-		return nil, fmt.Errorf("ouverture de /proc/%d/root : %w", pid, err)
+		return fail(fmt.Errorf("ouverture de /proc/%d/root : %w", pid, err))
 	}
+	afterRootOpen()
 	// Still alive: the PID was not reused between pidfd_open and the open above,
 	// so fd is the root of the process checked at step 3.
 	if err := unix.PidfdSendSignal(pidfd, 0, nil, 0); err != nil {
 		unix.Close(fd)
-		return nil, changed("le process %d a disparu : %v", pid, err)
+		return fail(changed("le process %d a disparu : %v", pid, err))
 	}
-	return os.NewFile(uintptr(fd), "container-root"), nil
+	return os.NewFile(uintptr(fd), "container-root"), pidfd, nil
 }
 
-func openProcFS(pid int, containerID string) (FS, error) {
-	root, err := OpenRoot(pid, containerID)
+// OpenRoot is openRoot without the pidfd.
+func OpenRoot(pid int, containerID string) (*os.File, error) {
+	root, pidfd, err := openRoot(pid, containerID)
 	if err != nil {
 		return nil, err
 	}
-	return NewProcFS(root), nil
+	unix.Close(pidfd)
+	return root, nil
+}
+
+func openProcFS(docker dockerx.Client, info dockerx.ContainerInfo) (FS, error) {
+	root, pidfd, err := openRoot(info.Pid, info.ID)
+	if err != nil {
+		return nil, err
+	}
+	return &procFS{root: root, pid: info.Pid, pidfd: pidfd, docker: docker, mounts: info.Mounts}, nil
 }
 ```
 
@@ -1937,12 +2375,16 @@ func openProcFS(pid int, containerID string) (FS, error) {
 
 package fsview
 
-import "errors"
+import (
+	"errors"
+
+	"github.com/levy-cmd/hublot-kit/internal/dockerx"
+)
 
 // The agent reads /proc/<pid>/root: Linux only. On macOS, run it in a
 // container (scripts/dev-agent.sh); the tests that need Linux run through
 // scripts/test-linux.sh.
-func openProcFS(int, string) (FS, error) {
+func openProcFS(dockerx.Client, dockerx.ContainerInfo) (FS, error) {
 	return nil, errors.New("explorateur : Linux uniquement (sur macOS, lancez l'agent dans un conteneur)")
 }
 ```
@@ -1970,11 +2412,11 @@ func For(ctx context.Context, docker dockerx.Client, id string) (FS, error) {
 	if !info.Running || info.Pid == 0 {
 		return nil, fmt.Errorf("%w : %s", ErrStopped, info.Name)
 	}
-	return openProcFS(info.Pid, info.ID)
+	return openProcFS(docker, info)
 }
 ```
 
-`cmd/hublot/main.go` : ajouter l'import `"github.com/levy-cmd/hublot-kit/internal/fsview"` ; sous `var version = …`, ajouter :
+`cmd/hublot/main.go` : ajouter l'import `"github.com/levy-cmd/hublot-kit/internal/fsview"`, puis sous `var version = …` :
 
 ```go
 // selfCgroup reads the agent's own cgroup for the startup check of spec §8;
@@ -1995,8 +2437,8 @@ et juste après le bloc `docker, err := dockerx.New() … return fail("client Do
 Run (macOS) : `go vet ./cmd/... ./internal/... && go test ./cmd/... ./internal/...`
 Expected : PASS.
 
-Run : `GOOS=linux go vet ./cmd/... ./internal/... && scripts/test-linux.sh ./cmd/... ./internal/...`
-Expected : `ok` pour chaque paquet (dans le conteneur de test, le propre PID du test n'est dans le cgroup d'aucun ID inventé : `container_changed`).
+Run : `GOOS=linux go vet ./cmd/... ./internal/... && scripts/test-linux.sh ./cmd/... ./internal/... && scripts/test-linux.sh ./internal/fsview/ -run OpenRoot -v 2>&1 | grep -E '^--- '`
+Expected : `ok` pour chaque paquet, et 4 tests `TestOpenRoot…` en `PASS`, dont `TestOpenRootDetectsDeadProcess`.
 
 - [ ] **Step 5: Commit**
 
@@ -2011,18 +2453,453 @@ EOF
 
 ---
 
-### Task 7: `procfs` sur de vrais conteneurs
+### Task 7: Contrôle des montages avant le tar d'un dossier (revue C1)
 
-**Où tester :** Linux root avec Docker (`scripts/test-linux.sh -tags integration`, Docker Desktop) ; les VM et la CI à la tâche 14.
+**Où tester :** macOS (règles pures, faux client) ; Linux root et non root (un process de test joue le conteneur). **Jamais** contre un vrai dockerd avec un bind de `/proc` : le scénario a verrouillé dockerd en revue.
+
+**Files:**
+- Create: `internal/fsview/mounts.go`, `internal/fsview/mounts_test.go`, `internal/fsview/procfs_archive_linux_test.go`
+- Modify: `internal/fsview/procfs_archive_linux.go` (remplace la garde fermée)
+
+**Interfaces:**
+- Consumes: `procFS` et ses champs (tâche 5) ; `openRoot`, `openProcFS` (tâche 6) ; `dockerx.Mount`, `dockerx.Client.VolumeOptions`, `dockerx.Fake.Volumes` (tâche 3) ; `ErrForbiddenPath`, `changed`, `CleanPath`
+- Produces:
+  - `func HostBind(ctx context.Context, docker dockerx.Client, mounts []dockerx.Mount) error` ;
+  - `func PseudoMountUnder(mountinfo, dir string) (mountPoint, fsType string, found bool)` ;
+  - `(*procFS) CheckArchive(ctx, dir) error` ;
+  - `var readMountinfo func(pid int) ([]byte, error)` (interne).
+
+> **À comprendre :** Docker construit `GET /archive` d'un dossier avec les binds et les volumes du conteneur montés dedans. En revue, le tar de `/host`, sur un conteneur lancé avec `-v /proc:/host/proc`, a lu `/proc/kcore` de l'hôte (254 Tio) : dockerd est resté bloqué et le conteneur verrouillé. Nos contrôles de §5.1 ne voient rien de cela : c'est **Docker** qui lit, pas nous. D'où deux contrôles avant tout `GetArchive` de dossier.
+>
+> - **(a) `HostBind` : la règle de §5.2 étape 7.** Elle porte sur `Inspect.Mounts` : un bind dont la source est `/`, `/proc`, `/sys` ou en dessous, ou exactement `/dev`, est refusé.
+>   - Un volume `local` dont les options `o` contiennent `bind` ou `rbind`, avec un `device=…`, est un bind déguisé : sa source est le `device`.
+>   - Des options illisibles font refuser (fermé par défaut).
+>   - Le refus vaut pour tout dossier du conteneur, comme pour l'explorateur d'un conteneur arrêté.
+> - **(b) `PseudoMountUnder` : `/proc/<pid>/mountinfo`.** Ce fichier de l'hôte est lu pour le process épinglé par le pidfd, qui doit être vivant *après* la lecture. Ses points de montage sont relatifs à la racine du conteneur.
+>   - Un montage de l'un des 15 pseudo-systèmes ou FUSE (`fuse`, `fuseblk`, `fuse.*`) sur, sous ou au-dessus du dossier fait refuser. Un serveur FUSE muet bloquerait dockerd comme `/proc` (§13).
+>   - Ce contrôle voit aussi les sous-montages d'un `rbind` (`-v /:/host` montre `/host/proc`), que `Inspect.Mounts` ne montre pas.
+>   - Une ligne illisible fait refuser.
+>
+> Conséquence : le `/` d'un conteneur actif est toujours refusé, car son propre `/proc` est dessous (voir Q8). Les tests n'utilisent que le faux client et un process `sleep` du test, jamais un vrai bind de `/proc`.
+
+- [ ] **Step 1: Écrire les tests qui échouent**
+
+`internal/fsview/mounts_test.go` :
+
+```go
+package fsview
+
+import (
+	"context"
+	"errors"
+	"strings"
+	"testing"
+
+	"github.com/levy-cmd/hublot-kit/internal/dockerx"
+)
+
+func TestHostBind(t *testing.T) {
+	ctx := context.Background()
+	docker := &dockerx.Fake{Volumes: map[string]map[string]string{
+		"proc-vol":  {"type": "none", "o": "bind", "device": "/proc"},
+		"sys-vol":   {"o": "rbind,ro", "device": "/sys/kernel"},
+		"plain-vol": {},
+		"srv-vol":   {"o": "bind", "device": "/srv/data"},
+	}}
+	bind := func(src, dst string) dockerx.Mount { return dockerx.Mount{Type: "bind", Source: src, Destination: dst} }
+	vol := func(name, dst string) dockerx.Mount {
+		return dockerx.Mount{Type: "volume", Name: name, Destination: dst, Driver: "local"}
+	}
+	refused := []struct {
+		m    dockerx.Mount
+		name string // the error must name the bind
+	}{
+		{bind("/", "/host"), "bind / -> /host"},
+		{bind("/proc", "/host/proc"), "bind /proc -> /host/proc"},
+		{bind("/proc/1/ns", "/ns"), "bind /proc/1/ns -> /ns"},
+		{bind("/sys", "/host/sys"), "bind /sys -> /host/sys"},
+		{bind("/sys/fs/cgroup", "/cg"), "bind /sys/fs/cgroup -> /cg"},
+		{bind("/dev", "/host/dev"), "bind /dev -> /host/dev"},
+		{bind("/proc/", "/p"), "bind /proc/ -> /p"},
+		{vol("proc-vol", "/data"), "bind /proc -> /data"},
+		{vol("sys-vol", "/data"), "bind /sys/kernel -> /data"},
+	}
+	for _, c := range refused {
+		err := HostBind(ctx, docker, []dockerx.Mount{bind("/srv", "/srv"), c.m})
+		if !errors.Is(err, ErrForbiddenPath) || !strings.Contains(err.Error(), c.name) {
+			t.Errorf("%+v : %v, attendu ErrForbiddenPath qui nomme %q", c.m, err, c.name)
+		}
+	}
+	allowed := []dockerx.Mount{
+		bind("/srv/data", "/data"), bind("/dev/log", "/dev/log"), bind("/dev/null", "/x"),
+		bind("/procfs-backup", "/b"), bind("/system", "/s"), vol("plain-vol", "/v"), vol("srv-vol", "/w"),
+		{Type: "tmpfs", Destination: "/tmp"},
+		{Type: "volume", Name: "proc-vol", Destination: "/z", Driver: "other"}, // not local: no device option to read
+	}
+	if err := HostBind(ctx, docker, allowed); err != nil {
+		t.Fatalf("montages ordinaires refusés : %v", err)
+	}
+	// Unreadable volume options: fail closed, with Docker's error.
+	if err := HostBind(ctx, docker, []dockerx.Mount{vol("gone", "/g")}); !errors.Is(err, dockerx.ErrNotFound) {
+		t.Fatalf("volume illisible : %v", err)
+	}
+}
+
+const sampleMountinfo = `600 500 0:50 / / rw,relatime master:1 - overlay overlay rw,lowerdir=/l
+601 600 0:52 / /proc rw,nosuid,nodev,noexec,relatime - proc proc rw
+602 600 0:53 / /dev rw,nosuid - tmpfs tmpfs rw,size=65536k,mode=755
+603 602 0:54 / /dev/pts rw,nosuid,noexec,relatime - devpts devpts rw,gid=5,mode=620
+604 600 0:55 / /sys ro,nosuid,nodev,noexec,relatime - sysfs sysfs ro
+605 604 0:26 / /sys/fs/cgroup ro,nosuid,nodev,noexec,relatime - cgroup2 cgroup rw
+606 600 254:1 /docker/volumes/x/_data /data rw,relatime - ext4 /dev/vda1 rw
+607 606 0:60 / /data/remote rw,nosuid,nodev,relatime - fuse.sshfs host:/ rw,user_id=0
+608 600 0:61 / /host/proc rw,relatime - proc proc rw
+609 600 254:1 /srv /my\040dir rw,relatime - ext4 /dev/vda1 rw
+610 609 0:62 / /my\040dir/sys rw,relatime - sysfs sysfs rw
+`
+
+func TestPseudoMountUnder(t *testing.T) {
+	cases := []struct {
+		dir, mountPoint, fsType string
+		found                   bool
+	}{
+		{"/", "/proc", "proc", true},
+		{"/etc", "", "", false},
+		{"/dev", "", "", false}, // tmpfs, devpts: harmless
+		{"/sys", "/sys", "sysfs", true},
+		{"/sys/fs", "/sys", "sysfs", true}, // below a pseudo mount
+		{"/data", "/data/remote", "fuse.sshfs", true},
+		{"/data/other", "", "", false},
+		{"/host", "/host/proc", "proc", true},
+		{"/host/proc/1", "/host/proc", "proc", true},
+		{"/hostfoo", "", "", false},
+		{"/my dir", "/my dir/sys", "sysfs", true},
+		{"/proc/../etc", "", "", false}, // cleaned: /etc
+	}
+	for _, c := range cases {
+		mp, typ, found := PseudoMountUnder(sampleMountinfo, c.dir)
+		if found != c.found || mp != c.mountPoint || typ != c.fsType {
+			t.Errorf("%q : (%q, %q, %v), attendu (%q, %q, %v)", c.dir, mp, typ, found, c.mountPoint, c.fsType, c.found)
+		}
+	}
+	if _, _, found := PseudoMountUnder("garbage line\n", "/etc"); !found {
+		t.Fatal("une ligne illisible doit refuser (échec fermé)")
+	}
+	if _, _, found := PseudoMountUnder("700 600 0:70 / /mnt rw - fuseblk /dev/sdb1 rw\n", "/"); !found {
+		t.Fatal("fuseblk sous / doit refuser")
+	}
+}
+```
+
+`internal/fsview/procfs_archive_linux_test.go` :
+
+```go
+//go:build linux
+
+package fsview
+
+// CheckArchive on a real process of the test machine (no Docker): one of the
+// test's own children plays the container. Its mount table is the test
+// machine's, where /proc and /sys are pseudo filesystems.
+
+import (
+	"errors"
+	"fmt"
+	"os"
+	"os/exec"
+	"strings"
+	"testing"
+
+	"golang.org/x/sys/unix"
+
+	"github.com/levy-cmd/hublot-kit/internal/dockerx"
+)
+
+func childView(t *testing.T) (*procFS, *exec.Cmd) {
+	t.Helper()
+	cmd := exec.Command("sleep", "30")
+	must(t, cmd.Start())
+	t.Cleanup(func() { cmd.Process.Kill(); cmd.Wait() })
+	pid := cmd.Process.Pid
+	pidfd, err := unix.PidfdOpen(pid, 0)
+	must(t, err)
+	fd, err := unix.Open(fmt.Sprintf("/proc/%d/root", pid), unix.O_PATH|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
+	must(t, err)
+	p := &procFS{root: os.NewFile(uintptr(fd), "root"), pid: pid, pidfd: pidfd, docker: &dockerx.Fake{}}
+	t.Cleanup(func() { p.Close() })
+	return p, cmd
+}
+
+func TestCheckArchiveMountTable(t *testing.T) {
+	p, _ := childView(t)
+	for _, dir := range []string{"/", "/proc", "/proc/1", "/sys", "/sys/fs"} {
+		if err := p.CheckArchive(ctx, dir); !errors.Is(err, ErrForbiddenPath) {
+			t.Errorf("%s : %v, attendu ErrForbiddenPath", dir, err)
+		}
+	}
+	if err := p.CheckArchive(ctx, "/etc"); err != nil {
+		t.Errorf("/etc : %v", err)
+	}
+}
+
+func TestCheckArchiveHostBind(t *testing.T) {
+	p, _ := childView(t)
+	p.mounts = []dockerx.Mount{{Type: "bind", Source: "/proc", Destination: "/host/proc"}}
+	err := p.CheckArchive(ctx, "/etc")
+	if !errors.Is(err, ErrForbiddenPath) || !strings.Contains(err.Error(), "bind /proc -> /host/proc") {
+		t.Fatalf("bind de /proc : %v", err)
+	}
+}
+
+func TestCheckArchiveDeadProcess(t *testing.T) {
+	p, cmd := childView(t)
+	cmd.Process.Kill()
+	cmd.Wait()
+	if err := p.CheckArchive(ctx, "/etc"); !errors.Is(err, ErrContainerChanged) {
+		t.Fatalf("process mort : %v, attendu ErrContainerChanged", err)
+	}
+}
+
+func TestCheckArchiveWithoutProcessFailsClosed(t *testing.T) {
+	fsys, _, _ := newRoot(t)
+	if err := fsys.CheckArchive(ctx, "/"); err == nil {
+		t.Fatal("une vue sans process ne peut pas autoriser un tar")
+	}
+}
+```
+
+- [ ] **Step 2: Vérifier qu'ils échouent**
+
+Run: `go test ./internal/fsview/`
+Expected : FAIL à la compilation (`undefined: HostBind`, `undefined: PseudoMountUnder`).
+
+- [ ] **Step 3: Écrire le code**
+
+`internal/fsview/mounts.go` :
+
+```go
+package fsview
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"path"
+	"slices"
+	"strconv"
+	"strings"
+
+	"github.com/levy-cmd/hublot-kit/internal/dockerx"
+)
+
+// Docker builds GET /archive of a directory with the container's binds and
+// volumes mounted in it: a bind of the host's /proc puts /proc/kcore (hundreds
+// of TiB) in the tar and locks dockerd (measured in review). Two checks run
+// before every GetArchive of a directory (spec §5.2 step 7, §5.4).
+
+// HostBind refuses a container that has a bind (or a local volume with
+// o=bind/rbind and device=…, which is a bind in disguise) of the host's /,
+// /proc, /sys or a path below them, or of /dev exactly. The error names the
+// bind, e.g. "bind /proc -> /host/proc". A volume whose options cannot be read
+// fails closed.
+func HostBind(ctx context.Context, docker dockerx.Client, mounts []dockerx.Mount) error {
+	for _, m := range mounts {
+		src := ""
+		switch {
+		case m.Type == "bind":
+			src = m.Source
+		case m.Type == "volume" && m.Driver == "local":
+			if docker == nil {
+				return errors.New("options du volume " + m.Name + " illisibles : pas de client Docker")
+			}
+			opts, err := docker.VolumeOptions(ctx, m.Name)
+			if err != nil {
+				return err
+			}
+			if hasBindOption(opts["o"]) && opts["device"] != "" {
+				src = opts["device"]
+			}
+		}
+		if src != "" && hostSensitive(src) {
+			return fmt.Errorf("%w : bind %s -> %s", ErrForbiddenPath, src, m.Destination)
+		}
+	}
+	return nil
+}
+
+func hasBindOption(o string) bool {
+	for _, opt := range strings.Split(o, ",") {
+		if opt = strings.TrimSpace(opt); opt == "bind" || opt == "rbind" {
+			return true
+		}
+	}
+	return false
+}
+
+// hostSensitive works on a host path string (never opened).
+func hostSensitive(src string) bool {
+	s := path.Clean(src)
+	return s == "/" || s == "/dev" ||
+		s == "/proc" || strings.HasPrefix(s, "/proc/") ||
+		s == "/sys" || strings.HasPrefix(s, "/sys/")
+}
+
+// pseudoFSNames are the mountinfo names of the 15 pseudo filesystems of
+// spec §5.1 step 9 (pseudofs_linux.go lists their magic numbers).
+var pseudoFSNames = []string{
+	"proc", "sysfs", "cgroup", "cgroup2", "debugfs", "tracefs", "securityfs", "bpf",
+	"pstore", "efivarfs", "binfmt_misc", "selinuxfs", "smackfs", "configfs", "fusectl",
+}
+
+// dangerousFSType: a pseudo filesystem, or FUSE (a server that never answers
+// would block dockerd while it builds the tar, spec §13).
+func dangerousFSType(t string) bool {
+	return slices.Contains(pseudoFSNames, t) || t == "fuse" || t == "fuseblk" || strings.HasPrefix(t, "fuse.")
+}
+
+// PseudoMountUnder reads a /proc/<pid>/mountinfo content (mount points are
+// relative to the process's root) and reports the first mount of a dangerous
+// type whose mount point is dir itself, below dir, or above dir. A line that
+// cannot be parsed counts as dangerous: the check fails closed.
+func PseudoMountUnder(mountinfo, dir string) (mountPoint, fsType string, found bool) {
+	dir = CleanPath(dir)
+	for _, line := range strings.Split(mountinfo, "\n") {
+		if strings.TrimSpace(line) == "" {
+			continue
+		}
+		f := strings.Fields(line)
+		sep := slices.Index(f, "-")
+		if len(f) < 5 || sep < 5 || sep+1 >= len(f) {
+			return line, "ligne de mountinfo illisible", true
+		}
+		mp, typ := unescapeMountinfo(f[4]), f[sep+1]
+		if dangerousFSType(typ) && (mp == dir || isUnder(mp, dir) || isUnder(dir, mp)) {
+			return mp, typ, true
+		}
+	}
+	return "", "", false
+}
+
+func isUnder(p, parent string) bool {
+	return parent == "/" || strings.HasPrefix(p, parent+"/")
+}
+
+// unescapeMountinfo decodes the octal escapes of mountinfo (\040 space,
+// \011 tab, \012 newline, \134 backslash).
+func unescapeMountinfo(s string) string {
+	var b strings.Builder
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\\' && i+4 <= len(s) {
+			if n, err := strconv.ParseUint(s[i+1:i+4], 8, 8); err == nil {
+				b.WriteByte(byte(n))
+				i += 3
+				continue
+			}
+		}
+		b.WriteByte(s[i])
+	}
+	return b.String()
+}
+```
+
+`internal/fsview/procfs_archive_linux.go` (remplace la garde fermée de la tâche 5) :
+
+```go
+//go:build linux
+
+package fsview
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"os"
+
+	"golang.org/x/sys/unix"
+)
+
+// readMountinfo reads a host file: /proc/<pid>/mountinfo of the process pinned
+// by the view's pidfd (its mount points are relative to the container root).
+var readMountinfo = func(pid int) ([]byte, error) {
+	return os.ReadFile(fmt.Sprintf("/proc/%d/mountinfo", pid))
+}
+
+// CheckArchive (spec §5.2 step 7, §5.4): no bind of the host's sensitive
+// trees, and no pseudo filesystem or FUSE mount on, under or above dir in the
+// container's mount table, read for the very process the pidfd pins.
+func (p *procFS) CheckArchive(ctx context.Context, dir string) error {
+	if p.pidfd < 0 {
+		return errors.New("contrôle des montages impossible : vue sans process")
+	}
+	if err := HostBind(ctx, p.docker, p.mounts); err != nil {
+		return err
+	}
+	mi, err := readMountinfo(p.pid)
+	if err != nil {
+		return changed("lecture de /proc/%d/mountinfo : %v", p.pid, err)
+	}
+	// Still alive after the read: the table read is the container's.
+	if err := unix.PidfdSendSignal(p.pidfd, 0, nil, 0); err != nil {
+		return changed("le process %d a disparu : %v", p.pid, err)
+	}
+	if mp, typ, bad := PseudoMountUnder(string(mi), dir); bad {
+		return fmt.Errorf("%w : %s monté sur %s, le tar de %s l'inclurait", ErrForbiddenPath, typ, mp, CleanPath(dir))
+	}
+	return nil
+}
+```
+
+- [ ] **Step 4: Vérifier**
+
+Run (macOS) : `go vet ./internal/... && go test ./internal/fsview/ -run 'HostBind|PseudoMount' -v`
+Expected : PASS (2 tests).
+
+Run : `GOOS=linux go vet ./internal/fsview/ && scripts/test-linux.sh ./internal/fsview/ -run CheckArchive -v 2>&1 | grep -E '^(--- |ok|FAIL)'`
+Expected : 4 tests `TestCheckArchive…` en `PASS`. Dans le conteneur de test, `/`, `/proc`, `/proc/1`, `/sys` et `/sys/fs` sont refusés, `/etc` est accepté.
+
+Run (non root, comme la CI) : `docker run --rm --user 1000:1000 -e GOCACHE=/tmp/gocache -e HOME=/tmp -v "$PWD":/src -w /src -v hublot-gomod:/go/pkg/mod:ro hublot-test go test -race ./internal/fsview/`
+Expected : `ok`.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add internal/fsview
+git commit -F - <<'EOF'
+explorateur: contrôle des montages avant le tar d'un dossier (binds de l'hôte, mountinfo)
+
+Docker monte les binds du conteneur pour construire GET /archive : un bind
+du /proc de l'hôte y mettait /proc/kcore et bloquait dockerd (revue C1).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+EOF
+```
+
+---
+
+### Task 8: `procfs` sur de vrais conteneurs
+
+**Où tester :** Linux root avec Docker (`scripts/test-linux.sh -tags integration`, Docker Desktop) ; les VM et la CI à la tâche 16.
 
 **Files:**
 - Create: `internal/fsview/integration_test.go`
 
 **Interfaces:**
-- Consumes: `For`, `FS`, erreurs (tâches 1 à 6) ; `dockerx.New`
+- Consumes: `For`, `FS`, `CheckArchive`, erreurs (tâches 1 à 7) ; `dockerx.New`, `GetArchive`
 - Produces: rien (tests)
 
-> **À comprendre :** ces tests valident la séquence complète de §5.1 sur Docker : alpine (lien `/etc/os-release` → `../usr/lib/os-release`, `/dev/null`, `/proc`, `/sys`), distroless non root en `--read-only` (variante `:debug`, seule à contenir un `sleep` : `/busybox/sleep`), cible `--privileged` (non confinée : exige `apparmor=unconfined` sur un hôte AppArmor, §8), redémarrage (nouveau PID), conteneur arrêté (`ErrStopped`) et absent. L'aide `docker` lit la sortie standard seule : un `docker run` qui télécharge l'image écrit sa progression sur la sortie d'erreur, qui ne doit pas se mêler à l'ID renvoyé.
+> **À comprendre :** ces tests valident la séquence complète de §5.1 sur Docker.
+>
+> - **alpine :** lien `/etc/os-release` → `../usr/lib/os-release`, `/dev/null`, `/proc`, `/sys`.
+> - **distroless non root en `--read-only` :** variante `:debug`, la seule à contenir un `sleep` (`/busybox/sleep`).
+> - **cible `--privileged` :** non confinée, elle exige `apparmor=unconfined` sur un hôte AppArmor (§8).
+> - **redémarrage :** nouveau PID ; **conteneur arrêté :** `ErrStopped` ; **conteneur absent :** `ErrNotFound`.
+> - **cible `--pid=host` (revue I2) :** `/proc/1/root` y est la racine de l'hôte. Ni directement, ni par le lien `/m`, rien ne doit être lu.
+> - **`CheckArchive`** sur un conteneur sans bind.
+> - **une mesure (revue C1, Q8) :** le tar d'un conteneur actif voit-il son propre `/proc` ?
+>
+> La mesure est sûre : un seul petit pseudo-fichier (`/proc/sys/kernel/hostname`, taille 0 dans l'en-tête tar), un délai de 10 s, jamais un dossier de `/proc`. Le test **consigne** le résultat (`MESURE : …`) sans échouer : sur Docker Desktop, Docker 29, la réponse est « ne voit pas ».
+>
+> L'aide `docker` lit la sortie standard seule : un `docker run` qui télécharge l'image écrit sa progression sur la sortie d'erreur, qui ne doit pas se mêler à l'ID renvoyé.
 
 - [ ] **Step 1: Écrire les tests**
 
@@ -2196,12 +3073,76 @@ func TestIntegrationForStoppedContainer(t *testing.T) {
 		t.Fatalf("conteneur absent : %v", err)
 	}
 }
+
+// A target sharing the host's PID namespace sees the host's processes:
+// /proc/1/root is the host's root. Never followed, directly or by a link
+// (spec §5.1 steps 6 and 9; pathrs refuses magic links).
+func TestIntegrationPidHostTarget(t *testing.T) {
+	needRoot(t)
+	id := runTarget(t, "hublot-it-fs-pidhost", "--pid=host", "alpine:3", "sh", "-c", "ln -s /proc/1/root /m && sleep 300")
+	fsys := openFor(t, id)
+	ctx := context.Background()
+	time.Sleep(500 * time.Millisecond) // let the shell create /m
+	for _, p := range []string{"/proc/1/root/etc/hostname", "/m/etc/hostname", "/m/etc/shadow"} {
+		if rc, err := fsys.Open(ctx, p); err == nil {
+			b, _ := io.ReadAll(rc)
+			rc.Close()
+			t.Errorf("ÉVASION : %s lu (%q)", p, b)
+		}
+	}
+	for _, p := range []string{"/proc/1/root", "/m", "/m/etc"} {
+		if entries, _, err := fsys.List(ctx, p); err == nil {
+			t.Errorf("ÉVASION : List %s a rendu %d entrées", p, len(entries))
+		}
+	}
+	if _, err := fsys.StatNoLinks(ctx, "/m/etc"); !errors.Is(err, ErrLinkInPath) {
+		t.Errorf("StatNoLinks /m/etc : %v", err)
+	}
+}
+
+// The mount check on a real container without binds: its own /proc and /sys
+// are under "/", /etc has none.
+func TestIntegrationCheckArchive(t *testing.T) {
+	needRoot(t)
+	id := runTarget(t, "hublot-it-fs-archive", "alpine:3", "sleep", "300")
+	fsys := openFor(t, id)
+	ctx := context.Background()
+	for _, dir := range []string{"/", "/proc", "/sys"} {
+		if err := fsys.CheckArchive(ctx, dir); !errors.Is(err, ErrForbiddenPath) {
+			t.Errorf("%s : %v, attendu ErrForbiddenPath", dir, err)
+		}
+	}
+	if err := fsys.CheckArchive(ctx, "/etc"); err != nil {
+		t.Errorf("/etc : %v", err)
+	}
+}
+
+// Measurement, not an assertion (review ruling C1): does GET /archive of a
+// running container see the container's own procfs? One small pseudo-file,
+// a short delay: never a directory of /proc (a tar of /proc can lock dockerd).
+func TestIntegrationMeasureOwnProcInArchive(t *testing.T) {
+	needRoot(t)
+	id := runTarget(t, "hublot-it-fs-ownproc", "alpine:3", "sleep", "300")
+	dc, err := dockerx.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	rc, err := dc.GetArchive(ctx, id, "/proc/sys/kernel/hostname")
+	if err != nil {
+		t.Logf("MESURE : GET /archive ne voit pas le /proc propre du conteneur (%v)", err)
+		return
+	}
+	rc.Close()
+	t.Logf("MESURE : GET /archive VOIT le /proc propre du conteneur")
+}
 ```
 
 - [ ] **Step 2: Lancer**
 
-Run: `scripts/test-linux.sh -tags integration ./internal/fsview/ ./internal/dockerx/ -run 'Integration|RealDocker' -v 2>&1 | grep -E '^(--- |ok|FAIL)'`
-Expected : `--- PASS` pour les 5 tests `TestIntegration…` et les 2 tests `…RealDocker`.
+Run: `scripts/test-linux.sh -tags integration ./internal/fsview/ ./internal/dockerx/ -run 'Integration|RealDocker' -v 2>&1 | grep -E '^(--- |ok|FAIL)|MESURE'`
+Expected : `--- PASS` pour les 8 tests `TestIntegration…` et les 3 tests `…RealDocker`, plus une ligne `MESURE :`, à recopier dans le rapport de tâche.
 
 Run (macOS, contrôle) : `go test -tags integration ./internal/fsview/`
 Expected : PASS sans rien lancer (`integration && linux`).
@@ -2211,7 +3152,7 @@ Expected : PASS sans rien lancer (`integration && linux`).
 ```bash
 git add internal/fsview
 git commit -F - <<'EOF'
-explorateur: tests d'intégration de procfs (alpine, distroless non root, privilégié, redémarrage)
+explorateur: tests d'intégration de procfs (distroless, privilégié, --pid=host, montages, mesure du /proc propre)
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 EOF
@@ -2219,7 +3160,7 @@ EOF
 
 ---
 
-### Task 8: API : garde FUSE, codes d'erreur, faux `FS`
+### Task 9: API : garde FUSE, codes d'erreur, faux `FS`
 
 **Où tester :** macOS.
 
@@ -2229,9 +3170,23 @@ EOF
 
 **Interfaces:**
 - Consumes: erreurs de `fsview` (tâche 1) ; `dockerx.ErrNotFound`, `dockerx.ErrUnavailable` (tâche 3) ; `writeError` (Socle)
-- Produces: `newFSGuard(max int, timeout time.Duration) *fsGuard` ; `guarded[T any](g *fsGuard, ctx context.Context, id string, fn func() (T, error), cleanup func(T)) (T, error)` ; `errBusy`, `errTimeout` ; `writeFSError(w http.ResponseWriter, err error)` ; `fsErrorStatus(err error) (int, string)` ; `fsview.NewMemFS() *MemFS` avec `AddDir(p)`, `AddFile(p, content)`, `AddLink(p, target)` (chaînables), champs `Entries`, `Content`, `Err`, `Closed atomic.Int32`
+- Produces:
+  - `newFSGuard(max int, timeout time.Duration) *fsGuard` ;
+  - `guarded[T any](g *fsGuard, ctx context.Context, id string, fn func() (T, error), cleanup func(T)) (T, release func(), error)` : `release` n'est jamais nil ;
+  - `errBusy`, `errTimeout` ;
+  - `writeFSError(w http.ResponseWriter, err error)` et `fsErrorStatus(err error) (int, string)` ;
+  - `fsview.NewMemFS() *MemFS`, avec `AddDir(p)`, `AddFile(p, content)`, `AddLink(p, target)` (chaînables) et les champs `Entries`, `Content`, `Err`, `ArchiveErr`, `OpenFile func(p string) (io.ReadCloser, error)`, `Closed atomic.Int32`.
 
-> **À comprendre :** un montage FUSE du conteneur qui ne répond plus bloque *indéfiniment* la goroutine qui le lit (§13) ; on ne peut pas l'interrompre. `guarded` lance donc l'opération dans sa propre goroutine et rend la main après le délai (ou quand le client part) ; la goroutine bloquée garde son créneau tant qu'elle n'est pas revenue, ce qui borne leur nombre à `max` par conteneur. Si l'opération finit après l'abandon, `cleanup` ferme ce qu'elle a ouvert. `guarded` est une fonction générique (`[T any]`) : Go n'accepte pas de paramètre de type sur une méthode. `MemFS` est le faux de `fsview.FS` pour les tests de `api`, comme `dockerx.Fake` pour Docker.
+> **À comprendre :** un montage FUSE du conteneur qui ne répond plus bloque *indéfiniment* la goroutine qui le lit (§13) ; on ne peut pas l'interrompre.
+>
+> - `guarded` prend un créneau du conteneur, lance l'opération dans sa propre goroutine et rend la main après le délai (ou quand le client part).
+> - Un créneau n'est rendu qu'au **vrai** retour du travail (revue Codex n°4) :
+>   - opération abandonnée : sa goroutine garde le créneau jusqu'à son retour, puis `cleanup` ferme ce qu'elle a ouvert ;
+>   - opération réussie : l'appelant reçoit `release` et l'appelle quand il a fini du résultat ; pour un téléchargement, c'est après la copie.
+> - Le nombre de goroutines bloquées reste donc borné à `max` par conteneur.
+> - `guarded` est une fonction générique (`[T any]`) : Go n'accepte pas de paramètre de type sur une méthode.
+> - `ELOOP` (boucle de liens, lien magique refusé) devient `not_found` (revue M4).
+> - `MemFS` est le faux de `fsview.FS` pour les tests de `api`, comme `dockerx.Fake` pour Docker. `ArchiveErr` simule un refus de `CheckArchive` ; `OpenFile` simule un fichier FUSE qui bloque.
 
 - [ ] **Step 1: Écrire les tests qui échouent**
 
@@ -2247,27 +3202,52 @@ import (
 	"time"
 )
 
-func TestGuardReturnsResult(t *testing.T) {
-	g := newFSGuard(2, time.Second)
-	v, err := guarded(g, context.Background(), "c", func() (int, error) { return 7, nil }, nil)
+func busy(g *fsGuard) int {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return len(g.busy)
+}
+
+func TestGuardKeepsTheSlotUntilRelease(t *testing.T) {
+	g := newFSGuard(1, time.Second)
+	v, release, err := guarded(g, context.Background(), "c", func() (int, error) { return 7, nil }, nil)
 	if v != 7 || err != nil {
 		t.Fatalf("%d %v", v, err)
 	}
-	if len(g.busy) != 0 {
-		t.Fatalf("créneau non rendu : %v", g.busy)
+	// The caller still uses the result (a download streams it): slot taken.
+	if _, _, err := guarded(g, context.Background(), "c", func() (int, error) { return 1, nil }, nil); !errors.Is(err, errBusy) {
+		t.Fatalf("attendu errBusy tant que release n'est pas appelé, reçu %v", err)
+	}
+	release()
+	release() // idempotent
+	if busy(g) != 0 {
+		t.Fatal("créneau non rendu")
+	}
+}
+
+func TestGuardFreesTheSlotOnError(t *testing.T) {
+	g := newFSGuard(1, time.Second)
+	_, release, err := guarded(g, context.Background(), "c", func() (int, error) { return 0, errors.New("x") }, nil)
+	release() // a no-op, but always callable
+	if err == nil || busy(g) != 0 {
+		t.Fatalf("err %v, créneaux %d", err, busy(g))
 	}
 }
 
 func TestGuardTimesOutAndCleansUpLateResult(t *testing.T) {
 	g := newFSGuard(2, 20*time.Millisecond)
-	release := make(chan struct{})
+	unblock := make(chan struct{})
 	cleaned := make(chan int, 1)
-	_, err := guarded(g, context.Background(), "c", func() (int, error) { <-release; return 9, nil },
+	_, release, err := guarded(g, context.Background(), "c", func() (int, error) { <-unblock; return 9, nil },
 		func(v int) { cleaned <- v })
+	release()
 	if !errors.Is(err, errTimeout) {
 		t.Fatalf("attendu errTimeout, reçu %v", err)
 	}
-	close(release)
+	if busy(g) != 1 {
+		t.Fatal("la goroutine bloquée doit garder son créneau")
+	}
+	close(unblock)
 	select {
 	case v := <-cleaned:
 		if v != 9 {
@@ -2276,20 +3256,28 @@ func TestGuardTimesOutAndCleansUpLateResult(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("le résultat tardif n'a pas été nettoyé")
 	}
+	deadline := time.Now().Add(time.Second)
+	for busy(g) != 0 && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if busy(g) != 0 {
+		t.Fatal("créneau non rendu après le vrai retour")
+	}
 }
 
 func TestGuardBoundsEachContainer(t *testing.T) {
 	g := newFSGuard(1, 20*time.Millisecond)
 	block := make(chan struct{})
 	defer close(block)
-	if _, err := guarded(g, context.Background(), "c", func() (int, error) { <-block; return 0, nil }, nil); !errors.Is(err, errTimeout) {
+	if _, _, err := guarded(g, context.Background(), "c", func() (int, error) { <-block; return 0, nil }, nil); !errors.Is(err, errTimeout) {
 		t.Fatalf("attendu errTimeout, reçu %v", err)
 	}
-	// The hung goroutine still holds the only slot of "c".
-	if _, err := guarded(g, context.Background(), "c", func() (int, error) { return 1, nil }, nil); !errors.Is(err, errBusy) {
+	if _, _, err := guarded(g, context.Background(), "c", func() (int, error) { return 1, nil }, nil); !errors.Is(err, errBusy) {
 		t.Fatalf("attendu errBusy, reçu %v", err)
 	}
-	if v, err := guarded(g, context.Background(), "other", func() (int, error) { return 1, nil }, nil); err != nil || v != 1 {
+	v, release, err := guarded(g, context.Background(), "other", func() (int, error) { return 1, nil }, nil)
+	release()
+	if err != nil || v != 1 {
 		t.Fatalf("un autre conteneur a son propre budget : %d %v", v, err)
 	}
 }
@@ -2300,7 +3288,7 @@ func TestGuardStopsWithTheRequest(t *testing.T) {
 	cancel()
 	block := make(chan struct{})
 	defer close(block)
-	if _, err := guarded(g, ctx, "c", func() (int, error) { <-block; return 0, nil }, nil); !errors.Is(err, errTimeout) {
+	if _, _, err := guarded(g, ctx, "c", func() (int, error) { <-block; return 0, nil }, nil); !errors.Is(err, errTimeout) {
 		t.Fatalf("requête annulée : %v", err)
 	}
 }
@@ -2344,6 +3332,8 @@ func TestFSErrorStatus(t *testing.T) {
 		{&fs.PathError{Op: "open", Path: "/x", Err: syscall.ENOENT}, http.StatusNotFound, "not_found"},
 		{&fs.PathError{Op: "open", Path: "/etc/hosts/x", Err: syscall.ENOTDIR}, http.StatusNotFound, "not_found"},
 		{wrapped(fsview.ErrNotDir), http.StatusNotFound, "not_found"},
+		{&fs.PathError{Op: "openat2", Path: "/m/etc", Err: syscall.ELOOP}, http.StatusNotFound, "not_found"},
+		{fmt.Errorf("%w : /lien", fsview.ErrLinkInPath), http.StatusUnprocessableEntity, "link_in_path"},
 		{wrapped(fsview.ErrStopped), http.StatusNotImplemented, "internal"},
 		{errors.New("autre"), http.StatusInternalServerError, "internal"},
 	}
@@ -2365,6 +3355,7 @@ import (
 	"errors"
 	"io"
 	"io/fs"
+	"strings"
 	"testing"
 )
 
@@ -2402,6 +3393,18 @@ func TestMemFS(t *testing.T) {
 	if _, err := m.StatNoLinks(ctx, "/etc/hosts"); err != nil {
 		t.Fatal(err)
 	}
+	if err := m.CheckArchive(ctx, "/etc"); err != nil {
+		t.Fatalf("CheckArchive : %v", err)
+	}
+	m.ArchiveErr = ErrForbiddenPath
+	if err := m.CheckArchive(ctx, "/etc"); !errors.Is(err, ErrForbiddenPath) {
+		t.Fatalf("ArchiveErr : %v", err)
+	}
+	m.OpenFile = func(p string) (io.ReadCloser, error) { return io.NopCloser(strings.NewReader("hook:" + p)), nil }
+	rc, _ = m.Open(ctx, "/etc/hosts")
+	if b, _ := io.ReadAll(rc); string(b) != "hook:/etc/hosts" {
+		t.Fatalf("OpenFile : %q", b)
+	}
 	m.Err = ErrForbiddenPath
 	if _, err := m.Stat(ctx, "/etc"); !errors.Is(err, ErrForbiddenPath) {
 		t.Fatalf("Err : %v", err)
@@ -2433,8 +3436,10 @@ import (
 
 // Spec §13: a FUSE mount of the container that never answers blocks the
 // goroutine that reads it. The request must fail anyway, and such goroutines
-// must not pile up: at most max operations per container, each one given up
-// after timeout (its goroutine keeps the slot until it really returns).
+// must not pile up: at most max operations per container (by full ID), each
+// one given up after timeout. A slot is freed only when the work really ends:
+// the goroutine of a given-up operation keeps it until it returns, and a
+// download keeps it until its copy returns.
 var (
 	errBusy    = errors.New("trop d'opérations de fichiers en cours sur ce conteneur (montage FUSE bloqué ?)")
 	errTimeout = errors.New("délai dépassé (montage FUSE bloqué ?)")
@@ -2451,31 +3456,39 @@ func newFSGuard(max int, timeout time.Duration) *fsGuard {
 	return &fsGuard{busy: map[string]int{}, max: max, timeout: timeout}
 }
 
-func (g *fsGuard) acquire(id string) bool {
+// take reserves a slot of container id; the returned func frees it (once).
+func (g *fsGuard) take(id string) (func(), bool) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if g.busy[id] >= g.max {
-		return false
+		return nil, false
 	}
 	g.busy[id]++
-	return true
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			g.mu.Lock()
+			defer g.mu.Unlock()
+			if g.busy[id]--; g.busy[id] <= 0 {
+				delete(g.busy, id)
+			}
+		})
+	}, true
 }
 
-func (g *fsGuard) release(id string) {
-	g.mu.Lock()
-	defer g.mu.Unlock()
-	if g.busy[id]--; g.busy[id] <= 0 {
-		delete(g.busy, id)
-	}
-}
+func noop() {}
 
-// guarded runs fn in its own goroutine under the guard of container id. After
-// the timeout (or when ctx ends) it returns errTimeout and hands fn's late
-// result, if any, to cleanup (which closes what fn opened).
-func guarded[T any](g *fsGuard, ctx context.Context, id string, fn func() (T, error), cleanup func(T)) (T, error) {
+// guarded takes a slot of container id and runs fn in its own goroutine.
+// Success: it returns fn's result and release, which the caller calls once it
+// is done with the result (after streaming a download). Error: the slot is
+// already free. Timeout (or end of ctx): errTimeout; the slot stays taken
+// until fn returns, then fn's late result goes to cleanup (which closes what
+// fn opened). release is never nil: defer it right away.
+func guarded[T any](g *fsGuard, ctx context.Context, id string, fn func() (T, error), cleanup func(T)) (T, func(), error) {
 	var zero T
-	if !g.acquire(id) {
-		return zero, errBusy
+	release, ok := g.take(id)
+	if !ok {
+		return zero, noop, errBusy
 	}
 	type result struct {
 		v   T
@@ -2484,14 +3497,17 @@ func guarded[T any](g *fsGuard, ctx context.Context, id string, fn func() (T, er
 	done := make(chan result, 1)
 	go func() {
 		v, err := fn()
-		g.release(id)
 		done <- result{v, err}
 	}()
 	timer := time.NewTimer(g.timeout)
 	defer timer.Stop()
 	select {
 	case r := <-done:
-		return r.v, r.err
+		if r.err != nil {
+			release()
+			return zero, noop, r.err
+		}
+		return r.v, release, nil
 	case <-timer.C:
 	case <-ctx.Done():
 	}
@@ -2499,8 +3515,9 @@ func guarded[T any](g *fsGuard, ctx context.Context, id string, fn func() (T, er
 		if r := <-done; r.err == nil && cleanup != nil {
 			cleanup(r.v)
 		}
+		release()
 	}()
-	return zero, fmt.Errorf("%w (%s)", errTimeout, g.timeout)
+	return zero, noop, fmt.Errorf("%w (%s)", errTimeout, g.timeout)
 }
 ```
 
@@ -2548,7 +3565,8 @@ func fsErrorStatus(err error) (int, string) {
 		return http.StatusUnprocessableEntity, "not_regular"
 	case errors.Is(err, fsview.ErrTooLarge):
 		return http.StatusRequestEntityTooLarge, "too_large"
-	case errors.Is(err, fs.ErrNotExist), errors.Is(err, fsview.ErrNotDir), errors.Is(err, syscall.ENOTDIR):
+	case errors.Is(err, fs.ErrNotExist), errors.Is(err, fsview.ErrNotDir), errors.Is(err, syscall.ENOTDIR),
+		errors.Is(err, syscall.ELOOP): // a link loop, or a magic link refused by pathrs
 		return http.StatusNotFound, "not_found"
 	case errors.Is(err, fsview.ErrStopped):
 		return http.StatusNotImplemented, "internal"
@@ -2580,8 +3598,13 @@ import (
 type MemFS struct {
 	Entries map[string]Entry
 	Content map[string][]byte
-	Err     error        // when set, every call except Close returns it
-	Closed  atomic.Int32 // number of Close calls
+	Err     error // when set, every call except Close returns it
+	// ArchiveErr is CheckArchive's answer (nil: the tar is allowed).
+	ArchiveErr error
+	// OpenFile, when set, replaces the reader of every regular file (tests of
+	// a reader that blocks, like a FUSE file that never answers).
+	OpenFile func(p string) (io.ReadCloser, error)
+	Closed   atomic.Int32 // number of Close calls
 }
 
 func NewMemFS() *MemFS {
@@ -2650,6 +3673,9 @@ func (m *MemFS) Open(_ context.Context, p string) (io.ReadCloser, error) {
 	if e.Type != TypeFile {
 		return nil, fmt.Errorf("%w : %s", ErrNotRegular, p)
 	}
+	if m.OpenFile != nil {
+		return m.OpenFile(CleanPath(p))
+	}
 	return io.NopCloser(bytes.NewReader(m.Content[CleanPath(p)])), nil
 }
 
@@ -2663,6 +3689,13 @@ func (m *MemFS) StatNoLinks(_ context.Context, p string) (Entry, error) {
 	return m.get(p)
 }
 
+func (m *MemFS) CheckArchive(_ context.Context, dir string) error {
+	if _, err := m.get(dir); err != nil {
+		return err
+	}
+	return m.ArchiveErr
+}
+
 func (m *MemFS) Close() error {
 	m.Closed.Add(1)
 	return nil
@@ -2672,20 +3705,20 @@ func (m *MemFS) Close() error {
 - [ ] **Step 3: Vérifier**
 
 Run: `go vet ./internal/... && go test -race ./internal/api/ ./internal/fsview/ -v 2>&1 | grep -E '^(--- |ok|FAIL)'`
-Expected : PASS (`TestGuard…` ×4, `TestFSErrorStatus`, `TestMemFS`, et les tests existants).
+Expected : PASS : 5 tests `TestGuard…`, `TestFSErrorStatus`, `TestMemFS`, et les tests existants.
 
 - [ ] **Step 4: Reporter les statuts dans la spec**
 
 Dans la spec §6, après la phrase « Conteneur arrêté : toute route de fichiers peut aussi renvoyer `too_large` (construction de l'index plafonnée, §5.2 étape 3). », ajouter :
 
-> Statuts HTTP : `not_found` 404, `forbidden_path` 403, `container_changed` 409, `not_regular` et `link_in_path` 422, `too_large` 413, `docker_unavailable` 503, `internal` 500 (garde des routes de fichiers, §13 : 503 si trop d'opérations simultanées sur le conteneur, 504 après 10 s).
+> Statuts HTTP : `not_found` 404 (`ELOOP` compris : boucle de liens, lien magique refusé), `forbidden_path` 403, `container_changed` 409, `not_regular` et `link_in_path` 422, `too_large` 413, `docker_unavailable` 503, `internal` 500. Garde des routes de fichiers (§13) : 503 si 4 opérations sont déjà en cours sur le conteneur, 504 après 10 s ; un créneau n'est rendu qu'au vrai retour de l'opération, copie d'un téléchargement comprise.
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add internal/api internal/fsview docs/superpowers/specs/2026-10-07-hublot-kit-v0.1-design.md
 git commit -F - <<'EOF'
-explorateur: garde des routes de fichiers (délai, plafond par conteneur), codes d'erreur, faux FS
+explorateur: garde des routes de fichiers (délai, plafond, créneau rendu au vrai retour), codes d'erreur, faux FS
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 EOF
@@ -2693,7 +3726,7 @@ EOF
 
 ---
 
-### Task 9: API : `GET /api/containers/{id}/fs` (liste)
+### Task 10: API : `GET /api/containers/{id}/fs` (liste)
 
 **Où tester :** macOS.
 
@@ -2702,14 +3735,25 @@ EOF
 - Modify: `internal/api/server.go`, `internal/api/server_test.go`
 
 **Interfaces:**
-- Consumes: `guarded`, `writeFSError` (tâche 8) ; `fsview.For`, `FS`, `CleanPath`, `UnixPerm`, `MemFS` (tâches 1, 6, 8) ; `dockerx.Client.Inspect`, `Fake.Infos` (tâche 3)
-- Produces: `Deps.OpenFS func(ctx context.Context, id string) (fsview.FS, error)` (nil → `fsview.For` sur `Deps.Docker`) ; `fsRequest(w, r) (id, p string, ok bool)` ; `(s *server) openFS(ctx, id) (fsview.FS, fullID string, err error)` ; `entryJSON`, `listingJSON` (champs JSON `path`, `type`, `entries`, `truncated` ; entrée `name`, `type`, `size`, `mode`, `uid`, `gid`, `modTime`, `linkTarget`) ; côté tests : `fixture.fs`, `fixture.openErr`, `fixture.openedID`, `fixture.init(t, readOnly, docker, openFS)`, `const webID`, `fixture.session(t)`, `decodeListing(t, rec)`
+- Consumes: `guarded`, `writeFSError` (tâche 9) ; `fsview.For`, `FS`, `CleanPath`, `UnixPerm`, `MemFS` (tâches 1, 6, 9) ; `dockerx.Client.Inspect`, `Fake.Infos` (tâche 3)
+- Produces:
+  - `Deps.OpenFS func(ctx context.Context, id string) (fsview.FS, error)` (nil → `fsview.For` sur `Deps.Docker`) ;
+  - constantes `fsMaxPerContainer = 4`, `fsTimeout = 10 * time.Second` ;
+  - `(s *server) fsRequest(w, r) (info dockerx.ContainerInfo, p string, ok bool)` ;
+  - `entryJSON`, `listingJSON` (champs JSON `path`, `type`, `entries`, `truncated` ; entrée `name`, `type`, `size`, `mode`, `uid`, `gid`, `modTime`, `linkTarget`) ;
+  - côté tests : `fixture.fs`, `fixture.openErr`, `fixture.opened()`, `fixture.init(t, readOnly, docker, openFS)`, `const webID`, `fixture.session(t)`, `decodeListing(t, rec)`.
 
-> **À comprendre :** chaque requête résout d'abord `{id}` (nom ou ID court) en **ID complet** par `Inspect`, puis ouvre la vue sur cet ID : un conteneur supprimé puis recréé sous le même nom ne peut pas se substituer à l'autre au milieu d'une requête. La vue est fermée à la fin de chaque requête (le descripteur de la racine ne vit pas au-delà). La fixture des tests passe d'une construction en bloc à `newFixture` + `init` : `init` sert aussi au test de bout en bout (tâche 14) avec un vrai Docker.
+> **À comprendre :** chaque requête commence par `Inspect`, borné à `fsTimeout` : un démon bloqué ne doit pas suspendre la requête (revue I3).
+>
+> - Le nom ou l'ID court devient l'**ID complet**, et seul l'ID complet sert ensuite. La garde compte donc par conteneur, quel que soit le nom employé.
+> - Un conteneur supprimé puis recréé sous le même nom ne peut pas se substituer à l'autre au milieu d'une requête.
+> - La vue est fermée à la fin de chaque opération : le descripteur de la racine ne vit pas au-delà.
+> - La fixture des tests passe d'une construction en bloc à `newFixture` + `init`. `init` sert aussi au test de bout en bout (tâche 16), avec un vrai Docker.
+> - `OpenFS` tourne dans les goroutines de la garde : l'ID reçu est protégé par un mutex.
 
 - [ ] **Step 1: Adapter la fixture**
 
-Dans `internal/api/server_test.go`, ajouter `"context"` et `"github.com/levy-cmd/hublot-kit/internal/fsview"` aux imports, puis remplacer tout ce qui va de `type fixture struct {` jusqu'à la ligne qui précède `func (f *fixture) do(` par :
+Dans `internal/api/server_test.go`, ajouter `"context"`, `"sync"` et `"github.com/levy-cmd/hublot-kit/internal/fsview"` aux imports. Remplacer ensuite tout ce qui va de `type fixture struct {` jusqu'à la ligne qui précède `func (f *fixture) do(` par :
 
 ```go
 type fixture struct {
@@ -2720,7 +3764,15 @@ type fixture struct {
 	// File routes: OpenFS returns fs (or openErr) and records the ID it got.
 	fs       *fsview.MemFS
 	openErr  error
+	mu       sync.Mutex // OpenFS runs in the guard's goroutines
 	openedID string
+}
+
+// opened returns the ID the last OpenFS call received ("" if none).
+func (f *fixture) opened() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.openedID
 }
 
 // webID is the full ID of the fake "web" container of newFixture.
@@ -2736,7 +3788,9 @@ func newFixture(t *testing.T, readOnly bool) *fixture {
 	}
 	f := &fixture{docker: fake, fs: fsview.NewMemFS()}
 	f.init(t, readOnly, fake, func(_ context.Context, id string) (fsview.FS, error) {
+		f.mu.Lock()
 		f.openedID = id
+		f.mu.Unlock()
 		if f.openErr != nil {
 			return nil, f.openErr
 		}
@@ -2837,8 +3891,8 @@ func TestFSList(t *testing.T) {
 	if e := l.Entries[1]; e.Name != "os-release" || e.Type != "symlink" || e.LinkTarget != "../usr/lib/os-release" {
 		t.Fatalf("lien : %+v", e)
 	}
-	if f.openedID != webID {
-		t.Fatalf("la vue doit s'ouvrir sur l'ID complet, pas sur le nom : %q", f.openedID)
+	if f.opened() != webID {
+		t.Fatalf("la vue doit s'ouvrir sur l'ID complet, pas sur le nom : %q", f.opened())
 	}
 	if f.fs.Closed.Load() != 1 {
 		t.Fatalf("la vue doit être fermée une fois, fermée %d fois", f.fs.Closed.Load())
@@ -2915,15 +3969,15 @@ func TestFSBadContainerRef(t *testing.T) {
 	if rec := f.do("GET", "/api/containers/../fs?path=/", "", c); rec.Code == http.StatusOK {
 		t.Errorf(".. : %d", rec.Code)
 	}
-	if f.openedID != "" {
-		t.Fatalf("aucune vue ne doit s'ouvrir, ouverte pour %q", f.openedID)
+	if f.opened() != "" {
+		t.Fatalf("aucune vue ne doit s'ouvrir, ouverte pour %q", f.opened())
 	}
 }
 
 func TestFSNULInPath(t *testing.T) {
 	f := newFixture(t, false)
 	rec := f.do("GET", "/api/containers/web/fs?path=/etc%00/passwd", "", f.session(t))
-	if rec.Code != http.StatusNotFound || errCode(t, rec) != "not_found" || f.openedID != "" {
+	if rec.Code != http.StatusNotFound || errCode(t, rec) != "not_found" || f.opened() != "" {
 		t.Fatalf("%d %s", rec.Code, rec.Body)
 	}
 }
@@ -2934,7 +3988,7 @@ Expected: FAIL à la compilation (`undefined: listingJSON`, `unknown field OpenF
 
 - [ ] **Step 3: Écrire le code**
 
-`internal/api/server.go` (contenu complet ; nouveautés : `Deps.OpenFS`, `server.guard`, constantes de la garde, `OpenFS` par défaut, route `GET /api/containers/{id}/fs`) :
+`internal/api/server.go` (contenu complet). Nouveautés : `Deps.OpenFS`, `server.guard`, les constantes de la garde, `OpenFS` par défaut et la route `GET /api/containers/{id}/fs`.
 
 ```go
 package api
@@ -3129,6 +4183,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/levy-cmd/hublot-kit/internal/dockerx"
 	"github.com/levy-cmd/hublot-kit/internal/fsview"
 )
 
@@ -3136,29 +4191,30 @@ import (
 // API URLs: it must never carry "/" nor start with ".".
 var containerRef = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$`)
 
-// fsRequest reads {id} and ?path=; on a bad value it answers 404 itself.
-func fsRequest(w http.ResponseWriter, r *http.Request) (id, p string, ok bool) {
-	id = r.PathValue("id")
+// fsRequest reads {id} and ?path=, then resolves the container by Inspect
+// (bounded by fsTimeout: a stuck daemon must not hang the request). Every
+// later step uses info.ID, the full ID: the guard counts per container, and a
+// container recreated under the same name cannot step in mid-request. On any
+// failure it answers itself.
+func (s *server) fsRequest(w http.ResponseWriter, r *http.Request) (info dockerx.ContainerInfo, p string, ok bool) {
+	id := r.PathValue("id")
 	if !containerRef.MatchString(id) {
 		writeError(w, http.StatusNotFound, "not_found", "identifiant de conteneur invalide")
-		return "", "", false
+		return info, "", false
 	}
 	raw := r.URL.Query().Get("path")
 	if strings.ContainsRune(raw, 0) {
 		writeError(w, http.StatusNotFound, "not_found", "chemin invalide")
-		return "", "", false
+		return info, "", false
 	}
-	return id, fsview.CleanPath(raw), true
-}
-
-// openFS resolves a name or short ID to the full ID, then opens the view.
-func (s *server) openFS(ctx context.Context, id string) (fsview.FS, string, error) {
+	ctx, cancel := context.WithTimeout(r.Context(), fsTimeout)
+	defer cancel()
 	info, err := s.d.Docker.Inspect(ctx, id)
 	if err != nil {
-		return nil, "", err
+		writeFSError(w, err)
+		return info, "", false
 	}
-	fsys, err := s.d.OpenFS(ctx, info.ID)
-	return fsys, info.ID, err
+	return info, fsview.CleanPath(raw), true
 }
 
 type entryJSON struct {
@@ -3189,13 +4245,13 @@ type listingJSON struct {
 }
 
 func (s *server) fsList(w http.ResponseWriter, r *http.Request) {
-	id, p, ok := fsRequest(w, r)
+	info, p, ok := s.fsRequest(w, r)
 	if !ok {
 		return
 	}
 	ctx := r.Context()
-	res, err := guarded(s.guard, ctx, id, func() (listingJSON, error) {
-		fsys, _, err := s.openFS(ctx, id)
+	res, release, err := guarded(s.guard, ctx, info.ID, func() (listingJSON, error) {
+		fsys, err := s.d.OpenFS(ctx, info.ID)
 		if err != nil {
 			return listingJSON{}, err
 		}
@@ -3218,6 +4274,7 @@ func (s *server) fsList(w http.ResponseWriter, r *http.Request) {
 		sort.Slice(out.Entries, func(i, j int) bool { return out.Entries[i].Name < out.Entries[j].Name })
 		return out, nil
 	}, nil)
+	release()
 	if err != nil {
 		writeFSError(w, err)
 		return
@@ -3229,14 +4286,14 @@ func (s *server) fsList(w http.ResponseWriter, r *http.Request) {
 - [ ] **Step 4: Vérifier**
 
 Run: `go vet ./... && go test -race ./internal/api/ -v 2>&1 | grep -E '^(--- |ok|FAIL)'`
-Expected : PASS, dont `TestFSListNeedsSession`, `TestFSList`, `TestFSListCleansPath`, `TestFSListOfAFile`, `TestFSListErrors`, `TestFSBadContainerRef`, `TestFSNULInPath`, et tous les tests du Socle.
+Expected : PASS. Les nouveaux tests : `TestFSListNeedsSession`, `TestFSList`, `TestFSListCleansPath`, `TestFSListOfAFile`, `TestFSListErrors`, `TestFSBadContainerRef`, `TestFSNULInPath`. Tous les tests du Socle passent aussi.
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add internal/api
 git commit -F - <<'EOF'
-explorateur: route de listing des fichiers (GET /fs), ID complet, chemin nettoyé
+explorateur: route de listing des fichiers (GET /fs), Inspect d'abord, garde par ID complet
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 EOF
@@ -3244,7 +4301,7 @@ EOF
 
 ---
 
-### Task 10: API : `GET /api/containers/{id}/fs/file` (aperçu)
+### Task 11: API : `GET /api/containers/{id}/fs/file` (aperçu)
 
 **Où tester :** macOS.
 
@@ -3253,10 +4310,18 @@ EOF
 - Modify: `internal/api/server.go` (une route)
 
 **Interfaces:**
-- Consumes: `fsRequest`, `openFS` (tâche 9) ; `guarded`, `writeFSError` (tâche 8) ; `fsview.ErrTooLarge`
-- Produces: `const previewMax = 2 << 20` ; `previewType(b []byte) string` ; réponse : corps + `Content-Type` (`text/plain; charset=utf-8`, `image/png|jpeg|gif|webp`, ou `application/octet-stream` sans corps) + `ETag: "<sha256 hex>"`
+- Consumes: `fsRequest` (tâche 10) ; `guarded`, `writeFSError` (tâche 9) ; `fsview.ErrTooLarge`
+- Produces:
+  - `const previewMax = 2 << 20` ;
+  - `previewType(b []byte) string` ;
+  - réponse : le corps, `Content-Type` (`text/plain; charset=utf-8`, `image/png|jpeg|gif|webp`, ou `application/octet-stream` sans corps) et `ETag: "<sha256 hex>"`.
 
-> **À comprendre :** l'aperçu ne doit jamais servir un type que le navigateur exécute (§7) : un SVG peut porter du JavaScript, un HTML aussi. `http.DetectContentType` sert seulement à reconnaître quatre images matricielles ; tout le reste est du texte brut, ou « binaire » s'il y a un octet nul dans les 8 premiers Kio. `X-Content-Type-Options: nosniff` (posé par le Socle sur toute réponse) empêche le navigateur de deviner autre chose. On lit au plus 2 Mio + 1 octet : un octet de trop suffit à savoir que le fichier dépasse.
+> **À comprendre :** l'aperçu ne doit jamais servir un type que le navigateur exécute (§7) : un SVG peut porter du JavaScript, un HTML aussi.
+>
+> - `http.DetectContentType` sert seulement à reconnaître quatre images matricielles.
+> - Tout le reste est du texte brut, ou « binaire » s'il y a un octet nul dans les 8 premiers Kio.
+> - `X-Content-Type-Options: nosniff`, posé par le Socle sur toute réponse, empêche le navigateur de deviner autre chose.
+> - On lit au plus 2 Mio + 1 octet : un octet de trop suffit à savoir que le fichier dépasse. Le contenu est en mémoire quand le créneau est rendu.
 
 - [ ] **Step 1: Écrire les tests qui échouent**
 
@@ -3379,13 +4444,13 @@ const binaryType = "application/octet-stream"
 // one of four raster image types, never an active type. The ETag is the
 // SHA-256 of the content: the If-Match of a later edit (plan Explorateur 3).
 func (s *server) fsFile(w http.ResponseWriter, r *http.Request) {
-	id, p, ok := fsRequest(w, r)
+	info, p, ok := s.fsRequest(w, r)
 	if !ok {
 		return
 	}
 	ctx := r.Context()
-	b, err := guarded(s.guard, ctx, id, func() ([]byte, error) {
-		fsys, _, err := s.openFS(ctx, id)
+	b, release, err := guarded(s.guard, ctx, info.ID, func() ([]byte, error) {
+		fsys, err := s.d.OpenFS(ctx, info.ID)
 		if err != nil {
 			return nil, err
 		}
@@ -3404,6 +4469,7 @@ func (s *server) fsFile(w http.ResponseWriter, r *http.Request) {
 		}
 		return b, nil
 	}, nil)
+	release() // the content is in memory: nothing left to read
 	if err != nil {
 		writeFSError(w, err)
 		return
@@ -3457,19 +4523,32 @@ EOF
 
 ---
 
-### Task 11: API : `GET /api/containers/{id}/fs/download` (fichier ou dossier)
+### Task 12: API : `GET /api/containers/{id}/fs/download` (fichier ou dossier)
 
-**Où tester :** macOS.
+**Où tester :** macOS (faux client : aucun vrai `GetArchive` dans les cas refusés).
 
 **Files:**
 - Create: `internal/api/fs_download.go`, `internal/api/fs_download_test.go`
-- Modify: `internal/api/server.go` (une route)
+- Modify: `internal/api/server.go` (une route), `docs/superpowers/specs/2026-10-07-hublot-kit-v0.1-design.md` (§5.4, §6, §7, §13)
 
 **Interfaces:**
-- Consumes: `fsRequest`, `openFS` (tâche 9) ; `guarded`, `writeFSError` (tâche 8) ; `FS.Stat`, `FS.StatNoLinks`, `FS.Open` ; `dockerx.Client.GetArchive`, `Fake.Archives`, `Fake.ArchiveCalls` (tâche 3)
-- Produces: `setAttachment(w, name string)` ; côté tests : `filename(t, rec) string`, `escape(s string) string`
+- Consumes: `fsRequest` (tâche 10) ; `guarded`, `writeFSError` (tâche 9) ; `FS.Stat`, `FS.Open`, `FS.StatNoLinks`, `FS.CheckArchive` ; `MemFS.ArchiveErr`, `MemFS.OpenFile` ; `dockerx.Client.GetArchive`, `Fake.Archives`, `Fake.ArchiveCalls` (tâche 3)
+- Produces:
+  - `setAttachment(w, name string)` ;
+  - le paramètre `&check=1` (tous les contrôles, puis `204` sans rien lire) ;
+  - côté tests : `filename(t, rec) string`, `escape(s string) string`, `stuckReader`.
 
-> **À comprendre :** un fichier passe par `fsview.Open` (contrôles `not_regular`, `forbidden_path`, liens suivis dans la racine) et sa copie est relayée en flux. Un dossier suit la règle de l'écriture (§5.4) : le chemin **nettoyé**, sans aucun lien sur toute la chaîne (`StatNoLinks`, sinon `link_in_path`), et c'est exactement cette chaîne, avec l'ID complet, qui part vers `GetArchive` ; le tar de Docker est relayé sans être mis en mémoire. Les erreurs sont toutes connues avant le premier octet : elles partent en JSON avec leur statut.
+> **À comprendre :** les deux cas suivent §5.4.
+>
+> - **Fichier.**
+>   - Il passe par `fsview.Open` : contrôles `not_regular` et `forbidden_path`, liens suivis dans la racine.
+>   - La vue est fermée dès l'ouverture (revue M3) : le fichier ouvert reste lisible sans elle.
+> - **Dossier.**
+>   - On prend le chemin **nettoyé**, sans aucun lien sur toute la chaîne (`StatNoLinks`, sinon `link_in_path`).
+>   - Puis `CheckArchive` (tâche 7, revue C1) : ni bind de l'hôte, ni pseudo-système ou FUSE dans le tar.
+>   - Enfin `GetArchive` de **cette** chaîne avec l'ID complet, appelé sous la garde, car un démon bloqué y attendrait.
+>
+> Les deux copies sont relayées en flux, et le créneau de la garde reste pris jusqu'à la fin de la copie (revue Codex n°4). Toutes les erreurs sont connues avant le premier octet : elles partent en JSON avec leur statut. `&check=1` s'arrête juste avant de lire (revue M2) : l'interface demande d'abord, puis laisse le navigateur télécharger, sans qu'un tar ait été lancé pour rien chez Docker.
 
 - [ ] **Step 1: Écrire les tests qui échouent**
 
@@ -3479,11 +4558,19 @@ EOF
 package api
 
 import (
+	"encoding/json"
+	"fmt"
+	"io"
 	"mime"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
+	"sync"
 	"testing"
+	"time"
+
+	"github.com/levy-cmd/hublot-kit/internal/fsview"
 )
 
 // escape encodes a query value (spaces, newlines, '/' and all).
@@ -3563,10 +4650,104 @@ func TestDownloadNotRegular(t *testing.T) {
 		t.Fatalf("%d %s", rec.Code, rec.Body)
 	}
 }
+
+// Review ruling C1: a tar that would cross a host bind, a pseudo filesystem
+// or a FUSE mount is refused before any GetArchive.
+func TestDownloadDirectoryRefusedByMountCheck(t *testing.T) {
+	f := newFixture(t, false)
+	f.fs.AddDir("/host")
+	f.fs.ArchiveErr = fmt.Errorf("%w : bind /proc -> /host/proc", fsview.ErrForbiddenPath)
+	c := f.session(t)
+	for _, q := range []string{"", "&check=1"} {
+		rec := f.do("GET", "/api/containers/web/fs/download?path=/host"+q, "", c)
+		var body apiError
+		json.Unmarshal(rec.Body.Bytes(), &body)
+		if rec.Code != http.StatusForbidden || body.Error != "forbidden_path" ||
+			!strings.Contains(body.Detail, "bind /proc -> /host/proc") {
+			t.Errorf("%q : %d %s", q, rec.Code, rec.Body)
+		}
+	}
+	if len(f.docker.ArchiveCalls) != 0 {
+		t.Fatalf("GetArchive ne doit jamais être appelé : %v", f.docker.ArchiveCalls)
+	}
+}
+
+// Review ruling M2: check=1 runs every check and stops before GetArchive.
+func TestDownloadCheckMode(t *testing.T) {
+	f := newFixture(t, false)
+	f.fs.AddDir("/etc").AddFile("/etc/hosts", []byte("x")).AddLink("/l", "/etc").AddDir("/l/sub")
+	c := f.session(t)
+	for _, p := range []string{"/etc", "/etc/hosts"} {
+		if rec := f.do("GET", "/api/containers/web/fs/download?check=1&path="+p, "", c); rec.Code != http.StatusNoContent || rec.Body.Len() != 0 {
+			t.Errorf("%s : %d %q", p, rec.Code, rec.Body)
+		}
+	}
+	if rec := f.do("GET", "/api/containers/web/fs/download?check=1&path=/l/sub", "", c); errCode(t, rec) != "link_in_path" {
+		t.Errorf("lien : %d %s", rec.Code, rec.Body)
+	}
+	if len(f.docker.ArchiveCalls) != 0 {
+		t.Fatalf("le contrôle ne doit pas lancer GetArchive : %v", f.docker.ArchiveCalls)
+	}
+}
+
+// stuckReader is a file of a FUSE mount that never answers: its first Read
+// says so on started, then waits for unblock.
+type stuckReader struct {
+	once             sync.Once
+	started, unblock chan struct{}
+}
+
+func (r *stuckReader) Read([]byte) (int, error) {
+	r.once.Do(func() { r.started <- struct{}{} })
+	<-r.unblock
+	return 0, io.EOF
+}
+
+func (r *stuckReader) Close() error { return nil }
+
+// Review rulings (Codex 4, I3, M3): a download keeps its guard slot during the
+// whole copy; the budget is per full ID (name and ID share it); the view is
+// closed as soon as the file is open.
+func TestDownloadKeepsItsSlotDuringTheCopy(t *testing.T) {
+	f := newFixture(t, false)
+	started, unblock := make(chan struct{}, fsMaxPerContainer), make(chan struct{})
+	f.fs.AddFile("/stuck", nil)
+	f.fs.OpenFile = func(string) (io.ReadCloser, error) {
+		return &stuckReader{started: started, unblock: unblock}, nil
+	}
+	c := f.session(t)
+	var wg sync.WaitGroup
+	for range fsMaxPerContainer {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			f.do("GET", "/api/containers/web/fs/download?path=/stuck", "", c)
+		}()
+	}
+	for range fsMaxPerContainer {
+		select {
+		case <-started:
+		case <-time.After(5 * time.Second):
+			t.Fatal("les téléchargements n'ont pas commencé")
+		}
+	}
+	if n := f.fs.Closed.Load(); n != fsMaxPerContainer {
+		t.Errorf("vues fermées pendant la copie : %d, attendu %d", n, fsMaxPerContainer)
+	}
+	rec := f.do("GET", "/api/containers/"+webID+"/fs?path=/", "", c)
+	if rec.Code != http.StatusServiceUnavailable || errCode(t, rec) != "internal" {
+		t.Errorf("budget plein (par l'ID complet) : %d %s", rec.Code, rec.Body)
+	}
+	close(unblock)
+	wg.Wait()
+	if rec := f.do("GET", "/api/containers/web/fs?path=/", "", c); rec.Code != http.StatusOK {
+		t.Fatalf("créneaux non rendus après la copie : %d %s", rec.Code, rec.Body)
+	}
+}
 ```
 
 Run: `go test ./internal/api/ -run Download`
-Expected: FAIL : les tests compilent, mais la route n'existe pas encore (`404 not_found`) ; `--- FAIL: TestDownloadFile`.
+Expected: FAIL. Les tests compilent, mais la route n'existe pas encore (`404 not_found`) : `--- FAIL: TestDownloadFile`, `TestDownloadDirectoryRefusedByMountCheck`, etc.
 
 - [ ] **Step 2: Écrire le code**
 
@@ -3585,69 +4766,82 @@ import (
 )
 
 // fsDownload streams a regular file, or a directory as a tar (spec §5.4).
+// With &check=1 it runs every check, stops before reading anything (no
+// GetArchive) and answers 204: the UI asks first, then lets the browser
+// download.
 func (s *server) fsDownload(w http.ResponseWriter, r *http.Request) {
-	id, p, ok := fsRequest(w, r)
+	info, p, ok := s.fsRequest(w, r)
 	if !ok {
 		return
 	}
+	check := r.URL.Query().Get("check") == "1"
 	ctx := r.Context()
 	type opened struct {
-		fsys   fsview.FS     // file: still open, closed after streaming
-		rc     io.ReadCloser // file
-		fullID string        // directory: GetArchive uses the full ID
+		rc  io.ReadCloser // nil in check mode
+		dir bool
 	}
-	o, err := guarded(s.guard, ctx, id, func() (opened, error) {
-		fsys, fullID, err := s.openFS(ctx, id)
+	o, release, err := guarded(s.guard, ctx, info.ID, func() (opened, error) {
+		fsys, err := s.d.OpenFS(ctx, info.ID)
 		if err != nil {
 			return opened{}, err
 		}
+		defer fsys.Close() // an opened file stays readable without the view
 		e, err := fsys.Stat(ctx, p)
 		if err != nil {
-			fsys.Close()
 			return opened{}, err
 		}
-		if e.Type == fsview.TypeDir {
-			// The cleaned request path, without any link in it, is exactly
-			// what goes to GetArchive: a link anywhere → link_in_path.
-			_, err := fsys.StatNoLinks(ctx, p)
-			fsys.Close()
-			return opened{fullID: fullID}, err
+		if e.Type != fsview.TypeDir {
+			rc, err := fsys.Open(ctx, p)
+			if err != nil {
+				return opened{}, err
+			}
+			if check {
+				rc.Close()
+				return opened{}, nil
+			}
+			return opened{rc: rc}, nil
 		}
-		rc, err := fsys.Open(ctx, p)
+		// The cleaned request path, without any link in it, is exactly what
+		// goes to GetArchive; and the tar must not cross a host bind, a pseudo
+		// filesystem or a FUSE mount (CheckArchive).
+		if _, err := fsys.StatNoLinks(ctx, p); err != nil {
+			return opened{}, err
+		}
+		if err := fsys.CheckArchive(ctx, p); err != nil {
+			return opened{}, err
+		}
+		if check {
+			return opened{dir: true}, nil
+		}
+		rc, err := s.d.Docker.GetArchive(ctx, info.ID, p)
 		if err != nil {
-			fsys.Close()
 			return opened{}, err
 		}
-		return opened{fsys: fsys, rc: rc}, nil
+		return opened{rc: rc, dir: true}, nil
 	}, func(o opened) {
 		if o.rc != nil {
 			o.rc.Close()
-			o.fsys.Close()
 		}
 	})
+	defer release() // after the copy: a reader stuck on FUSE keeps its slot
 	if err != nil {
 		writeFSError(w, err)
 		return
 	}
-	if o.rc != nil {
-		defer o.fsys.Close()
-		defer o.rc.Close()
-		setAttachment(w, path.Base(p))
-		io.Copy(w, o.rc) // the client may leave: nothing to report
+	if check {
+		w.WriteHeader(http.StatusNoContent)
 		return
 	}
-	rc, err := s.d.Docker.GetArchive(ctx, o.fullID, p)
-	if err != nil {
-		writeFSError(w, err)
-		return
-	}
-	defer rc.Close()
+	defer o.rc.Close()
 	name := path.Base(p)
-	if p == "/" {
-		name = "rootfs"
+	if o.dir {
+		if p == "/" {
+			name = "rootfs"
+		}
+		name += ".tar"
 	}
-	setAttachment(w, name+".tar")
-	io.Copy(w, rc) // streamed, never held in memory
+	setAttachment(w, name)
+	io.Copy(w, o.rc) // streamed, never held in memory; the client may leave
 }
 
 // setAttachment: always saved, never rendered (spec §5.4, §7).
@@ -3669,15 +4863,40 @@ Dans `internal/api/server.go`, sous la route `…/fs/file` :
 
 - [ ] **Step 3: Vérifier**
 
-Run: `go vet ./... && go test -race ./cmd/... ./internal/... 2>&1 | tail -9`
+Run: `go vet ./... && go test -race -count=3 ./internal/api/ && go test -race ./cmd/... ./internal/... 2>&1 | tail -9`
+Expected : `ok` partout. `-count=3` repasse `TestDownloadKeepsItsSlotDuringTheCopy`, qui fait tourner des requêtes concurrentes.
+
+Run (Linux, sur le vrai `procfs`) : `scripts/test-linux.sh ./internal/...`
 Expected : `ok` partout.
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 4: Mettre la spec à jour (§5.4, §6, §7, §13)**
+
+§5.4, remplacer la puce « Conteneur actif : ouverture par `openat2` … relayé en `.tar` sans mise en mémoire. » par :
+
+> - Conteneur actif : ouverture par `openat2` `RESOLVE_IN_ROOT | RESOLVE_NO_SYMLINKS | RESOLVE_NO_MAGICLINKS` sur `rootfd`, puis `fstatfs` du descripteur (`forbidden_path`, §5.1 étape 9). Vient ensuite le **contrôle des montages** (`FS.CheckArchive`) : Docker construit le tar avec les binds et volumes du conteneur montés dedans, et un bind du `/proc` de l'hôte y met `/proc/kcore` (254 Tio, dockerd bloqué : mesuré en revue). Deux contrôles :
+>   - (a) la règle des binds de §5.2 étape 7 sur `Inspect.Mounts`, volumes `local` en `o=bind`/`rbind` compris → `forbidden_path` qui nomme le bind ;
+>   - (b) `/proc/<pid>/mountinfo`, lu pour le process épinglé par le pidfd, qui doit être vivant après la lecture : un point de montage sur, sous ou au-dessus du dossier, de l'un des 15 types de §5.1 étape 9 ou FUSE (`fuse`, `fuseblk`, `fuse.*`) → `forbidden_path`.
+>
+>   Le `/` d'un conteneur actif est donc refusé, car son propre `/proc` est dessous. Puis `GetArchive` sur exactement le chemin nettoyé, relayé en `.tar` sans mise en mémoire ; le créneau de la garde (§13) reste pris jusqu'à la fin de la copie.
+> - `&check=1` : tous les contrôles, puis `204` sans rien lire (aucun `GetArchive`). L'interface vérifie ainsi avant de laisser le navigateur télécharger.
+
+§6, ligne `GET /api/containers/{id}/fs/download?path=` : à la fin de la colonne « Rôle », ajouter « ; `&check=1` : contrôles seuls, `204` ; dossier d'un conteneur actif : `forbidden_path` si le tar traverserait un bind de l'hôte, un pseudo-système ou un FUSE (§5.4) ».
+
+§7, après la puce « **Lecture seule** … », ajouter :
+
+> - **Binds ordinaires de l'hôte (conteneur actif)** : un conteneur lancé avec `-v /:/host` montre l'hôte dans l'explorateur ; par exemple, `/host/etc/shadow` est lisible. Ce n'est refusé ni en lecture ni au listing : l'utilisateur de l'interface est de fait root sur l'hôte (début de §7). Les pseudo-systèmes et les périphériques restent refusés, et le téléchargement d'un dossier applique §5.4.
+
+§13, ajouter deux lignes au tableau :
+
+> | Montage FUSE ou pseudo-système sous un dossier téléchargé : dockerd le lit pour construire le tar et peut rester bloqué, conteneur verrouillé | refus avant `GetArchive` par `Inspect.Mounts` et `mountinfo` (§5.4) ; nos propres lectures restent sous la garde (4 par conteneur, 10 s) |
+> | Noms de fichiers non UTF-8 : JSON les transporte avec U+FFFD, le fichier ne s'ouvre plus depuis l'interface (`not_found`) | limite v0.1 ; le listing ne casse pas |
+
+- [ ] **Step 5: Commit**
 
 ```bash
-git add internal/api
+git add internal/api docs/superpowers/specs/2026-10-07-hublot-kit-v0.1-design.md
 git commit -F - <<'EOF'
-explorateur: téléchargement d'un fichier ou d'un dossier en tar, chemin sans lien pour les dossiers
+explorateur: téléchargement d'un fichier ou d'un dossier, contrôle des montages, mode check, créneau tenu pendant la copie
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 EOF
@@ -3685,7 +4904,7 @@ EOF
 
 ---
 
-### Task 12: Interface : client des routes de fichiers et fonctions de chemins
+### Task 13: Interface : client des routes de fichiers et fonctions de chemins
 
 **Où tester :** macOS (Node via `export PATH=/opt/homebrew/bin:$PATH`).
 
@@ -3694,10 +4913,10 @@ EOF
 - Modify: `web/src/lib/api.ts`, `web/src/lib/api.test.ts`, `web/src/lib/i18n/fr.ts`, `web/src/lib/i18n/en.ts`
 
 **Interfaces:**
-- Consumes: routes des tâches 9 à 11 ; `ApiError`, `api` (Socle) ; `t` (Socle)
+- Consumes: routes des tâches 10 à 12 (dont `&check=1`) ; `ApiError`, `api` (Socle) ; `t` (Socle)
 - Produces (`api.ts`) : `type EntryType = 'file' | 'dir' | 'symlink' | 'other'` ; `type Entry = { name; type; size; mode; uid; gid; modTime; linkTarget? }` ; `type Listing = { path; type; entries; truncated }` ; `type Preview = { kind: 'text'; text; etag } | { kind: 'image'; blob; etag } | { kind: 'binary' }` ; `listDir(id, path): Promise<Listing>` ; `previewFile(id, path): Promise<Preview>` ; `downloadUrl(id, path): string` ; `checkDownload(url): Promise<void>`. (`files.ts`) : `normalize`, `joinPath`, `parentPath`, `baseName`, `resolveLinkTarget(dir, target)`, `breadcrumbs(p)`, `sortEntries(entries)`, `formatMode(type, mode)`, `formatSize(n)`. Clés i18n `container.*` et `files.*`.
 
-> **À comprendre :** les chemins du conteneur ne sont ici que du texte, pour afficher et naviguer ; c'est l'agent qui les résout dans la racine. `checkDownload` existe parce qu'un lien `<a download>` vers une réponse d'erreur donne au mieux « échec du téléchargement » sans explication : on lit d'abord le statut (les erreurs arrivent en JSON avant tout octet), on coupe, puis le navigateur télécharge par navigation (`Content-Disposition: attachment` : la page reste affichée).
+> **À comprendre :** les chemins du conteneur ne sont ici que du texte, pour afficher et naviguer ; c'est l'agent qui les résout dans la racine. `checkDownload` existe parce qu'un lien `<a download>` vers une réponse d'erreur donne au mieux « échec du téléchargement » sans explication. On demande d'abord `&check=1` : l'agent fait tous ses contrôles et répond `204` ou l'erreur en JSON, sans rien lire ni lancer de tar chez Docker (revue M2). Ensuite seulement, le navigateur télécharge par navigation (`Content-Disposition: attachment` : la page reste affichée).
 
 - [ ] **Step 1: Écrire les tests qui échouent**
 
@@ -3827,19 +5046,13 @@ describe('file routes', () => {
 		await expect(previewFile('web', '/big')).rejects.toMatchObject({ status: 413, code: 'too_large' });
 	});
 
-	it('checks a download, then aborts it', async () => {
-		let signal: AbortSignal | undefined;
+	it('checks a download without starting it', async () => {
 		stubFetch(async () => new Response(JSON.stringify({ error: 'link_in_path' }), { status: 422 }));
-		await expect(checkDownload('/api/x')).rejects.toMatchObject({ code: 'link_in_path' });
-		vi.stubGlobal(
-			'fetch',
-			vi.fn<typeof fetch>(async (_url, init) => {
-				signal = init?.signal ?? undefined;
-				return new Response('data');
-			})
-		);
-		await expect(checkDownload('/api/x')).resolves.toBeUndefined();
-		expect(signal?.aborted).toBe(true);
+		await expect(checkDownload('/api/x?path=%2Fl')).rejects.toMatchObject({ code: 'link_in_path' });
+		const fetchMock = vi.fn<typeof fetch>(async () => new Response(null, { status: 204 }));
+		vi.stubGlobal('fetch', fetchMock);
+		await expect(checkDownload('/api/x?path=%2Fetc')).resolves.toBeUndefined();
+		expect(fetchMock.mock.calls[0][0]).toBe('/api/x?path=%2Fetc&check=1');
 	});
 });
 ```
@@ -3876,6 +5089,8 @@ Dans `web/src/lib/i18n/fr.ts`, juste avant `'error.unauthorized'`, insérer :
 	'files.binary': "Fichier binaire : pas d'aperçu.",
 	'files.tooLarge': "Plus de 2 Mio : pas d'aperçu. Téléchargez-le.",
 	'files.linkDirHint': "Ce chemin passe par un lien symbolique : ouvrez d'abord sa cible, puis téléchargez.",
+	'files.archiveForbidden':
+		"Ce dossier contient un pseudo-système de fichiers (/proc, /sys…), un montage FUSE, ou le conteneur monte un dossier sensible de l'hôte : téléchargez un sous-dossier, ou un fichier.",
 	'files.reload': 'Recharger',
 	'files.unit.b': 'o',
 	'files.unit.kib': 'Kio',
@@ -3911,6 +5126,8 @@ Dans `web/src/lib/i18n/en.ts`, au même endroit :
 	'files.binary': 'Binary file: no preview.',
 	'files.tooLarge': 'Over 2 MiB: no preview. Download it.',
 	'files.linkDirHint': 'This path goes through a symbolic link: open its target first, then download.',
+	'files.archiveForbidden':
+		'This folder holds a pseudo filesystem (/proc, /sys…) or a FUSE mount, or the container mounts a sensitive host folder: download a subfolder, or a file.',
 	'files.reload': 'Reload',
 	'files.unit.b': 'B',
 	'files.unit.kib': 'KiB',
@@ -4018,13 +5235,11 @@ export async function previewFile(id: string, path: string): Promise<Preview> {
 	return { kind: 'binary' };
 }
 
-// The agent reports download errors (link_in_path, not_regular…) as JSON before
-// sending any byte. checkDownload reads the status, then aborts: the browser
-// downloads the file itself by navigating to the same URL.
+// With &check=1 the agent runs every check of a download, then answers 204
+// without reading anything (no tar started at Docker). The UI checks first,
+// shows the error if any, otherwise lets the browser download by navigation.
 export async function checkDownload(url: string): Promise<void> {
-	const ctrl = new AbortController();
-	await get(url, ctrl.signal);
-	ctrl.abort();
+	await get(`${url}&check=1`);
 }
 ```
 
@@ -4120,19 +5335,19 @@ EOF
 
 ---
 
-### Task 13: Interface : page `/c/[id]`, explorateur et aperçu
+### Task 14: Interface : page `/c/[id]`, explorateur et aperçu
 
-**Où tester :** macOS (`svelte-check`, lint, build) ; puis à la main dans le navigateur avec l'agent lancé en conteneur sur Docker Desktop.
+**Où tester :** macOS (`svelte-check`, lint, Vitest, build). L'essai dans le navigateur suit à la tâche 15.
 
 **Files:**
-- Create: `web/src/lib/components/FileBrowser.svelte`, `web/src/lib/components/FilePreview.svelte`, `web/src/routes/c/[id]/+page.svelte`, `scripts/dev-agent.sh`
-- Modify: `web/src/routes/+page.svelte` (lien vers `/c/{id}`), `README.md` (section Développement)
+- Create: `web/src/lib/components/FileBrowser.svelte`, `web/src/lib/components/FilePreview.svelte`, `web/src/routes/c/[id]/+page.svelte`
+- Modify: `web/src/routes/+page.svelte` (lien vers `/c/{id}`)
 
 **Interfaces:**
-- Consumes: tout `api.ts` et `files.ts` (tâche 12) ; `listContainers`, `stateLabel` (Socle)
+- Consumes: tout `api.ts` et `files.ts` (tâche 13) ; `listContainers`, `stateLabel` (Socle)
 - Produces: route `/c/[id]?path=<dossier>&file=<fichier>` ; composants `<FileBrowser id>` et `<FilePreview id path entry?>`
 
-> **À comprendre :** l'état de l'explorateur vit dans l'URL (`?path=` le dossier, `&file=` le fichier ouvert) : le bouton retour et le rechargement marchent. Chaque `$effect` qui lance une requête pose un drapeau `current` et le baisse au nettoyage, pour qu'une réponse lente d'une navigation précédente n'écrase pas l'état (même patron que le `+layout.svelte` du Socle). Un clic sur un lien navigue vers sa cible (§5.1 étape 8) : si la cible n'est pas un dossier, la liste répond `type: "file"` et la page affiche son dossier parent avec l'aperçu. Une image est montrée par une URL `blob:` (la CSP autorise `img-src blob:`), révoquée au changement de fichier ; le texte passe par l'échappement de Svelte dans un `<pre>` (`{@html}` interdit). `forbidden_path` s'affiche comme « dossier inaccessible » (§5.1 étape 9). Les lignes du tableau sont indexées par position et non par nom : deux noms non UTF-8 peuvent devenir identiques une fois passés en JSON (Q6). Le bouton « Recharger » incrémente un compteur lu par l'effet : naviguer vers la même URL ne relancerait pas la requête. Au téléphone, les deux colonnes s'empilent.
+> **À comprendre :** l'état de l'explorateur vit dans l'URL (`?path=` le dossier, `&file=` le fichier ouvert) : le bouton retour et le rechargement marchent. Chaque `$effect` qui lance une requête pose un drapeau `current` et le baisse au nettoyage, pour qu'une réponse lente d'une navigation précédente n'écrase pas l'état (même patron que le `+layout.svelte` du Socle). Un clic sur un lien navigue vers sa cible (§5.1 étape 8) : si la cible n'est pas un dossier, la liste répond `type: "file"` et la page affiche son dossier parent avec l'aperçu. Une image est montrée par une URL `blob:` (la CSP autorise `img-src blob:`), révoquée au changement de fichier ; le texte passe par l'échappement de Svelte dans un `<pre>` (`{@html}` interdit). `forbidden_path` s'affiche comme « dossier inaccessible » (§5.1 étape 9) au listing. Au téléchargement d'un dossier, il donne le message `files.archiveForbidden` (pseudo-système, FUSE ou bind de l'hôte : téléchargez un sous-dossier). Les lignes du tableau sont indexées par position et non par nom : deux noms non UTF-8 peuvent devenir identiques une fois passés en JSON (Q6). Le bouton « Recharger » incrémente un compteur lu par l'effet : naviguer vers la même URL ne relancerait pas la requête. Au téléphone, les deux colonnes s'empilent.
 
 - [ ] **Step 1: Les composants**
 
@@ -4318,7 +5533,12 @@ EOF
 			location.assign(url);
 		} catch (e) {
 			const code = e instanceof ApiError ? e.code : 'unknown';
-			downloadError = code === 'link_in_path' ? t('files.linkDirHint') : errorMessage(code);
+			downloadError =
+				code === 'link_in_path'
+					? t('files.linkDirHint')
+					: code === 'forbidden_path'
+						? t('files.archiveForbidden')
+						: errorMessage(code);
 		}
 	}
 </script>
@@ -4497,7 +5717,34 @@ Dans `web/src/routes/+page.svelte`, remplacer `<td>{c.name}</td>` par :
 Run: `cd web && export PATH=/opt/homebrew/bin:$PATH && npm run check && npm run lint && npx vitest run && npm run build`
 Expected : 0 erreur, 0 avertissement ; `Wrote site to "build"`.
 
-- [ ] **Step 4: Lancer l'agent en conteneur pour l'essai manuel**
+- [ ] **Step 4: Commit**
+
+```bash
+git add web/src
+git commit -F - <<'EOF'
+explorateur: page du conteneur, onglet Fichiers (liste, aperçu, téléchargements)
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+EOF
+```
+
+---
+
+### Task 15: Agent de développement, essai manuel, README
+
+**Où tester :** dans le navigateur sur le Mac, contre l'agent lancé en conteneur sur Docker Desktop.
+
+**Files:**
+- Create: `scripts/dev-agent.sh`
+- Modify: `README.md` (section Développement), `docs/superpowers/specs/2026-10-07-hublot-kit-v0.1-design.md` (§8)
+
+**Interfaces:**
+- Consumes: le binaire (tâches 1 à 12) et l'interface (tâches 13 et 14)
+- Produces: `scripts/dev-agent.sh [options de hublot]`
+
+> **À comprendre :** avec Docker Desktop, `/proc/<pid>/root` n'existe que dans la VM Linux. L'agent tourne donc dans un conteneur alpine, avec le binaire Linux compilé sur le Mac et monté en lecture seule. Il reçoit les droits de la commande recommandée (§8). Ses données vivent dans le volume `hublot-dev-data`.
+
+- [ ] **Step 1: Lancer l'agent en conteneur**
 
 `scripts/dev-agent.sh` :
 
@@ -4529,11 +5776,13 @@ Expected : `Jeton d'accès (affiché une seule fois) : …` au premier lancement
 
 Dans un autre terminal : `DOCKER_HOST=unix://$HOME/.docker/run/docker.sock docker run -d --name essai alpine:3 sleep 3600`.
 
+- [ ] **Step 2: L'essai manuel**
+
 Sur `http://127.0.0.1:7878` : se connecter, cliquer `essai`, puis vérifier, en notant le résultat dans le rapport de tâche :
 1. `/` listé, `proc/` présent ; cliquer `proc/` → « Dossier inaccessible : pseudo-système… ».
 2. `etc/` → `os-release → ../usr/lib/os-release` ; cliquer dessus → le dossier `/usr/lib` s'affiche avec l'aperçu d'`os-release` (texte « Alpine Linux »).
 3. Droits affichés comme `ls` (`drwxr-xr-x`, `-rw-r--r--`), propriétaire `0:0`, tailles en o/Kio.
-4. « Télécharger » sur `os-release` → fichier `os-release` enregistré ; « Télécharger ce dossier (.tar) » sur `/etc` → `etc.tar` ; sur `/usr/lib` atteint par le lien : marche (le chemin affiché est `/usr/lib`, sans lien).
+4. « Télécharger » sur `os-release` → fichier `os-release` enregistré. « Télécharger ce dossier (.tar) » sur `/etc` → `etc.tar` ; sur `/usr/lib`, atteint par le lien → marche (le chemin affiché est `/usr/lib`, sans lien). Sur `/` → message « Ce dossier contient un pseudo-système de fichiers… téléchargez un sous-dossier » (Q8), aucun fichier.
 5. `docker exec essai ln -s /etc /lien`, puis `/lien` dans la barre d'adresse (`?path=/lien`) → la liste s'affiche (lien suivi) ; « Télécharger ce dossier » → message « Ce chemin passe par un lien symbolique : ouvrez d'abord sa cible… ».
 6. `/bin/busybox` → « Fichier binaire : pas d'aperçu. »
 7. Bouton retour du navigateur → dossier précédent. Fenêtre étroite (≈ 375 px) → colonnes empilées, tableau défilant.
@@ -4541,7 +5790,7 @@ Sur `http://127.0.0.1:7878` : se connecter, cliquer `essai`, puis vérifier, en 
 
 Arrêt : Ctrl-C, puis `docker rm -f essai`.
 
-- [ ] **Step 5: README**
+- [ ] **Step 3: README et spec §8 (revue M5)**
 
 Dans `README.md`, section « Développement », remplacer le paragraphe « Lancer l'agent sur macOS (Docker Desktop) : » et sa commande par :
 
@@ -4557,12 +5806,16 @@ Tests Go sous Linux, en root (évasion, `procfs`, intégration avec Docker) :
 
 et la phrase sur le jeton par : « Le jeton d'accès s'affiche une seule fois au premier lancement ; la commande `reset-token` est rappelée en tête de `scripts/dev-agent.sh`. »
 
-- [ ] **Step 6: Commit**
+Dans la spec §8, paragraphe « **Développement sur macOS** », remplacer la phrase « L'agent se lance donc dans un conteneur pendant le développement (`docker compose` avec … `cgroup: host` est indispensable sur Docker Desktop, pilote cgroupfs), l'interface en `vite dev` sur le Mac avec un proxy vers l'agent. » par :
+
+> L'agent se lance donc dans un conteneur pendant le développement. `scripts/dev-agent.sh` compile le binaire Linux sur le Mac et le lance avec les droits de la commande recommandée ; `--cgroupns=host` est indispensable sur Docker Desktop (pilote cgroupfs). Les tests Linux passent par `scripts/test-linux.sh` : conteneur `golang` en root, mêmes droits, socket Docker monté. L'interface tourne en `vite dev` sur le Mac, avec un proxy vers l'agent.
+
+- [ ] **Step 4: Commit**
 
 ```bash
-git add web/src scripts/dev-agent.sh README.md
+git add scripts/dev-agent.sh README.md docs/superpowers/specs/2026-10-07-hublot-kit-v0.1-design.md
 git commit -F - <<'EOF'
-explorateur: page du conteneur, onglet Fichiers (liste, aperçu, téléchargements)
+explorateur: agent de développement en conteneur, essai manuel de l'onglet Fichiers, README et spec §8
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 EOF
@@ -4570,7 +5823,7 @@ EOF
 
 ---
 
-### Task 14: De bout en bout, et la matrice Linux
+### Task 16: De bout en bout, et la matrice Linux
 
 **Où tester :** Docker Desktop (conteneur `golang`), VM `hk-ubuntu` (AppArmor), VM `hk-fedora` (SELinux), CI.
 
@@ -4578,10 +5831,10 @@ EOF
 - Create: `internal/api/integration_test.go`
 
 **Interfaces:**
-- Consumes: `fixture.init`, `fixture.session`, `decodeListing`, `filename`, `errCode` (tâches 9 à 11, Socle) ; `dockerx.New`
+- Consumes: `fixture.init`, `fixture.session`, `decodeListing`, `filename`, `errCode` (tâches 10 à 12, Socle) ; `dockerx.New`
 - Produces: rien (tests)
 
-> **À comprendre :** ce test fait passer de vraies requêtes HTTP (par `httptest`) à travers l'API complète, `fsview.For` réel, sur un vrai alpine : liste, aperçu d'un lien, tar de `/etc`, `link_in_path` sur un dossier atteint par un lien (créé par `docker exec`), `not_regular`, `forbidden_path`, `not_found`. Puis toute la suite tourne sur les trois Linux du projet : Docker Desktop (pilote cgroupfs, `/docker/<id>`), Ubuntu (systemd, `docker-<id>.scope`, AppArmor : la cible `--privileged` exige `apparmor=unconfined`), Fedora (SELinux `enforcing` : `label=disable`).
+> **À comprendre :** ce test fait passer de vraies requêtes HTTP (par `httptest`) à travers l'API complète, `fsview.For` réel, sur un vrai alpine : liste, aperçu d'un lien, contrôle `&check=1` puis tar de `/etc`, `forbidden_path` sur le tar de `/` et de `/sys` (contrôle des montages), `link_in_path` sur un dossier atteint par un lien (créé par `docker exec`), `not_regular`, `forbidden_path`, `not_found`. Aucun bind de l'hôte n'est utilisé : le scénario C1 ne se teste qu'avec le faux client (tâches 7 et 12). Puis toute la suite tourne sur les trois Linux du projet : Docker Desktop (pilote cgroupfs, `/docker/<id>`), Ubuntu (systemd, `docker-<id>.scope`, AppArmor : la cible `--privileged` exige `apparmor=unconfined`), Fedora (SELinux `enforcing` : `label=disable`).
 
 - [ ] **Step 1: Écrire le test**
 
@@ -4672,7 +5925,12 @@ func TestIntegrationFilesEndToEnd(t *testing.T) {
 		t.Fatal("etc/hostname absent du tar")
 	}
 
+	if rec := f.do("GET", base+"/download?check=1&path=/etc", "", c); rec.Code != http.StatusNoContent {
+		t.Errorf("contrôle de /etc : %d %s", rec.Code, rec.Body)
+	}
 	for path, want := range map[string]string{
+		"/download?path=/":            "forbidden_path", // its own /proc and /sys are under /
+		"/download?path=/sys":         "forbidden_path",
 		"/download?path=/linkdir":     "link_in_path",
 		"/download?path=/linkdir/apk": "link_in_path",
 		"/file?path=/dev/null":        "not_regular",
@@ -4701,7 +5959,7 @@ limactl shell hk-ubuntu -- sudo dmesg | grep -i 'apparmor="DENIED"' | tail -5
 limactl stop hk-ubuntu
 ```
 
-Expected : `ok` pour les 8 paquets ; aucune ligne `DENIED` datée de l'essai. Si le dépôt n'est pas visible dans la VM (`limactl shell hk-ubuntu -- ls "$PWD"`), vérifier le montage `~` de `~/.lima/hk-ubuntu/lima.yaml`.
+Expected : `ok` pour les 8 paquets ; aucune ligne `DENIED` datée de l'essai. Relever aussi la ligne `MESURE :` (`limactl shell --workdir "$PWD" hk-ubuntu -- sudo scripts/test-linux.sh -tags integration ./internal/fsview/ -run MeasureOwnProc -v`) : elle tranche Q8 sur Ubuntu. Si le dépôt n'est pas visible dans la VM (`limactl shell hk-ubuntu -- ls "$PWD"`), vérifier le montage `~` de `~/.lima/hk-ubuntu/lima.yaml`.
 
 - [ ] **Step 4: VM Fedora (SELinux)**
 
@@ -4716,7 +5974,7 @@ Expected : `ok` pour les 8 paquets ; le compte d'`AVC` n'augmente pas pendant l'
 
 - [ ] **Step 5: Consigner et commiter**
 
-Noter dans le rapport de tâche les trois sorties (8 × `ok`), le noyau de chaque VM (`uname -r`) et le pilote cgroup (`docker info -f '{{.CgroupDriver}}'`).
+Noter dans le rapport de tâche les trois sorties (8 × `ok`), le noyau de chaque VM (`uname -r`), le pilote cgroup (`docker info -f '{{.CgroupDriver}}'`) et les lignes `MESURE :`.
 
 ```bash
 git add internal/api/integration_test.go
