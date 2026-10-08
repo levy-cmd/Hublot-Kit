@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -33,7 +34,7 @@ func New(d Deps) http.Handler {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("POST /api/login", s.login)
-	mux.Handle("POST /api/logout", session(s.logout))
+	mux.HandleFunc("POST /api/logout", s.logout)
 	mux.Handle("GET /api/meta", session(s.meta))
 	mux.Handle("GET /api/containers", session(s.containers))
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
@@ -48,13 +49,20 @@ func New(d Deps) http.Handler {
 func (s *server) login(w http.ResponseWriter, r *http.Request) {
 	ip := clientIP(r)
 	if !s.d.Limiter.Allowed(ip) {
+		if err := s.d.Audit.Write(audit.Event{Action: "login.fail", Result: "rate_limited", Remote: ip}); err != nil {
+			slog.Error("audit write", "err", err)
+		}
 		writeError(w, http.StatusTooManyRequests, "rate_limited", "")
 		return
 	}
 	var body struct {
 		Token string `json:"token"`
 	}
-	err := json.NewDecoder(io.LimitReader(r.Body, 4096)).Decode(&body)
+	dec := json.NewDecoder(io.LimitReader(r.Body, 4096))
+	err := dec.Decode(&body)
+	if err == nil && dec.Decode(&struct{}{}) != io.EOF {
+		err = errors.New("trailing data")
+	}
 	if err != nil || !s.d.Verifier.Check(strings.TrimSpace(body.Token)) {
 		s.d.Limiter.Fail(ip)
 		if err := s.d.Audit.Write(audit.Event{Action: "login.fail", Result: "refused", Remote: ip}); err != nil {
@@ -70,17 +78,21 @@ func (s *server) login(w http.ResponseWriter, r *http.Request) {
 	}
 	http.SetCookie(w, &http.Cookie{
 		Name: cookieName, Value: id, Path: "/",
-		HttpOnly: true, SameSite: http.SameSiteStrictMode, Secure: s.d.TLS,
+		HttpOnly: true, SameSite: http.SameSiteStrictMode, Secure: s.secureCookies(),
 		MaxAge: int(auth.SessionTTL.Seconds()),
 	})
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+func (s *server) secureCookies() bool {
+	return s.d.TLS || strings.HasPrefix(s.d.PublicOrigin, "https://")
 }
 
 func (s *server) logout(w http.ResponseWriter, r *http.Request) {
 	if c, err := r.Cookie(cookieName); err == nil {
 		s.d.Sessions.Delete(c.Value)
 	}
-	http.SetCookie(w, &http.Cookie{Name: cookieName, Value: "", Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode, Secure: s.d.TLS, MaxAge: -1})
+	http.SetCookie(w, &http.Cookie{Name: cookieName, Value: "", Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode, Secure: s.secureCookies(), MaxAge: -1})
 	w.WriteHeader(http.StatusNoContent)
 }
 

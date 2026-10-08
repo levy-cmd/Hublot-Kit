@@ -191,3 +191,89 @@ func TestLoginRequiresOrigin(t *testing.T) {
 		t.Fatalf("got %d", rec.Code)
 	}
 }
+
+func cookieOf(rec *httptest.ResponseRecorder) *http.Cookie {
+	for _, c := range rec.Result().Cookies() {
+		if c.Name == cookieName {
+			return c
+		}
+	}
+	return nil
+}
+
+func TestLoginCookieMaxAge(t *testing.T) {
+	f := newFixture(t, false)
+	_, c := f.login(t, f.token)
+	if c == nil || c.MaxAge != int(auth.SessionTTL.Seconds()) {
+		t.Fatalf("cookie: %+v", c)
+	}
+}
+
+func TestLogoutClearsCookieAndIsIdempotent(t *testing.T) {
+	f := newFixture(t, false)
+	rec := f.do("POST", "/api/logout", "", &http.Cookie{Name: cookieName, Value: "inconnu"})
+	c := cookieOf(rec)
+	if rec.Code != http.StatusNoContent || c == nil || c.MaxAge >= 0 {
+		t.Fatalf("logout: %d %+v", rec.Code, c)
+	}
+	rec = f.do("POST", "/api/logout", "", nil)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("logout without cookie: %d", rec.Code)
+	}
+}
+
+func TestLoginTrailingGarbageRejected(t *testing.T) {
+	f := newFixture(t, false)
+	rec := f.do("POST", "/api/login", `{"token":"`+f.token+`"}garbage`, nil)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("got %d", rec.Code)
+	}
+}
+
+func TestRateLimitedIsAudited(t *testing.T) {
+	f := newFixture(t, false)
+	for i := 0; i < 6; i++ {
+		f.login(t, "mauvais")
+	}
+	data, _ := os.ReadFile(f.auditP)
+	if !strings.Contains(string(data), `"result":"rate_limited"`) {
+		t.Fatalf("no rate_limited line: %s", data)
+	}
+}
+
+func TestSecureCookieBehindTLS(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		tls    bool
+		public string
+		origin string
+	}{
+		{"tls", true, "", "https://example.com"},
+		{"public https", false, "https://x.example", "https://x.example"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			tok, _, _ := auth.EnsureToken(dir)
+			v, _ := auth.LoadVerifier(dir)
+			al, err := audit.Open(filepath.Join(dir, "audit.log"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer al.Close()
+			h := New(Deps{Docker: &dockerx.Fake{}, Verifier: v, Audit: al, TLS: tc.tls, PublicOrigin: tc.public,
+				Sessions: auth.NewSessions(auth.SessionTTL, time.Now), Limiter: auth.NewLimiter(5, time.Minute, time.Now)})
+			r := httptest.NewRequest("POST", "http://example.com/api/login", strings.NewReader(`{"token":"`+tok+`"}`))
+			r.Header.Set("Origin", tc.origin)
+			if tc.tls {
+				r = httptest.NewRequest("POST", "https://example.com/api/login", strings.NewReader(`{"token":"`+tok+`"}`))
+				r.Header.Set("Origin", tc.origin)
+			}
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, r)
+			c := cookieOf(rec)
+			if rec.Code != http.StatusOK || c == nil || !c.Secure {
+				t.Fatalf("%d %+v", rec.Code, c)
+			}
+		})
+	}
+}
