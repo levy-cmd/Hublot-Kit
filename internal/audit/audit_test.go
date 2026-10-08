@@ -119,3 +119,44 @@ func TestOpenTightensExistingMode(t *testing.T) {
 		t.Fatalf("mode = %v, want 0600", st.Mode().Perm())
 	}
 }
+
+func TestOpenRefusesSymlink(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "victim")
+	if err := os.WriteFile(target, []byte("root:x:0:0\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(target, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	p := filepath.Join(t.TempDir(), "audit.log")
+	if err := os.Symlink(target, p); err != nil {
+		t.Fatal(err)
+	}
+	if l, err := Open(p); err == nil {
+		l.Write(Event{Action: "x", Result: "ok"})
+		l.Close()
+		t.Error("a symlinked audit log must be refused")
+	}
+	raw, err := os.ReadFile(target)
+	if err != nil || string(raw) != "root:x:0:0\n" {
+		t.Fatalf("link target modified: %q %v", raw, err)
+	}
+	st, err := os.Stat(target)
+	if err != nil || st.Mode().Perm() != 0o644 {
+		t.Fatalf("link target mode changed: %v %v", st, err)
+	}
+
+	// A dangling link must not create its target.
+	missing := filepath.Join(t.TempDir(), "missing")
+	p2 := filepath.Join(t.TempDir(), "audit.log")
+	if err := os.Symlink(missing, p2); err != nil {
+		t.Fatal(err)
+	}
+	if l, err := Open(p2); err == nil {
+		l.Close()
+		t.Error("a dangling symlinked audit log must be refused")
+	}
+	if _, err := os.Lstat(missing); !os.IsNotExist(err) {
+		t.Fatalf("dangling link target created, lstat err: %v", err)
+	}
+}

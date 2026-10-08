@@ -70,6 +70,7 @@ jobs:
           out=$(./bin/hublot reset-token --data-dir "$RUNNER_TEMP/hk")
           echo "$out" | grep -q "jeton"
       - name: Smoke test (embedded UI and CSP)
+        shell: bash # bash --noprofile --norc -eo pipefail
         run: |
           ./bin/hublot --data-dir "$RUNNER_TEMP/hk2" --listen 127.0.0.1:7878 &
           pid=$!
@@ -78,5 +79,29 @@ jobs:
             curl -sf -o /dev/null http://127.0.0.1:7878/login && break
             sleep 0.5
           done
-          curl -sf http://127.0.0.1:7878/login | grep -q "_app/immutable"
-          curl -sI http://127.0.0.1:7878/login | grep -i "^content-security-policy:" | grep -q "sha256-"
+          curl -sf -o "$RUNNER_TEMP/login.html" http://127.0.0.1:7878/login
+          grep -q "_app/immutable" "$RUNNER_TEMP/login.html"
+          # Each inline script served by / must have its exact hash in the CSP.
+          curl -sf -D "$RUNNER_TEMP/index.headers" -o "$RUNNER_TEMP/index.html" http://127.0.0.1:7878/
+          csp=$(grep -i '^content-security-policy:' "$RUNNER_TEMP/index.headers" | tr -d '\r')
+          test -n "$csp"
+          hashes=$(python3 -I - "$RUNNER_TEMP/index.html" <<'EOF'
+          import base64, hashlib, re, sys
+          html = open(sys.argv[1], "rb").read()
+          out = []
+          for attrs, body in re.findall(rb"(?is)<script(\s[^>]*)?>(.*?)</script\s*>", html):
+              if re.search(rb"(?i)(^|\s)src\s*=", attrs):
+                  continue
+              out.append("'sha256-" + base64.b64encode(hashlib.sha256(body).digest()).decode() + "'")
+          if not out:
+              sys.exit("aucun script inline dans la réponse de /")
+          print("\n".join(out))
+          EOF
+          )
+          while read -r h; do
+            if [[ "$csp" != *"$h"* ]]; then
+              echo "empreinte absente de la CSP : $h"
+              echo "$csp"
+              exit 1
+            fi
+          done <<< "$hashes"

@@ -135,16 +135,106 @@ func TestRunRefusesWritableDataDir(t *testing.T) {
 }
 
 func TestRunKeepsExistingDataDirMode(t *testing.T) {
-	dir := t.TempDir()
+	for _, mode := range []os.FileMode{0o700, 0o750, 0o755} {
+		dir := t.TempDir()
+		if err := os.Chmod(dir, mode); err != nil {
+			t.Fatal(err)
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		var out, errb bytes.Buffer
+		if code := run(ctx, []string{"--data-dir", dir, "--listen", "127.0.0.1:0"}, noenv, &out, &errb); code != 0 {
+			t.Fatalf("%v: code %d, stderr %q", mode, code, errb.String())
+		}
+		if m := modeOf(t, dir); m != mode {
+			t.Fatalf("%v: mode changed to %v", mode, m)
+		}
+	}
+}
+
+// runRefused runs the agent (and reset-token) on dataDir and expects a refusal
+// mentioning dataDir and want, with no token written in checkDir.
+func runRefused(t *testing.T, dataDir, checkDir, want string) {
+	t.Helper()
+	for _, sub := range [][]string{nil, {"reset-token"}} {
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		var out, errb bytes.Buffer
+		args := append(sub, "--data-dir", dataDir, "--listen", "127.0.0.1:0")
+		code := run(ctx, args, noenv, &out, &errb)
+		if code != 1 || !strings.Contains(errb.String(), dataDir) || !strings.Contains(errb.String(), want) {
+			t.Fatalf("%v: code %d, stderr %q (want %q)", sub, code, errb.String(), want)
+		}
+		if strings.Contains(out.String(), "Jeton d'accès") || strings.Contains(out.String(), "Nouveau jeton") {
+			t.Fatalf("%v: no token may be shown: %q", sub, out.String())
+		}
+		if checkDir == "" {
+			continue
+		}
+		if _, err := os.Lstat(filepath.Join(checkDir, "token.sha256")); !os.IsNotExist(err) {
+			t.Fatalf("%v: no token may be written, lstat err: %v", sub, err)
+		}
+		if _, err := os.Lstat(filepath.Join(checkDir, "audit.log")); !os.IsNotExist(err) {
+			t.Fatalf("%v: no audit log may be written, lstat err: %v", sub, err)
+		}
+	}
+}
+
+func TestRunRefusesSymlinkDataDir(t *testing.T) {
+	parent := t.TempDir()
+	target := filepath.Join(parent, "real")
+	if err := os.Mkdir(target, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(target, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(parent, "data")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	runRefused(t, link, target, "lien symbolique")
+	if m := modeOf(t, target); m != 0o750 {
+		t.Fatalf("link target mode changed to %v", m)
+	}
+
+	// A dangling link must not lead to creating its target either.
+	dangling := filepath.Join(parent, "dangling")
+	missing := filepath.Join(parent, "missing")
+	if err := os.Symlink(missing, dangling); err != nil {
+		t.Fatal(err)
+	}
+	runRefused(t, dangling, "", "lien symbolique")
+	if _, err := os.Lstat(missing); !os.IsNotExist(err) {
+		t.Fatalf("dangling link target must not be created, lstat err: %v", err)
+	}
+}
+
+func TestRunRefusesDataDirThatIsAFile(t *testing.T) {
+	f := filepath.Join(t.TempDir(), "data")
+	if err := os.WriteFile(f, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runRefused(t, f, "", "pas un dossier")
+}
+
+// A directory pre-created by another local user (e.g. /tmp/hublot) must be
+// refused: its owner could plant their own token.sha256. Needs root to chown.
+func TestRunRefusesDataDirOwnedByAnotherUser(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("chown vers un autre uid : nécessite root (lancer sous Linux en root)")
+	}
+	dir := filepath.Join(t.TempDir(), "hublot")
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.Chmod(dir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	var out, errb bytes.Buffer
-	if code := run(ctx, []string{"--data-dir", dir, "--listen", "127.0.0.1:0"}, noenv, &out, &errb); code != 0 {
-		t.Fatalf("code %d, stderr %q", code, errb.String())
+	if err := os.Chown(dir, 65534, 65534); err != nil {
+		t.Fatal(err)
 	}
+	runRefused(t, dir, dir, "appartient")
 	if m := modeOf(t, dir); m != 0o755 {
 		t.Fatalf("mode changed to %v", m)
 	}

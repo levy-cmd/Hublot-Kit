@@ -165,21 +165,50 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 }
 
 // prepareDataDir creates the data directory with mode 0700 if it does not
-// exist. An existing directory keeps its mode (never chmod /tmp, ., $HOME…),
-// but one writable by group or others is refused: the token lives there.
+// exist (only its parents are created with MkdirAll). An existing directory
+// keeps its mode (never chmod /tmp, ., $HOME…). Every check is made on a
+// descriptor opened with O_NOFOLLOW, never on the path again: the directory
+// must not be a symbolic link, must belong to the effective user (the token
+// lives there: a directory pre-created by someone else, e.g. /tmp/hublot,
+// would let its owner plant their own token) and must not be writable by
+// group or others.
 func prepareDataDir(dir string) error {
-	fi, err := os.Stat(dir)
-	if errors.Is(err, fs.ErrNotExist) {
-		if err := os.MkdirAll(dir, 0o700); err != nil {
-			return err
+	dir = filepath.Clean(dir)
+	if err := os.MkdirAll(filepath.Dir(dir), 0o700); err != nil {
+		return err
+	}
+	created := true
+	if err := os.Mkdir(dir, 0o700); errors.Is(err, fs.ErrExist) {
+		created = false
+	} else if err != nil {
+		return err
+	}
+	d, err := os.OpenFile(dir, os.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NOFOLLOW, 0)
+	if errors.Is(err, syscall.ELOOP) || errors.Is(err, syscall.ENOTDIR) {
+		// The open already refused; Lstat only picks the message (Linux
+		// answers ELOOP for a link, macOS ENOTDIR).
+		if li, lerr := os.Lstat(dir); lerr == nil && li.Mode()&fs.ModeSymlink != 0 {
+			return errors.New("c'est un lien symbolique : refusé ; indiquez directement un dossier dédié, par exemple /var/lib/hublot-kit")
 		}
-		return os.Chmod(dir, 0o700)
+		return errors.New("ce n'est pas un dossier")
 	}
 	if err != nil {
 		return err
 	}
-	if !fi.IsDir() {
+	defer d.Close()
+	fi, err := d.Stat()
+	if err != nil {
+		return err
+	}
+	st, ok := fi.Sys().(*syscall.Stat_t)
+	if !fi.IsDir() || !ok {
 		return errors.New("ce n'est pas un dossier")
+	}
+	if euid := os.Geteuid(); int(st.Uid) != euid {
+		return fmt.Errorf("appartient à l'uid %d, pas à l'utilisateur courant (uid %d) ; utilisez un dossier dédié, par exemple /var/lib/hublot-kit", st.Uid, euid)
+	}
+	if created {
+		return d.Chmod(0o700) // the umask may have removed owner bits
 	}
 	if fi.Mode().Perm()&0o022 != 0 {
 		return fmt.Errorf("accessible en écriture au groupe ou à tous (%v) ; utilisez un dossier dédié, par exemple /var/lib/hublot-kit", fi.Mode().Perm())

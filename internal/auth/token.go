@@ -9,10 +9,12 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 )
 
 const tokenFile = "token.sha256"
@@ -36,6 +38,8 @@ func digest(token string) []byte {
 
 // writeDigestTemp creates a temporary file in dataDir with the hex digest.
 // It returns the temporary file path; the caller must remove it.
+// CreateTemp opens a fresh random name with O_CREATE|O_EXCL, which never
+// follows a symbolic link.
 // Returns an error if creation, chmod, write, or sync fails.
 func writeDigestTemp(dataDir string, tok string) (string, error) {
 	tmp, err := os.CreateTemp(dataDir, ".token-*")
@@ -68,7 +72,7 @@ func writeDigestTemp(dataDir string, tok string) (string, error) {
 // syncDir performs a best-effort fsync of the directory.
 // Errors from Sync are ignored (not all filesystems support it).
 func syncDir(dir string) {
-	d, err := os.Open(dir)
+	d, err := os.OpenFile(dir, os.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NOFOLLOW, 0)
 	if err == nil {
 		d.Sync()
 		d.Close()
@@ -79,8 +83,10 @@ func syncDir(dir string) {
 // The plain token is returned only when it was just created; it is never stored.
 // Exclusive creation is enforced via os.Link (or fallback exclusive open on unsupported filesystems).
 // Concurrent launches will have at most one succeed.
+// A token path that already exists, even as a symbolic link, is never followed
+// nor replaced here: LoadVerifier then refuses the link.
 func EnsureToken(dataDir string) (plain string, created bool, err error) {
-	_, err = os.Stat(filepath.Join(dataDir, tokenFile))
+	_, err = os.Lstat(filepath.Join(dataDir, tokenFile))
 	if err == nil {
 		return "", false, nil
 	}
@@ -104,7 +110,7 @@ func EnsureToken(dataDir string) (plain string, created bool, err error) {
 	if err != nil {
 		// Link failed with non-ErrExist error (e.g., EPERM, EXDEV on filesystems without hard links).
 		// Fall back to exclusive direct create.
-		f, err := os.OpenFile(final, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+		f, err := os.OpenFile(final, os.O_WRONLY|os.O_CREATE|os.O_EXCL|syscall.O_NOFOLLOW, 0o600)
 		if errors.Is(err, fs.ErrExist) {
 			return "", false, nil
 		}
@@ -134,6 +140,7 @@ func EnsureToken(dataDir string) (plain string, created bool, err error) {
 
 // ResetToken generates a new token and replaces the stored digest atomically.
 // It performs a best-effort fsync of the dataDir for durability.
+// rename(2) replaces a symbolic link at the token path without following it.
 func ResetToken(dataDir string) (string, error) {
 	tok, err := GenerateToken()
 	if err != nil {
@@ -156,9 +163,18 @@ func ResetToken(dataDir string) (string, error) {
 type Verifier struct{ digest []byte }
 
 // LoadVerifier reads the stored SHA-256 digest from dataDir/token.sha256.
-// It returns an error if the file is missing, unreadable, or corrupted.
+// It returns an error if the file is missing, unreadable, corrupted, or a
+// symbolic link (O_NOFOLLOW: a link could point to a digest someone else chose).
 func LoadVerifier(dataDir string) (*Verifier, error) {
-	raw, err := os.ReadFile(filepath.Join(dataDir, tokenFile))
+	f, err := os.OpenFile(filepath.Join(dataDir, tokenFile), os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	if errors.Is(err, syscall.ELOOP) {
+		return nil, fmt.Errorf("%s est un lien symbolique : refusé ; supprimez-le puis relancez `hublot reset-token`", tokenFile)
+	}
+	if err != nil {
+		return nil, err
+	}
+	raw, err := io.ReadAll(f)
+	f.Close()
 	if err != nil {
 		return nil, err
 	}

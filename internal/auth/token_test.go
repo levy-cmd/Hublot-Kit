@@ -233,3 +233,78 @@ func TestEnsureTokenConcurrent(t *testing.T) {
 		t.Fatal("verifier must accept the created token")
 	}
 }
+
+// symlinkToken makes dir/token.sha256 a symbolic link to target.
+func symlinkToken(t *testing.T, dir, target string) string {
+	t.Helper()
+	link := filepath.Join(dir, "token.sha256")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	return link
+}
+
+func TestLoadVerifierRefusesSymlink(t *testing.T) {
+	// The link points to a valid digest the attacker knows the token of.
+	elsewhere := t.TempDir()
+	plain, _, err := EnsureToken(elsewhere)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	symlinkToken(t, dir, filepath.Join(elsewhere, "token.sha256"))
+	if v, err := LoadVerifier(dir); err == nil {
+		t.Fatalf("a symlinked token file must be refused (accepts the planted token: %v)", v.Check(plain))
+	}
+}
+
+func TestEnsureTokenDoesNotFollowSymlink(t *testing.T) {
+	for _, fallback := range []bool{false, true} {
+		if fallback {
+			old := linkFile
+			linkFile = func(string, string) error { return syscall.EPERM }
+			t.Cleanup(func() { linkFile = old })
+		}
+		dir := t.TempDir()
+		target := filepath.Join(t.TempDir(), "victim")
+		symlinkToken(t, dir, target)
+		plain, created, _ := EnsureToken(dir)
+		if created || plain != "" {
+			t.Fatalf("fallback=%v: no token may be created through a link", fallback)
+		}
+		if _, err := os.Lstat(target); !os.IsNotExist(err) {
+			t.Fatalf("fallback=%v: link target must not be created, lstat err: %v", fallback, err)
+		}
+	}
+}
+
+func TestResetTokenReplacesSymlinkWithoutFollowing(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(t.TempDir(), "victim")
+	if err := os.WriteFile(target, []byte("intact\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(target, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	link := symlinkToken(t, dir, target)
+	fresh, err := ResetToken(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(target)
+	if err != nil || string(raw) != "intact\n" {
+		t.Fatalf("link target modified: %q %v", raw, err)
+	}
+	if st, err := os.Stat(target); err != nil || st.Mode().Perm() != 0o644 {
+		t.Fatalf("link target mode changed: %v %v", st, err)
+	}
+	st, err := os.Lstat(link)
+	if err != nil || !st.Mode().IsRegular() || st.Mode().Perm() != 0o600 {
+		t.Fatalf("token file must now be a regular 0600 file: %v %v", st, err)
+	}
+	v, err := LoadVerifier(dir)
+	if err != nil || !v.Check(fresh) {
+		t.Fatalf("reset token must verify: %v", err)
+	}
+}
