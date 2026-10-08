@@ -1,0 +1,107 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  go:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - run: go vet ./...
+      - run: go test -race ./...
+
+  web:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - run: npm run check
+      - run: npm run lint
+      - run: npx vitest run
+      - run: npm run build
+
+  # Privileged job (spec §10): real Docker, run as root.
+  integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: false
+      - run: sudo -E env "PATH=$PATH" go test -tags integration ./...
+
+  binary:
+    runs-on: ubuntu-latest
+    needs: [go, web]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: make build
+      - run: |
+          out=$(./bin/hublot reset-token --data-dir "$RUNNER_TEMP/hk")
+          echo "$out" | grep -q "jeton"
+      - name: Smoke test (embedded UI and CSP)
+        shell: bash # bash --noprofile --norc -eo pipefail
+        run: |
+          ./bin/hublot --data-dir "$RUNNER_TEMP/hk2" --listen 127.0.0.1:7878 &
+          pid=$!
+          trap 'kill $pid 2>/dev/null || true' EXIT
+          for i in $(seq 1 20); do
+            curl -sf -o /dev/null http://127.0.0.1:7878/login && break
+            sleep 0.5
+          done
+          curl -sf -o "$RUNNER_TEMP/login.html" http://127.0.0.1:7878/login
+          grep -q "_app/immutable" "$RUNNER_TEMP/login.html"
+          # Each inline script served by / must have its exact hash in the CSP.
+          curl -sf -D "$RUNNER_TEMP/index.headers" -o "$RUNNER_TEMP/index.html" http://127.0.0.1:7878/
+          csp=$(grep -i '^content-security-policy:' "$RUNNER_TEMP/index.headers" | tr -d '\r')
+          test -n "$csp"
+          hashes=$(python3 -I - "$RUNNER_TEMP/index.html" <<'EOF'
+          import base64, hashlib, re, sys
+          html = open(sys.argv[1], "rb").read()
+          out = []
+          for attrs, body in re.findall(rb"(?is)<script(\s[^>]*)?>(.*?)</script\s*>", html):
+              if re.search(rb"(?i)(^|\s)src\s*=", attrs):
+                  continue
+              out.append("'sha256-" + base64.b64encode(hashlib.sha256(body).digest()).decode() + "'")
+          if not out:
+              sys.exit("aucun script inline dans la réponse de /")
+          print("\n".join(out))
+          EOF
+          )
+          while read -r h; do
+            if [[ "$csp" != *"$h"* ]]; then
+              echo "empreinte absente de la CSP : $h"
+              echo "$csp"
+              exit 1
+            fi
+          done <<< "$hashes"
