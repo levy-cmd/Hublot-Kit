@@ -31,11 +31,20 @@ func originReq(method, origin string) *http.Request {
 
 func TestSecurityHeaders(t *testing.T) {
 	rec := httptest.NewRecorder()
-	securityHeaders(ok).ServeHTTP(rec, httptest.NewRequest("GET", "/", nil))
+	securityHeaders(ok, nil).ServeHTTP(rec, httptest.NewRequest("GET", "/", nil))
 	h := rec.Header()
-	if h.Get("Content-Security-Policy") != "default-src 'self'; img-src 'self' blob: data:; frame-ancestors 'none'" ||
+	if h.Get("Content-Security-Policy") != "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; frame-ancestors 'none'" ||
 		h.Get("X-Content-Type-Options") != "nosniff" || h.Get("Referrer-Policy") != "no-referrer" {
 		t.Fatalf("headers: %v", h)
+	}
+}
+
+func TestSecurityHeadersScriptHashes(t *testing.T) {
+	rec := httptest.NewRecorder()
+	securityHeaders(ok, []string{"'sha256-AAA='", "'sha256-BBB='"}).ServeHTTP(rec, httptest.NewRequest("GET", "/", nil))
+	want := "default-src 'self'; script-src 'self' 'sha256-AAA=' 'sha256-BBB='; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; frame-ancestors 'none'"
+	if got := rec.Header().Get("Content-Security-Policy"); got != want {
+		t.Fatalf("CSP %q, want %q", got, want)
 	}
 }
 
@@ -239,7 +248,7 @@ func TestCacheControlHeader(t *testing.T) {
 	// Cache-Control: no-store should be set for /api/* paths
 	rec := httptest.NewRecorder()
 	r := httptest.NewRequest("GET", "/api/containers", nil)
-	securityHeaders(ok).ServeHTTP(rec, r)
+	securityHeaders(ok, nil).ServeHTTP(rec, r)
 	if got := rec.Header().Get("Cache-Control"); got != "no-store" {
 		t.Errorf("Cache-Control on /api/: want no-store, got %q", got)
 	}
@@ -247,7 +256,7 @@ func TestCacheControlHeader(t *testing.T) {
 	// Cache-Control should not be set for non-/api paths
 	rec = httptest.NewRecorder()
 	r = httptest.NewRequest("GET", "/", nil)
-	securityHeaders(ok).ServeHTTP(rec, r)
+	securityHeaders(ok, nil).ServeHTTP(rec, r)
 	if got := rec.Header().Get("Cache-Control"); got != "" {
 		t.Errorf("Cache-Control on /: want empty, got %q", got)
 	}

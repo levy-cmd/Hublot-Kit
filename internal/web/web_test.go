@@ -1,8 +1,11 @@
 package web
 
 import (
+	"crypto/sha256"
+	"encoding/base64"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -123,5 +126,28 @@ func TestExistingFaviconContentType(t *testing.T) {
 	rec := get(NewHandler(site), "/favicon.png")
 	if rec.Code != 200 || rec.Header().Get("Content-Type") != "image/png" {
 		t.Fatalf("got %d with Content-Type %q", rec.Code, rec.Header().Get("Content-Type"))
+	}
+}
+
+func cspHash(s string) string {
+	sum := sha256.Sum256([]byte(s))
+	return "'sha256-" + base64.StdEncoding.EncodeToString(sum[:]) + "'"
+}
+
+func TestInlineScriptHashes(t *testing.T) {
+	boot := "\n\t\t\t{\n\t\t\t\t__sveltekit_x = { base: \"\" };\n\t\t\t\timport(\"/_app/immutable/entry/start.js\");\n\t\t\t}\n\t\t"
+	index := "<!doctype html><html><head><script src=\"/_app/a.js\"></script>" +
+		"<SCRIPT type=\"module\">x()</SCRIPT></head><body><div><script>" + boot + "</script>" +
+		"<script>x()</script></div></body></html>"
+	got := InlineScriptHashes(fstest.MapFS{"index.html": {Data: []byte(index)}})
+	want := []string{cspHash("x()"), cspHash(boot)}
+	if !slices.Equal(got, want) {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
+
+func TestInlineScriptHashesWithoutIndex(t *testing.T) {
+	if got := InlineScriptHashes(fstest.MapFS{}); len(got) != 0 {
+		t.Fatalf("got %q, want none", got)
 	}
 }

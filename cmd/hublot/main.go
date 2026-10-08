@@ -139,7 +139,7 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 		Sessions: auth.NewSessions(auth.SessionTTL, time.Now),
 		Limiter:  auth.NewLimiter(5, time.Minute, time.Now),
 		ReadOnly: cfg.ReadOnly, TLS: cfg.TLS(), PublicOrigin: cfg.PublicOrigin,
-		Static: web.Handler(),
+		Static: web.Handler(), ScriptHashes: web.ScriptHashes(),
 	})
 	errc := make(chan error, 1)
 	go func() {

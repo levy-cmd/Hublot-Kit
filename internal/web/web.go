@@ -2,22 +2,56 @@
 package web
 
 import (
+	"crypto/sha256"
 	"embed"
+	"encoding/base64"
 	"io/fs"
 	"net/http"
 	"path"
+	"regexp"
+	"slices"
 	"strings"
 )
 
 //go:embed all:dist
 var dist embed.FS
 
-func Handler() http.Handler {
+func Handler() http.Handler { return NewHandler(embedded()) }
+
+func embedded() fs.FS {
 	sub, err := fs.Sub(dist, "dist")
 	if err != nil {
 		panic(err) // "dist" is always embedded
 	}
-	return NewHandler(sub)
+	return sub
+}
+
+// ScriptHashes returns the CSP sources ('sha256-…') of the inline scripts of
+// the embedded index.html (SvelteKit's bootstrap); empty if the UI is not built.
+func ScriptHashes() []string { return InlineScriptHashes(embedded()) }
+
+var inlineScript = regexp.MustCompile(`(?is)<script(\s[^>]*)?>(.*?)</script\s*>`)
+var srcAttr = regexp.MustCompile(`(?i)(^|\s)src\s*=`)
+
+// InlineScriptHashes hashes the body of every <script> without a src attribute
+// in files/index.html, in document order, without duplicates.
+func InlineScriptHashes(files fs.FS) []string {
+	index, err := fs.ReadFile(files, "index.html")
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, m := range inlineScript.FindAllSubmatch(index, -1) {
+		if srcAttr.Match(m[1]) {
+			continue
+		}
+		sum := sha256.Sum256(m[2])
+		h := "'sha256-" + base64.StdEncoding.EncodeToString(sum[:]) + "'"
+		if !slices.Contains(out, h) {
+			out = append(out, h)
+		}
+	}
+	return out
 }
 
 func NewHandler(files fs.FS) http.Handler {

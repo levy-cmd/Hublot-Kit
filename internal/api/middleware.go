@@ -11,10 +11,14 @@ import (
 
 const cookieName = "hublot_session"
 
-func securityHeaders(next http.Handler) http.Handler {
+// securityHeaders sets the headers of spec §7. scriptHashes are the CSP sources
+// of the UI's inline bootstrap script(s), computed at startup by package web.
+func securityHeaders(next http.Handler, scriptHashes []string) http.Handler {
+	csp := "default-src 'self'; script-src " + strings.Join(append([]string{"'self'"}, scriptHashes...), " ") +
+		"; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; frame-ancestors 'none'"
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
-		h.Set("Content-Security-Policy", "default-src 'self'; img-src 'self' blob: data:; frame-ancestors 'none'")
+		h.Set("Content-Security-Policy", csp)
 		h.Set("X-Content-Type-Options", "nosniff")
 		h.Set("Referrer-Policy", "no-referrer")
 		if strings.HasPrefix(r.URL.Path, "/api/") {

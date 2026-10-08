@@ -26,6 +26,7 @@ type Deps struct {
 	TLS          bool
 	PublicOrigin string       // normalized, or ""
 	Static       http.Handler // embedded UI; nil in API tests
+	ScriptHashes []string     // CSP sources of the UI's inline scripts (web.ScriptHashes)
 }
 
 // logClock is the clock used by throttleLog; tests may replace it before New.
@@ -76,7 +77,7 @@ func New(d Deps) http.Handler {
 	if d.Static != nil {
 		mux.Handle("/", d.Static)
 	}
-	return securityHeaders(originChecker{public: d.PublicOrigin, tls: d.TLS}.wrap(mux))
+	return securityHeaders(originChecker{public: d.PublicOrigin, tls: d.TLS}.wrap(mux), d.ScriptHashes)
 }
 
 func (s *server) login(w http.ResponseWriter, r *http.Request) {

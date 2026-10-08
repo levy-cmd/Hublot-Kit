@@ -302,3 +302,12 @@ func TestRateLimitedAuditThrottled(t *testing.T) {
 		t.Fatalf("want 2 lines after a minute, got %d", n)
 	}
 }
+
+func TestCSPCarriesScriptHashesFromDeps(t *testing.T) {
+	h := New(Deps{Docker: &dockerx.Fake{}, ScriptHashes: []string{"'sha256-Zm9v'"}})
+	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("GET", "/api/nope", nil))
+	if csp := rec.Header().Get("Content-Security-Policy"); !strings.Contains(csp, "script-src 'self' 'sha256-Zm9v';") {
+		t.Fatalf("CSP %q lacks the hash", csp)
+	}
+}
