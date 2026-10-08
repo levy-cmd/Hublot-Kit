@@ -48,3 +48,46 @@ func TestNotBuiltYet(t *testing.T) {
 		t.Fatalf("got %d %q", rec.Code, rec.Body)
 	}
 }
+
+func TestMissingAssetWithDot(t *testing.T) {
+	rec := get(NewHandler(site), "/_app/immutable/missing.js")
+	if rec.Code != 404 {
+		t.Fatalf("got %d, want 404", rec.Code)
+	}
+}
+
+func TestMissingFaviconWithDot(t *testing.T) {
+	rec := get(NewHandler(site), "/favicon.png")
+	if rec.Code != 404 {
+		t.Fatalf("got %d, want 404", rec.Code)
+	}
+}
+
+func TestPathWithDotSegment(t *testing.T) {
+	rec := get(NewHandler(site), "/.gitkeep")
+	if rec.Code != 404 {
+		t.Fatalf("got %d, want 404", rec.Code)
+	}
+}
+
+func TestSPAFallbackCacheControl(t *testing.T) {
+	rec := get(NewHandler(site), "/login")
+	if rec.Code != 200 || rec.Header().Get("Cache-Control") != "no-cache" {
+		t.Fatalf("got %d, Cache-Control: %q", rec.Code, rec.Header().Get("Cache-Control"))
+	}
+}
+
+func TestAssetCacheControl(t *testing.T) {
+	rec := get(NewHandler(site), "/_app/immutable/a.js")
+	if rec.Code != 200 || rec.Header().Get("Cache-Control") != "public, max-age=31536000, immutable" {
+		t.Fatalf("got %d, Cache-Control: %q", rec.Code, rec.Header().Get("Cache-Control"))
+	}
+}
+
+func TestHeadRequest(t *testing.T) {
+	rec := httptest.NewRecorder()
+	NewHandler(site).ServeHTTP(rec, httptest.NewRequest("HEAD", "/login", nil))
+	if rec.Code != 200 {
+		t.Fatalf("got %d, want 200", rec.Code)
+	}
+}
