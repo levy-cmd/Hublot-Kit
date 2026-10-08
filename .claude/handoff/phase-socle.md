@@ -3,8 +3,8 @@ branche: phase/socle
 base: b2cb4b1
 de: levy (avec Claude)
 le: 2026-10-08
-repris_par:
-verif: PATH=/opt/homebrew/bin:$PATH make test && make build
+repris_par: Livaille An-nour (avec Claude) 2026-10-08
+verif: export PATH=/opt/homebrew/bin:$PATH; make test && make build
 ---
 
 ## Objectif
