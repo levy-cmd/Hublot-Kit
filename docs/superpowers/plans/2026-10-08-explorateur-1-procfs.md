@@ -6,7 +6,7 @@
 >
 > **Apprendre Go :** les tâches marquées 🎓 (1 et 2) n'utilisent que la bibliothèque standard, sans Linux ni Docker. Elles se codent bien à la main en suivant le plan.
 >
-> **Vérifié avant rédaction (après deux tours de revue) :** le code Go de ce plan a été compilé et testé sur une copie du dépôt, sur macOS et sous Linux dans un conteneur `golang`, en root comme en non-root, avec `-race` et avec `-tags integration` sur Docker Desktop. Les états intermédiaires ont été rejoués : après la tâche 4, 20 tests rouges sur 21 ; les tâches 5 et 6 compilent et passent. Les nouveaux tests ont été éprouvés par mutation (premier tour) : un `Reopen` placé avant le contrôle du type, l'absence de `pidfd_send_signal` dans `openRoot` ou un créneau rendu avant la copie les font échouer. Au second tour, d'autres mutations sont détectées : la perte de `mounts: info.Mounts` dans `openProcFS`, la perte de la règle « tout le conteneur », une erreur de `VolumeOptions` renvoyée telle quelle, un pilote de volume tiers accepté, l'option `type=` ignorée, un échappement de `mountinfo` invalide accepté. La mutation « `pidfd_send_signal` retiré de `CheckArchive` » n'a pas pu être rejouée : Docker Desktop a cessé de répondre (disque de l'hôte plein) ; à rejouer avant l'exécution de la tâche 7. Le code de l'interface a passé `npm run check`, `eslint`, Vitest et `npm run build`. Il a aussi été parcouru dans Chrome sans tête, contre l'agent lancé par `scripts/dev-agent.sh` : liste, lien vers un fichier, `/proc`, téléchargement de `/` refusé avec son message, `/etc` accepté, `link_in_path` sur un dossier atteint par un lien, aucune erreur console. Le scénario C1 (bind du `/proc` de l'hôte) n'a **pas** été rejoué contre un vrai dockerd : il ne se teste qu'avec le faux client. Les VM Lima n'ont pas été lancées : la tâche 16 le fait.
+> **Vérifié avant rédaction (après deux tours de revue) :** le code Go de ce plan a été compilé et testé sur une copie du dépôt, sur macOS et sous Linux dans un conteneur `golang`, en root comme en non-root, avec `-race` et avec `-tags integration` sur Docker Desktop. Les états intermédiaires ont été rejoués : après la tâche 4, 20 tests rouges sur 21 ; les tâches 5 et 6 compilent et passent. Les nouveaux tests ont été éprouvés par mutation (premier tour) : un `Reopen` placé avant le contrôle du type, l'absence de `pidfd_send_signal` dans `openRoot` ou un créneau rendu avant la copie les font échouer. Au second tour, d'autres mutations sont détectées : la perte de `mounts: info.Mounts` dans `openProcFS`, la perte de la règle « tout le conteneur », une erreur de `VolumeOptions` renvoyée telle quelle, un pilote de volume tiers accepté, l'option `type=` ignorée, un échappement de `mountinfo` invalide accepté. La mutation « `pidfd_send_signal` retiré de `CheckArchive` » n'a pas pu être rejouée : Docker Desktop a cessé de répondre (disque de l'hôte plein) ; à rejouer avant l'exécution de la tâche 7. Le troisième tour (petites retouches) n'a été vérifié que de façon portable, Docker ne répondant toujours pas : tests Go sur macOS avec `-race`, `GOOS=linux go vet` (avec et sans `-tags integration`), compilation des binaires de test Linux (`go test -c`, arm64 et amd64), construction du binaire Linux, et pour l'interface `check`, `eslint`, Vitest (33 tests) et `build`. Deux mutations portables le confirment : un pilote tiers accepté, et un `device` relatif accepté, font échouer `TestHostBind`. Le code de l'interface a passé `npm run check`, `eslint`, Vitest et `npm run build`. Il a aussi été parcouru dans Chrome sans tête, contre l'agent lancé par `scripts/dev-agent.sh` : liste, lien vers un fichier, `/proc`, téléchargement de `/` refusé avec son message, `/etc` accepté, `link_in_path` sur un dossier atteint par un lien, aucune erreur console. Le scénario C1 (bind du `/proc` de l'hôte) n'a **pas** été rejoué contre un vrai dockerd : il ne se teste qu'avec le faux client. Les VM Lima n'ont pas été lancées : la tâche 16 le fait.
 
 **Goal:** Sur un conteneur qui tourne, l'utilisateur parcourt toute l'arborescence. Il voit la taille, les droits et le propriétaire de chaque entrée, prévisualise un fichier texte ou une image, et télécharge un fichier ou un dossier (tar). Aucune lecture, ni de l'agent ni de Docker, ne peut sortir de la racine du conteneur vers l'hôte.
 
@@ -20,7 +20,7 @@
 
 `dockerx` gagne `Inspect` (avec les montages), `GetArchive` et `VolumeOptions`. `api` expose trois routes GET (§6) derrière une garde par conteneur (délai et plafond, §13). L'interface SvelteKit gagne la page `/c/[id]`, onglet Fichiers.
 
-**Tech Stack:** Go 1.27 (stdlib `net/http`), `github.com/moby/moby/client` v0.6.1, `github.com/cyphar/filepath-securejoin` v0.7.0 (`pathrs-lite`), `golang.org/x/sys` v0.48.0 ; SvelteKit 3 / Svelte 5, Vitest.
+**Tech Stack:** Go 1.27 (stdlib `net/http`), `github.com/moby/moby/client` v0.6.1, `github.com/cyphar/filepath-securejoin` v0.7.0 (`pathrs-lite`), `golang.org/x/sys` v0.48.0 ; SvelteKit 3 / Svelte 5, Vitest. `golang.org/x/sys` passe de v0.33.0 (indirecte, tirée par le SDK Docker) à v0.48.0 (directe) à la tâche 4, étape 2 (`go get golang.org/x/sys@v0.48.0`) ; la tâche 3 ne fait passer en directe que `github.com/containerd/errdefs`.
 
 **Spec:** `docs/superpowers/specs/2026-10-07-hublot-kit-v0.1-design.md` (§4, §5.1, §5.2 étape 7, §5.4, §6, §7, §8, §9, §10, §13). Résultats du spike : `docs/superpowers/spikes/2026-10-07-resultats-spike.md`. Le code `procroot` du spike (parent du commit `72e1b50`) sert de base à `procfs`.
 
@@ -58,9 +58,9 @@ Second tour (relecteur Opus et Codex sur la version `af9a207`, constats vérifi�
 - **R2 :** quatre volets.
   - (1) Règle « tout le conteneur » (`PseudoMountInMounts`) : un pseudo-système ou un FUSE monté sur ou sous la destination d'un montage d'`Inspect.Mounts` refuse tout tar. La règle par dossier reste.
   - (2) `HostBind` refuse aussi un volume `local` dont l'option `type` est un pseudo-système ou FUSE, et tout volume d'un autre pilote (inconnu : refus).
-  - (3) Spec §5.2 étape 7 mise à jour. → Tâche 7.
+  - (3) Spec §5.2 étape 7 mise à jour. → Tâche 7. *Revu au troisième tour (T1) : la phrase va au §5.4 seulement, voir Q9.*
   - (4) La note sur les sous-montages d'un `rbind` est nuancée (propagation `rprivate`), ainsi que la limite §13. → Tâches 7, 12.
-- **R3 (course entre `CheckArchive` et `GetArchive`) :** limite assumée, sans mécanisme en plus, écrite dans la spec §5.4 et §13. Monter quoi que ce soit dans un conteneur actif exige un conteneur privilégié, donc déjà root sur l'hôte ; dockerd archive à partir des montages configurés (mesuré) ; et R2 (1) couvre tout le conteneur. À remesurer sur `hk-ubuntu`. → Tâches 12, 16.
+- **R3 (course entre `CheckArchive` et `GetArchive`) :** limite assumée, sans mécanisme en plus, écrite dans la spec §5.4 et §13. Monter quoi que ce soit dans un conteneur actif exige `CAP_SYS_ADMIN` dans le conteneur (conteneur privilégié, ou `--cap-add SYS_ADMIN` : par exemple rclone ou s3fs avec `/dev/fuse`), ou root sur l'hôte (propagation `rshared`) ; limite assumée pour la v0.1 (formulation du troisième tour). dockerd archive à partir des montages configurés (mesuré) ; et R2 (1) couvre tout le conteneur. À remesurer sur `hk-ubuntu`. → Tâches 12, 16.
 - **R4 :** tout échec de `VolumeOptions` donne `ErrForbiddenPath`, avec le nom du volume et sa destination dans le détail. Le test qui acceptait `ErrNotFound` est corrigé, et un test de route vérifie statut, code et zéro `GetArchive`. → Tâches 7, 12.
 - **R5 :** cas `mountinfo` explicites : deux montages empilés au même point, champs de propagation (`shared:`, `master:`, `propagate_from:`), échappements `\011`, `\012`, `\134`. Un échappement invalide fait refuser (échec fermé). → Tâche 7.
 - **R6 :** six points.
@@ -70,6 +70,19 @@ Second tour (relecteur Opus et Codex sur la version `af9a207`, constats vérifi�
   - Tâche 10 : la borne de 10 s d'`Inspect` est notée « non testée ».
   - Tâche 12 : la puce §7 devient « Binds de l'hôte (conteneur actif) » et rappelle que le tar y est refusé.
 - **Q8 :** le refus strict reste en v0.1 (recommandation retenue, à confirmer). **Portée de (a) :** tout dossier du conteneur (retenue).
+
+Troisième tour (relecture finale « Prêt avec réserves » et deux retouches Codex) :
+
+- **T1 :** les extensions de `HostBind` (pilote tiers, options illisibles, `type=`) ne touchent pas encore la spec §5.2 : elles changeraient la portée pour les conteneurs arrêtés, dont tout l'explorateur deviendrait indisponible. La phrase de spec est cantonnée au tar d'un conteneur actif (§5.4) ; la question devient **Q9**. → Tâches 7, 12.
+- **T2 :** `TestHostBind` donne à `ceph` et `anon` des options lisibles : seule la règle du pilote peut les refuser. → Tâche 7.
+- **T3 :** `hostSensitive` refuse toute source (ou `device`) non absolue (échec fermé), avec test. → Tâche 7.
+- **T4 :** le message de l'interface dit « téléchargez un fichier, ou un sous-dossier si le refus ne porte que sur ce dossier », et affiche le détail qui nomme le montage (`downloadErrorMessage`, testé). → Tâches 13, 14.
+- **T5 :** spec §5.4 puce (a) et §7 : « qui nomme le montage ; volumes `type=` pseudo/FUSE, pilotes tiers, options illisibles ». → Tâche 12.
+- **T6 :** formulation de R3 (§5.4, §13, note de la tâche 7) : « Monter quoi que ce soit dans un conteneur actif exige `CAP_SYS_ADMIN` dans le conteneur (conteneur privilégié, ou `--cap-add SYS_ADMIN` : par exemple rclone ou s3fs avec `/dev/fuse`), ou root sur l'hôte (propagation `rshared`) ; limite assumée pour la v0.1 ». Tâche 16 : « confirmer R3 » veut dire relever la ligne `MESURE`. → Tâches 7, 12, 16.
+- **T7 :** tâche 12 : « Où tester » cite le test Linux ; le paragraphe « Toutes les erreurs… `&check=1` » est de nouveau séparé. → Tâche 12.
+- **T8 :** tâche 4 : `/etc/passwd` au lieu de `/etc/hostname` partout dans `procfs_test.go` (présent sur toute machine de test). → Tâche 4.
+- **T9 :** `fsview.SetCgroupReaderForTests` garde sa forme, avec `if !testing.Testing() { panic(…) }` ; les tests qui l'utilisent n'appellent pas `t.Parallel` (noté dans le code et à la tâche 12). → Tâches 6, 12.
+- **T10 :** l'en-tête précise que `golang.org/x/sys` passe de v0.33.0 à v0.48.0, et à quelle tâche : la tâche 4 (étape 2), pas la tâche 3, qui ne fait passer en directe que `containerd/errdefs`.
 
 ## Découpage de la phase Explorateur (semaines 5 à 9)
 
@@ -90,7 +103,7 @@ La phase couvre quatre fonctions indépendantes à tester : lecture d'un contene
 
 **Plan 2 (tarindex + F5) :**
 - `tarindex` (§5.2), tests d'évasion et de résolution écrits d'abord, sur des tar en mémoire : liens relatifs et absolus, `..` bloqué, `..` après un dossier lié, chaîne, boucle à 40 sauts, liens physiques ;
-- binds de l'hôte (§5.2 étape 7) : réutiliser `fsview.HostBind` de ce plan, tests d'abord ;
+- binds de l'hôte (§5.2 étape 7) : réutiliser `fsview.HostBind` de ce plan, tests d'abord ; la portée de ses extensions pour un conteneur arrêté est à trancher (Q9) ;
 - cache LRU 3 avec la clé `ID + FinishedAt`, construction unique, progression plafonnée à 99 %, plafonds 4 Gio / 5 min → `too_large` ;
 - `202 indexing` et sa barre de progression. Attention : `api()` côté interface traite tout `res.ok` comme un succès, un `202` doit y être reconnu ;
 - `StatNoLinks` et `CheckArchive` par l'index ; `fsview.For` bascule sur `tarindex`, ce qui retire `ErrStopped` ;
@@ -136,6 +149,15 @@ Le plan suit la recommandation de chaque question. Pour Q1 à Q7, la recommandat
   - On ne peut pas l'assouplir simplement : dans `mountinfo`, le `/proc` du conteneur et un bind du `/proc` de l'hôte ont le même type.
   - *Recommandation (retenue, à confirmer par l'utilisateur) :* garder la règle stricte en v0.1. L'interface explique de télécharger un sous-dossier. Mesurer de nouveau sur `hk-ubuntu` (tâche 16) avant tout assouplissement, par exemple ne compter que les montages situés sous une destination d'`Inspect.Mounts` (règle R2 (1), déjà en place).
   - Portée de la règle (a) (binds) : tout dossier du conteneur, comme pour l'explorateur d'un conteneur arrêté (retenue).
+
+- **Q9 (troisième tour) — Extensions de `HostBind` pour un conteneur arrêté.** Pour le tar d'un dossier d'un conteneur actif (§5.4), `HostBind` refuse aussi :
+  - les volumes `local` dont `type=` est un pseudo-système ou FUSE ;
+  - les volumes d'un pilote tiers ;
+  - les volumes dont les options ne se lisent pas.
+
+  Pour un conteneur **arrêté**, la règle de §5.2 étape 7 rend l'explorateur **entier** indisponible (`List`, `Stat`, `Open`, téléchargement). Y appliquer ces extensions couperait l'exploration de tout conteneur arrêté qui a un volume de pilote tiers (plugin NFS, rexray, s3fs…), même inoffensif. La spec §5.2 n'est donc pas modifiée par ce plan.
+  - *Recommandation (à confirmer par l'utilisateur, à trancher au plan 2) :* les appliquer aussi aux conteneurs arrêtés. L'index se construit par `GET /archive` de `/`, qui traverse tous les volumes. Un volume FUSE ou de pilote tiers qui ne répond pas y bloquerait dockerd exactement comme le tar d'un dossier, et nos plafonds (4 Gio, 5 min) n'arrêtent pas un dockerd bloqué.
+  - Le message nomme le volume. Pour explorer ce conteneur, il reste le conteneur actif : listing et lecture par `procfs`, sans tar.
 
 ## Décisions de ce plan (la spec ne tranche pas)
 
@@ -1777,11 +1799,11 @@ func TestMagicLinksNeverFollowed(t *testing.T) {
 	dir := t.TempDir()
 	must(t, os.Symlink("/proc/1/root", filepath.Join(dir, "m")))
 	must(t, os.Symlink("/proc/self/root", filepath.Join(dir, "s")))
-	if _, err := os.ReadFile(dir + "/s/etc/hostname"); err != nil {
+	if _, err := os.ReadFile(dir + "/s/etc/passwd"); err != nil {
 		t.Fatalf("contrôle : la lecture naïve par /proc/self/root doit réussir : %v", err)
 	}
-	for _, p := range []string{"/proc/1/root/etc/hostname", "/proc/self/root/etc/hostname",
-		dir + "/m/etc/hostname", dir + "/s/etc/hostname"} {
+	for _, p := range []string{"/proc/1/root/etc/passwd", "/proc/self/root/etc/passwd",
+		dir + "/m/etc/passwd", dir + "/s/etc/passwd"} {
 		if b, err := readAll(host, p); err == nil {
 			t.Errorf("%s lu (%d octets) : un lien magique ne doit jamais être suivi", p, len(b))
 		}
@@ -2326,6 +2348,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"testing"
 
 	"golang.org/x/sys/unix"
 
@@ -2346,7 +2369,11 @@ var (
 // returns the function that restores it. Tests of other packages (api) use it
 // to drive a real procfs view of one of their own processes through the real
 // wiring; production code never calls it.
+// It panics outside a test binary. Tests that use it must not call t.Parallel.
 func SetCgroupReaderForTests(f func(pid int) ([]byte, error)) (restore func()) {
+	if !testing.Testing() {
+		panic("fsview.SetCgroupReaderForTests : réservé aux tests")
+	}
 	old := readCgroup
 	readCgroup = f
 	return func() { readCgroup = old }
@@ -2502,7 +2529,7 @@ EOF
 
 **Files:**
 - Create: `internal/fsview/mounts.go`, `internal/fsview/mounts_test.go`, `internal/fsview/procfs_archive_linux_test.go`
-- Modify: `internal/fsview/procfs_archive_linux.go` (remplace la garde fermée), `docs/superpowers/specs/2026-10-07-hublot-kit-v0.1-design.md` (§5.2 étape 7)
+- Modify: `internal/fsview/procfs_archive_linux.go` (remplace la garde fermée)
 
 **Interfaces:**
 - Consumes: `procFS` et ses champs (tâche 5) ; `openRoot`, `openProcFS`, `For`, `SetCgroupReaderForTests` (tâche 6) ; `dockerx.Mount`, `dockerx.Client.VolumeOptions`, `dockerx.Fake.Volumes` (tâche 3) ; `ErrForbiddenPath`, `changed`, `CleanPath`
@@ -2520,13 +2547,15 @@ EOF
 >   - Un volume `local` dont l'option `type` est un pseudo-système ou FUSE est refusé (revue R2).
 >   - Tout volume d'un autre pilote est refusé : on ne sait pas ce qu'il monte, donc fermé par défaut (revue R2).
 >   - Des options illisibles font refuser par `ErrForbiddenPath`, avec le nom du volume et sa destination (revue R4).
+>   - Une source de bind (ou un `device`) qui n'est pas un chemin absolu ne peut pas être jugée : elle est refusée (échec fermé, troisième tour T3).
 >   - Le refus vaut pour tout dossier du conteneur, comme pour l'explorateur d'un conteneur arrêté.
+>   - Ces extensions (pilote tiers, options illisibles, `type=`) ne s'appliquent pour l'instant qu'au tar d'un conteneur actif ; leur portée pour un conteneur arrêté est la question Q9 (plan 2).
 > - **(b) `/proc/<pid>/mountinfo`.** Ce fichier de l'hôte est lu pour le process épinglé par le pidfd, qui doit être vivant *après* la lecture. Ses points de montage sont relatifs à la racine du conteneur. On y cherche les montages de l'un des 15 pseudo-systèmes ou FUSE (`fuse`, `fuseblk`, `fuse.*`) : un serveur FUSE muet bloquerait dockerd comme `/proc` (§13). Deux règles s'appliquent :
 >   - **pour tout le conteneur** (`PseudoMountInMounts`, revue R2) : un tel montage sur ou sous la destination d'un montage d'`Inspect.Mounts` refuse tout tar, car dockerd remonte ces montages pour tout tar du conteneur ;
 >   - **par dossier** (`PseudoMountUnder`) : un tel montage sur, sous ou au-dessus du dossier refuse ce tar.
 >
 >   Ce contrôle voit les sous-montages d'un `rbind` présents dans le conteneur (`-v /:/host` montre `/host/proc`), que `Inspect.Mounts` ne montre pas. Il a une limite : avec la propagation `rprivate` par défaut, un montage fait **plus tard** sur l'hôte sous la source d'un bind n'apparaît pas dans le conteneur, alors que dockerd pourrait le voir en remontant le bind. Cette limite est écrite au §13 (tâche 12). Une ligne illisible, ou un échappement invalide, fait refuser (revue R5 ; les montages empilés au même point comptent tous).
-> - **Course entre le contrôle et `GetArchive`** (revue R3) : c'est une limite assumée, écrite au §5.4 et au §13 à la tâche 12. Monter quoi que ce soit dans un conteneur actif exige un conteneur privilégié, donc déjà root sur l'hôte.
+> - **Course entre le contrôle et `GetArchive`** (revue R3) : c'est une limite assumée, écrite au §5.4 et au §13 à la tâche 12. Monter quoi que ce soit dans un conteneur actif exige `CAP_SYS_ADMIN` dans le conteneur (conteneur privilégié, ou `--cap-add SYS_ADMIN` : par exemple rclone ou s3fs avec `/dev/fuse`), ou root sur l'hôte (propagation `rshared`) ; limite assumée pour la v0.1.
 >
 > Conséquence : le `/` d'un conteneur actif est toujours refusé, car son propre `/proc` est dessous (voir Q8). Les tests n'utilisent que le faux client et un process `sleep` du test, jamais un vrai bind de `/proc`. Ils prouvent aussi le câblage (revue R1) : `TestForWiresMountsIntoCheckArchive` fait passer les montages d'`Inspect` par `For` jusqu'à `CheckArchive`, et `TestCheckArchiveDeadProcess` tue l'enfant juste après la lecture de son `mountinfo`.
 
@@ -2556,6 +2585,10 @@ func TestHostBind(t *testing.T) {
 		"plain-vol": {},
 		"srv-vol":   {"type": "none", "o": "bind", "device": "/srv/data"},
 		"nfs-vol":   {"type": "nfs", "o": "addr=10.0.0.1", "device": ":/export"},
+		"rel-vol":   {"type": "none", "o": "bind", "device": "proc"},
+		// Readable options: only the driver rule may refuse these two.
+		"ceph": {},
+		"anon": {},
 	}}
 	bind := func(src, dst string) dockerx.Mount { return dockerx.Mount{Type: "bind", Source: src, Destination: dst} }
 	vol := func(name, dst, driver string) dockerx.Mount {
@@ -2579,6 +2612,8 @@ func TestHostBind(t *testing.T) {
 		{vol("ceph", "/c", "rexray/rbd"), []string{"ceph", "/c", "rexray/rbd"}},
 		{vol("anon", "/a", ""), []string{"anon", "/a"}},
 		{vol("gone", "/g", "local"), []string{"gone", "/g", "options illisibles"}},
+		{bind("proc", "/rel"), []string{"bind proc -> /rel"}},                   // not absolute: fail closed
+		{vol("rel-vol", "/r", "local"), []string{"bind proc -> /r", "rel-vol"}}, // idem for a device
 	}
 	for _, c := range refused {
 		err := HostBind(ctx, docker, []dockerx.Mount{bind("/srv", "/srv"), c.m})
@@ -2908,8 +2943,12 @@ func hasBindOption(o string) bool {
 	return false
 }
 
-// hostSensitive works on a host path string (never opened).
+// hostSensitive works on a host path string (never opened). A path that is
+// not absolute cannot be judged: refused (fail closed).
 func hostSensitive(src string) bool {
+	if !path.IsAbs(src) {
+		return true
+	}
 	s := path.Clean(src)
 	return s == "/" || s == "/dev" ||
 		s == "/proc" || strings.HasPrefix(s, "/proc/") ||
@@ -3063,21 +3102,17 @@ Expected : PASS (4 tests : `TestHostBind`, `TestPseudoMountUnder`, `TestPseudoMo
 Run : `GOOS=linux go vet ./internal/fsview/ && scripts/test-linux.sh ./internal/fsview/ -run 'CheckArchive|ForWires' -v 2>&1 | grep -E '^(--- |ok|FAIL)'`
 Expected : 6 tests en `PASS` (5 `TestCheckArchive…` et `TestForWiresMountsIntoCheckArchive`). Dans le conteneur de test, `/`, `/proc`, `/proc/1`, `/sys` et `/sys/fs` sont refusés, `/etc` est accepté.
 
-Mutations à rejouer (chacune doit faire échouer au moins un test, puis on restaure) : retirer `mounts: info.Mounts` dans `openProcFS` ; mettre `&& false` derrière le `pidfd_send_signal` de `CheckArchive` ; passer `nil` à `PseudoMountInMounts` ; renvoyer l'erreur de `VolumeOptions` telle quelle ; accepter un pilote autre que `local` ; ignorer `type=` ; accepter un échappement invalide.
+Mutations à rejouer (chacune doit faire échouer au moins un test, puis on restaure) : retirer `mounts: info.Mounts` dans `openProcFS` ; mettre `&& false` derrière le `pidfd_send_signal` de `CheckArchive` ; passer `nil` à `PseudoMountInMounts` ; renvoyer l'erreur de `VolumeOptions` telle quelle ; accepter un pilote autre que `local` ; ignorer `type=` ; accepter un échappement invalide ; accepter une source non absolue (retirer le test `!path.IsAbs`).
 
 Run (non root, comme la CI) : `docker run --rm --user 1000:1000 -e GOCACHE=/tmp/gocache -e HOME=/tmp -v "$PWD":/src -w /src -v hublot-gomod:/go/pkg/mod:ro hublot-test go test -race ./internal/fsview/`
 Expected : `ok`.
 
-- [ ] **Step 5: Spec §5.2 étape 7 (revue R2)**
+La spec n'est pas modifiée ici : les extensions de `HostBind` sont écrites au §5.4 (tâche 12), pas au §5.2 étape 7, dont la portée pour les conteneurs arrêtés reste à trancher (Q9).
 
-Dans la spec §5.2 étape 7, après « … les options du volume via l'API d'inspection de volume (`GET /volumes/{nom}`, champ `Options`). », ajouter :
-
-> Est refusé de même un volume `local` dont l'option `type` est l'un des 15 pseudo-systèmes de §5.1 étape 9 ou FUSE (`fuse`, `fuseblk`, `fuse.*`). Sont refusés aussi tout volume d'un pilote autre que `local` (pilote tiers : ce qu'il monte est inconnu) et tout volume dont les options ne se lisent pas. Le détail nomme le volume et sa destination.
-
-- [ ] **Step 6: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
-git add internal/fsview docs/superpowers/specs/2026-10-07-hublot-kit-v0.1-design.md
+git add internal/fsview
 git commit -F - <<'EOF'
 explorateur: contrôle des montages avant le tar d'un dossier (binds de l'hôte, mountinfo)
 
@@ -4755,7 +4790,7 @@ EOF
 
 ### Task 12: API : `GET /api/containers/{id}/fs/download` (fichier ou dossier)
 
-**Où tester :** macOS (faux client : aucun vrai `GetArchive` dans les cas refusés).
+**Où tester :** macOS (faux client : aucun vrai `GetArchive` dans les cas refusés) ; Linux root et non root, sans Docker, pour `fs_download_linux_test.go` (vue `procfs` réelle d'un process du test, `scripts/test-linux.sh` ou job CI `go`).
 
 **Files:**
 - Create: `internal/api/fs_download.go`, `internal/api/fs_download_test.go`, `internal/api/fs_download_linux_test.go`
@@ -4780,7 +4815,13 @@ EOF
 >
 > Les deux copies sont relayées en flux, et le créneau de la garde reste pris jusqu'à la fin de la copie (revue Codex n°4).
 >
-> `fs_download_linux_test.go` (revue R1 iii, R4) fait passer le contrôle des montages par la route réelle. Il utilise `fsRequest`, l'`OpenFS` par défaut (`fsview.For`), `procfs` et `CheckArchive`. Le « conteneur » est un `sleep` du test, rattaché au cgroup voulu par `SetCgroupReaderForTests`, et décrit par un faux Docker : un bind de `/proc`, un volume aux options illisibles, un pilote tiers. Le test vérifie 403, `forbidden_path`, le nom du montage dans le détail et zéro `GetArchive`. Il tourne sous Linux sans Docker : en root, en non-root et dans le job CI `go`. Toutes les erreurs sont connues avant le premier octet : elles partent en JSON avec leur statut. `&check=1` s'arrête juste avant de lire (revue M2) : l'interface demande d'abord, puis laisse le navigateur télécharger, sans qu'un tar ait été lancé pour rien chez Docker.
+> Toutes les erreurs sont connues avant le premier octet : elles partent en JSON avec leur statut. `&check=1` s'arrête juste avant de lire (revue M2) : l'interface demande d'abord, puis laisse le navigateur télécharger, sans qu'un tar ait été lancé pour rien chez Docker.
+>
+> `fs_download_linux_test.go` (revue R1 iii, R4) fait passer le contrôle des montages par la route réelle. Il utilise `fsRequest`, l'`OpenFS` par défaut (`fsview.For`), `procfs` et `CheckArchive`.
+> - Le « conteneur » est un `sleep` du test, rattaché au cgroup voulu par `SetCgroupReaderForTests` (qui panique hors d'un binaire de test ; ce test n'appelle pas `t.Parallel`, car l'injection est globale).
+> - Un faux Docker le décrit, avec trois montages : un bind de `/proc`, un volume aux options illisibles, un pilote tiers.
+> - Le test vérifie 403, `forbidden_path`, le nom du montage dans le détail et zéro `GetArchive`.
+> - Il tourne sous Linux sans Docker : en root, en non-root et dans le job CI `go`.
 
 - [ ] **Step 1: Écrire les tests qui échouent**
 
@@ -5185,19 +5226,19 @@ Expected : `ok` partout, et `--- PASS: TestDownloadMountCheckThroughTheRealView`
 §5.4, remplacer la puce « Conteneur actif : ouverture par `openat2` … relayé en `.tar` sans mise en mémoire. » par :
 
 > - Conteneur actif : ouverture par `openat2` `RESOLVE_IN_ROOT | RESOLVE_NO_SYMLINKS | RESOLVE_NO_MAGICLINKS` sur `rootfd`, puis `fstatfs` du descripteur (`forbidden_path`, §5.1 étape 9). Vient ensuite le **contrôle des montages** (`FS.CheckArchive`) : Docker construit le tar avec les binds et volumes du conteneur montés dedans, et un bind du `/proc` de l'hôte y met `/proc/kcore` (254 Tio, dockerd bloqué : mesuré en revue). Deux contrôles :
->   - (a) la règle des binds de §5.2 étape 7 sur `Inspect.Mounts`, volumes `local` en `o=bind`/`rbind` compris → `forbidden_path` qui nomme le bind ;
+>   - (a) la règle des binds de §5.2 étape 7 sur `Inspect.Mounts`, volumes `local` en `o=bind`/`rbind` compris, source non absolue refusée → `forbidden_path` qui nomme le montage. Pour ce tar, sont refusés aussi les volumes `local` dont `type=` est un pseudo-système ou FUSE, les volumes d'un pilote tiers et ceux dont les options ne se lisent pas (ce qu'ils montent est inconnu). Ces extensions ne valent pas, pour l'instant, pour l'explorateur d'un conteneur arrêté (§5.2) ;
 >   - (b) `/proc/<pid>/mountinfo`, lu pour le process épinglé par le pidfd, qui doit être vivant après la lecture. On y cherche les montages de l'un des 15 types de §5.1 étape 9 ou FUSE (`fuse`, `fuseblk`, `fuse.*`). Un tel montage sur ou sous la destination d'un montage d'`Inspect.Mounts` refuse **tout** tar du conteneur, car dockerd remonte ces montages pour chaque tar. Un tel montage sur, sous ou au-dessus du dossier refuse ce tar. Dans les deux cas → `forbidden_path`. Une ligne illisible fait refuser.
 >
 >   Le `/` d'un conteneur actif est donc refusé, car son propre `/proc` est dessous. Puis `GetArchive` sur exactement le chemin nettoyé, relayé en `.tar` sans mise en mémoire ; le créneau de la garde (§13) reste pris jusqu'à la fin de la copie.
 >
->   Limite assumée : entre le contrôle et `GetArchive`, un montage peut apparaître dans le conteneur. Monter quoi que ce soit dans un conteneur actif exige un conteneur privilégié, déjà root sur l'hôte. dockerd construit le tar à partir des montages configurés : mesuré sur Docker Desktop, il ne voit pas le `/proc` propre du conteneur. Et la règle « tout le conteneur » couvre ce qui est monté sous un montage Docker au moment du contrôle. À remesurer sur une VM Ubuntu.
+>   Limite assumée : entre le contrôle et `GetArchive`, un montage peut apparaître dans le conteneur. Monter quoi que ce soit dans un conteneur actif exige `CAP_SYS_ADMIN` dans le conteneur (conteneur privilégié, ou `--cap-add SYS_ADMIN` : par exemple rclone ou s3fs avec `/dev/fuse`), ou root sur l'hôte (propagation `rshared`) ; limite assumée pour la v0.1. dockerd construit le tar à partir des montages configurés : mesuré sur Docker Desktop, il ne voit pas le `/proc` propre du conteneur. Et la règle « tout le conteneur » couvre ce qui est monté sous un montage Docker au moment du contrôle. À remesurer sur une VM Ubuntu.
 > - `&check=1` : tous les contrôles, puis `204` sans rien lire (aucun `GetArchive`). L'interface vérifie ainsi avant de laisser le navigateur télécharger.
 
 §6, ligne `GET /api/containers/{id}/fs/download?path=` : à la fin de la colonne « Rôle », ajouter « ; `&check=1` : contrôles seuls, `204` ; dossier d'un conteneur actif : `forbidden_path` si le tar traverserait un bind de l'hôte, un pseudo-système ou un FUSE (§5.4) ».
 
 §7, après la puce « **Lecture seule** … », ajouter :
 
-> - **Binds de l'hôte (conteneur actif)** : un conteneur lancé avec `-v /:/host` montre l'hôte dans l'explorateur ; par exemple, `/host/etc/shadow` est lisible. La lecture et le listing ne sont pas refusés : l'utilisateur de l'interface est de fait root sur l'hôte (début de §7), et les pseudo-systèmes et les périphériques restent refusés. Le tar d'un dossier, lui, est refusé pour tout le conteneur dès qu'un bind sensible existe : `/`, `/proc`, `/sys` ou dessous, `/dev` (§5.2 étape 7, §5.4).
+> - **Binds de l'hôte (conteneur actif)** : un conteneur lancé avec `-v /:/host` montre l'hôte dans l'explorateur ; par exemple, `/host/etc/shadow` est lisible. La lecture et le listing ne sont pas refusés : l'utilisateur de l'interface est de fait root sur l'hôte (début de §7), et les pseudo-systèmes et les périphériques restent refusés. Le tar d'un dossier, lui, est refusé pour tout le conteneur dès qu'un montage le rend dangereux, et le refus nomme le montage : bind sensible (`/`, `/proc`, `/sys` ou dessous, `/dev` : §5.2 étape 7), volume `type=` pseudo/FUSE, volume d'un pilote tiers, volume aux options illisibles (§5.4).
 
 §13, remplacer la ligne « Bind d'un dossier hôte contenant un sous-montage `/proc` ou `/sys` (rbind) | … » par :
 
@@ -5206,7 +5247,7 @@ Expected : `ok` partout, et `--- PASS: TestDownloadMountCheckThroughTheRealView`
 puis ajouter trois lignes :
 
 > | Montage FUSE ou pseudo-système sous un dossier téléchargé : dockerd le lit pour construire le tar et peut rester bloqué, conteneur verrouillé | refus avant `GetArchive` par `Inspect.Mounts` et `mountinfo` (§5.4) ; nos propres lectures restent sous la garde (4 par conteneur, 10 s) |
-> | Course entre le contrôle des montages et `GetArchive` (conteneur actif) | limite assumée : monter dans un conteneur actif exige un conteneur privilégié, déjà root sur l'hôte ; dockerd archive à partir des montages configurés ; règle « tout le conteneur » (§5.4) ; à remesurer sur une VM Ubuntu |
+> | Course entre le contrôle des montages et `GetArchive` (conteneur actif) | Monter quoi que ce soit dans un conteneur actif exige `CAP_SYS_ADMIN` dans le conteneur (conteneur privilégié, ou `--cap-add SYS_ADMIN` : par exemple rclone ou s3fs avec `/dev/fuse`), ou root sur l'hôte (propagation `rshared`) ; limite assumée pour la v0.1 ; dockerd archive à partir des montages configurés ; règle « tout le conteneur » (§5.4) ; à remesurer sur une VM Ubuntu |
 > | Noms de fichiers non UTF-8 : JSON les transporte avec U+FFFD, le fichier ne s'ouvre plus depuis l'interface (`not_found`) | limite v0.1 ; le listing ne casse pas |
 
 - [ ] **Step 5: Commit**
@@ -5232,7 +5273,7 @@ EOF
 
 **Interfaces:**
 - Consumes: routes des tâches 10 à 12 (dont `&check=1`) ; `ApiError`, `api` (Socle) ; `t` (Socle)
-- Produces (`api.ts`) : `type EntryType = 'file' | 'dir' | 'symlink' | 'other'` ; `type Entry = { name; type; size; mode; uid; gid; modTime; linkTarget? }` ; `type Listing = { path; type; entries; truncated }` ; `type Preview = { kind: 'text'; text; etag } | { kind: 'image'; blob; etag } | { kind: 'binary' }` ; `listDir(id, path): Promise<Listing>` ; `previewFile(id, path): Promise<Preview>` ; `downloadUrl(id, path): string` ; `checkDownload(url): Promise<void>`. (`files.ts`) : `normalize`, `joinPath`, `parentPath`, `baseName`, `resolveLinkTarget(dir, target)`, `breadcrumbs(p)`, `sortEntries(entries)`, `formatMode(type, mode)`, `formatSize(n)`. Clés i18n `container.*` et `files.*`.
+- Produces (`api.ts`) : `type EntryType = 'file' | 'dir' | 'symlink' | 'other'` ; `type Entry = { name; type; size; mode; uid; gid; modTime; linkTarget? }` ; `type Listing = { path; type; entries; truncated }` ; `type Preview = { kind: 'text'; text; etag } | { kind: 'image'; blob; etag } | { kind: 'binary' }` ; `listDir(id, path): Promise<Listing>` ; `previewFile(id, path): Promise<Preview>` ; `downloadUrl(id, path): string` ; `checkDownload(url): Promise<void>`. (`files.ts`) : `normalize`, `joinPath`, `parentPath`, `baseName`, `resolveLinkTarget(dir, target)`, `breadcrumbs(p)`, `sortEntries(entries)`, `formatMode(type, mode)`, `formatSize(n)`, `downloadErrorMessage(code, detail?)` (message d'un téléchargement de dossier refusé, avec le détail qui nomme le montage). Clés i18n `container.*` et `files.*`.
 
 > **À comprendre :** les chemins du conteneur ne sont ici que du texte, pour afficher et naviguer ; c'est l'agent qui les résout dans la racine. `checkDownload` existe parce qu'un lien `<a download>` vers une réponse d'erreur donne au mieux « échec du téléchargement » sans explication. On demande d'abord `&check=1` : l'agent fait tous ses contrôles et répond `204` ou l'erreur en JSON, sans rien lire ni lancer de tar chez Docker (revue M2). Ensuite seulement, le navigateur télécharge par navigation (`Content-Disposition: attachment` : la page reste affichée).
 
@@ -5246,6 +5287,7 @@ import type { Entry } from './api.ts';
 import {
 	baseName,
 	breadcrumbs,
+	downloadErrorMessage,
 	formatMode,
 	formatSize,
 	joinPath,
@@ -5254,7 +5296,7 @@ import {
 	resolveLinkTarget,
 	sortEntries
 } from './files.ts';
-import { t } from './i18n/index.ts';
+import { errorMessage, t } from './i18n/index.ts';
 
 const e = (name: string, type: Entry['type']): Entry => ({
 	name, type, size: 0, mode: 0o644, uid: 0, gid: 0, modTime: '2026-10-08T09:00:00Z'
@@ -5319,6 +5361,17 @@ describe('formatSize', () => {
 		expect(formatSize(1023)).toBe(`1023 ${t('files.unit.b')}`);
 		expect(formatSize(1536)).toBe(`1.5 ${t('files.unit.kib')}`);
 		expect(formatSize(2 * 1024 * 1024)).toBe(`2.0 ${t('files.unit.mib')}`);
+	});
+});
+
+describe('downloadErrorMessage', () => {
+	it('explains a refused directory download and names the mount', () => {
+		expect(downloadErrorMessage('forbidden_path', 'chemin interdit : bind /proc -> /host/proc')).toBe(
+			`${t('files.archiveForbidden')} (chemin interdit : bind /proc -> /host/proc)`
+		);
+		expect(downloadErrorMessage('forbidden_path')).toBe(t('files.archiveForbidden'));
+		expect(downloadErrorMessage('link_in_path', 'x')).toBe(t('files.linkDirHint'));
+		expect(downloadErrorMessage('docker_unavailable', 'dial')).toBe(errorMessage('docker_unavailable'));
 	});
 });
 ```
@@ -5408,7 +5461,7 @@ Dans `web/src/lib/i18n/fr.ts`, juste avant `'error.unauthorized'`, insérer :
 	'files.tooLarge': "Plus de 2 Mio : pas d'aperçu. Téléchargez-le.",
 	'files.linkDirHint': "Ce chemin passe par un lien symbolique : ouvrez d'abord sa cible, puis téléchargez.",
 	'files.archiveForbidden':
-		"Ce dossier contient un pseudo-système de fichiers (/proc, /sys…), un montage FUSE, ou le conteneur monte un dossier sensible de l'hôte : téléchargez un sous-dossier, ou un fichier.",
+		"Téléchargement refusé : ce dossier, ou le conteneur, expose un pseudo-système de fichiers (/proc, /sys…), un montage FUSE ou un dossier sensible de l'hôte. Téléchargez un fichier, ou un sous-dossier si le refus ne porte que sur ce dossier.",
 	'files.reload': 'Recharger',
 	'files.unit.b': 'o',
 	'files.unit.kib': 'Kio',
@@ -5445,7 +5498,7 @@ Dans `web/src/lib/i18n/en.ts`, au même endroit :
 	'files.tooLarge': 'Over 2 MiB: no preview. Download it.',
 	'files.linkDirHint': 'This path goes through a symbolic link: open its target first, then download.',
 	'files.archiveForbidden':
-		'This folder holds a pseudo filesystem (/proc, /sys…) or a FUSE mount, or the container mounts a sensitive host folder: download a subfolder, or a file.',
+		'Download refused: this folder, or the container, exposes a pseudo filesystem (/proc, /sys…), a FUSE mount or a sensitive host folder. Download a file, or a subfolder if the refusal only concerns this folder.',
 	'files.reload': 'Reload',
 	'files.unit.b': 'B',
 	'files.unit.kib': 'KiB',
@@ -5565,7 +5618,7 @@ export async function checkDownload(url: string): Promise<void> {
 
 ```ts
 import type { Entry, EntryType } from './api.ts';
-import { t } from './i18n/index.ts';
+import { errorMessage, t } from './i18n/index.ts';
 
 // Container paths are handled as text here, for display and navigation only:
 // the agent resolves them inside the container root.
@@ -5633,6 +5686,17 @@ export function formatSize(n: number): string {
 	}
 	return i === 0 ? `${v} ${units[0]}` : `${v.toFixed(1)} ${units[i]}`;
 }
+
+/**
+ * Message for a refused directory download. forbidden_path there comes from the
+ * mount check (spec §5.4): its detail names the mount, shown as is (escaped by
+ * Svelte like any container content).
+ */
+export function downloadErrorMessage(code: string, detail?: string): string {
+	if (code === 'link_in_path') return t('files.linkDirHint');
+	if (code === 'forbidden_path') return detail ? `${t('files.archiveForbidden')} (${detail})` : t('files.archiveForbidden');
+	return errorMessage(code);
+}
 ```
 
 - [ ] **Step 4: Vérifier**
@@ -5665,7 +5729,7 @@ EOF
 - Consumes: tout `api.ts` et `files.ts` (tâche 13) ; `listContainers`, `stateLabel` (Socle)
 - Produces: route `/c/[id]?path=<dossier>&file=<fichier>` ; composants `<FileBrowser id>` et `<FilePreview id path entry?>`
 
-> **À comprendre :** l'état de l'explorateur vit dans l'URL (`?path=` le dossier, `&file=` le fichier ouvert) : le bouton retour et le rechargement marchent. Chaque `$effect` qui lance une requête pose un drapeau `current` et le baisse au nettoyage, pour qu'une réponse lente d'une navigation précédente n'écrase pas l'état (même patron que le `+layout.svelte` du Socle). Un clic sur un lien navigue vers sa cible (§5.1 étape 8) : si la cible n'est pas un dossier, la liste répond `type: "file"` et la page affiche son dossier parent avec l'aperçu. Une image est montrée par une URL `blob:` (la CSP autorise `img-src blob:`), révoquée au changement de fichier ; le texte passe par l'échappement de Svelte dans un `<pre>` (`{@html}` interdit). `forbidden_path` s'affiche comme « dossier inaccessible » (§5.1 étape 9) au listing. Au téléchargement d'un dossier, il donne le message `files.archiveForbidden` (pseudo-système, FUSE ou bind de l'hôte : téléchargez un sous-dossier). Les lignes du tableau sont indexées par position et non par nom : deux noms non UTF-8 peuvent devenir identiques une fois passés en JSON (Q6). Le bouton « Recharger » incrémente un compteur lu par l'effet : naviguer vers la même URL ne relancerait pas la requête. Au téléphone, les deux colonnes s'empilent.
+> **À comprendre :** l'état de l'explorateur vit dans l'URL (`?path=` le dossier, `&file=` le fichier ouvert) : le bouton retour et le rechargement marchent. Chaque `$effect` qui lance une requête pose un drapeau `current` et le baisse au nettoyage, pour qu'une réponse lente d'une navigation précédente n'écrase pas l'état (même patron que le `+layout.svelte` du Socle). Un clic sur un lien navigue vers sa cible (§5.1 étape 8) : si la cible n'est pas un dossier, la liste répond `type: "file"` et la page affiche son dossier parent avec l'aperçu. Une image est montrée par une URL `blob:` (la CSP autorise `img-src blob:`), révoquée au changement de fichier ; le texte passe par l'échappement de Svelte dans un `<pre>` (`{@html}` interdit). `forbidden_path` s'affiche comme « dossier inaccessible » (§5.1 étape 9) au listing. Au téléchargement d'un dossier, `downloadErrorMessage` donne le message `files.archiveForbidden` (« téléchargez un fichier, ou un sous-dossier si le refus ne porte que sur ce dossier ») suivi du détail de l'agent, qui nomme le montage. Le détail passe par l'échappement de Svelte comme tout contenu de conteneur. Les lignes du tableau sont indexées par position et non par nom : deux noms non UTF-8 peuvent devenir identiques une fois passés en JSON (Q6). Le bouton « Recharger » incrémente un compteur lu par l'effet : naviguer vers la même URL ne relancerait pas la requête. Au téléphone, les deux colonnes s'empilent.
 
 - [ ] **Step 1: Les composants**
 
@@ -5774,6 +5838,7 @@ EOF
 	import { ApiError, checkDownload, downloadUrl, listDir, type Entry, type Listing } from '#lib/api.ts';
 	import {
 		breadcrumbs,
+		downloadErrorMessage,
 		formatMode,
 		formatSize,
 		joinPath,
@@ -5850,13 +5915,8 @@ EOF
 			await checkDownload(url);
 			location.assign(url);
 		} catch (e) {
-			const code = e instanceof ApiError ? e.code : 'unknown';
 			downloadError =
-				code === 'link_in_path'
-					? t('files.linkDirHint')
-					: code === 'forbidden_path'
-						? t('files.archiveForbidden')
-						: errorMessage(code);
+				e instanceof ApiError ? downloadErrorMessage(e.code, e.detail) : downloadErrorMessage('unknown');
 		}
 	}
 </script>
@@ -6100,7 +6160,7 @@ Sur `http://127.0.0.1:7878` : se connecter, cliquer `essai`, puis vérifier, en 
 1. `/` listé, `proc/` présent ; cliquer `proc/` → « Dossier inaccessible : pseudo-système… ».
 2. `etc/` → `os-release → ../usr/lib/os-release` ; cliquer dessus → le dossier `/usr/lib` s'affiche avec l'aperçu d'`os-release` (texte « Alpine Linux »).
 3. Droits affichés comme `ls` (`drwxr-xr-x`, `-rw-r--r--`), propriétaire `0:0`, tailles en o/Kio.
-4. « Télécharger » sur `os-release` → fichier `os-release` enregistré. « Télécharger ce dossier (.tar) » sur `/etc` → `etc.tar` ; sur `/usr/lib`, atteint par le lien → marche (le chemin affiché est `/usr/lib`, sans lien). Sur `/` → message « Ce dossier contient un pseudo-système de fichiers… téléchargez un sous-dossier » (Q8), aucun fichier.
+4. « Télécharger » sur `os-release` → fichier `os-release` enregistré. « Télécharger ce dossier (.tar) » sur `/etc` → `etc.tar` ; sur `/usr/lib`, atteint par le lien → marche (le chemin affiché est `/usr/lib`, sans lien). Sur `/` → message « Téléchargement refusé : … Téléchargez un fichier, ou un sous-dossier si le refus ne porte que sur ce dossier. (chemin interdit : proc monté sur /proc, …) » (Q8), aucun fichier.
 5. `docker exec essai ln -s /etc /lien`, puis `/lien` dans la barre d'adresse (`?path=/lien`) → la liste s'affiche (lien suivi) ; « Télécharger ce dossier » → message « Ce chemin passe par un lien symbolique : ouvrez d'abord sa cible… ».
 6. `/bin/busybox` → « Fichier binaire : pas d'aperçu. »
 7. Bouton retour du navigateur → dossier précédent. Fenêtre étroite (≈ 375 px) → colonnes empilées, tableau défilant.
@@ -6279,7 +6339,7 @@ limactl shell hk-ubuntu -- sudo dmesg | grep -i 'apparmor="DENIED"' | tail -5
 limactl stop hk-ubuntu
 ```
 
-Expected : `ok` pour les 8 paquets ; aucune ligne `DENIED` datée de l'essai. Rejouer aussi, dans la VM, la mutation « `&& false` derrière le `pidfd_send_signal` de `CheckArchive` » de la tâche 7 (elle doit faire échouer `TestCheckArchiveDeadProcess`), et confirmer la limite R3 (course entre contrôle et `GetArchive`). Relever aussi la ligne `MESURE :` (`limactl shell --workdir "$PWD" hk-ubuntu -- sudo scripts/test-linux.sh -tags integration ./internal/fsview/ -run MeasureOwnProc -v`) : elle tranche Q8 sur Ubuntu. Si le dépôt n'est pas visible dans la VM (`limactl shell hk-ubuntu -- ls "$PWD"`), vérifier le montage `~` de `~/.lima/hk-ubuntu/lima.yaml`.
+Expected : `ok` pour les 8 paquets ; aucune ligne `DENIED` datée de l'essai. Rejouer aussi, dans la VM, la mutation « `&& false` derrière le `pidfd_send_signal` de `CheckArchive` » de la tâche 7 (elle doit faire échouer `TestCheckArchiveDeadProcess`), et « confirmer R3 » : relever la ligne `MESURE :` ci-dessous ; R3 reste une limite assumée pour la v0.1. La ligne `MESURE :` (`limactl shell --workdir "$PWD" hk-ubuntu -- sudo scripts/test-linux.sh -tags integration ./internal/fsview/ -run MeasureOwnProc -v`) : elle tranche Q8 sur Ubuntu. Si le dépôt n'est pas visible dans la VM (`limactl shell hk-ubuntu -- ls "$PWD"`), vérifier le montage `~` de `~/.lima/hk-ubuntu/lima.yaml`.
 
 - [ ] **Step 4: VM Fedora (SELinux)**
 
