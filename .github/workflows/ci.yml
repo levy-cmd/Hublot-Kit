@@ -69,3 +69,14 @@ jobs:
       - run: |
           out=$(./bin/hublot reset-token --data-dir "$RUNNER_TEMP/hk")
           echo "$out" | grep -q "jeton"
+      - name: Smoke test (embedded UI and CSP)
+        run: |
+          ./bin/hublot --data-dir "$RUNNER_TEMP/hk2" --listen 127.0.0.1:7878 &
+          pid=$!
+          trap 'kill $pid 2>/dev/null || true' EXIT
+          for i in $(seq 1 20); do
+            curl -sf -o /dev/null http://127.0.0.1:7878/login && break
+            sleep 0.5
+          done
+          curl -sf http://127.0.0.1:7878/login | grep -q "_app/immutable"
+          curl -sI http://127.0.0.1:7878/login | grep -i "^content-security-policy:" | grep -q "sha256-"
