@@ -72,8 +72,9 @@ func TestOriginPOST(t *testing.T) {
 }
 
 func TestOriginMismatchScheme(t *testing.T) {
-	// Behind a TLS reverse proxy without --public-origin, the browser sends https
-	// while the agent sees plain http: refused, with the dedicated code.
+	// A plain-HTTP agent (without TLS) receives an https Origin from the browser:
+	// this happens when the agent is behind a TLS reverse proxy without --public-origin.
+	// The request is refused with the dedicated code.
 	rec := httptest.NewRecorder()
 	originChecker{}.wrap(ok).ServeHTTP(rec, originReq("POST", "https://example.com"))
 	if rec.Code != http.StatusForbidden || errCode(t, rec) != "forbidden_origin" {
@@ -131,5 +132,123 @@ func TestClientIPIgnoresForwardedFor(t *testing.T) {
 	r.Header.Set("X-Forwarded-For", "203.0.113.9")
 	if got := clientIP(r); got != "192.0.2.7" {
 		t.Fatalf("clientIP = %q", got)
+	}
+}
+
+func TestOriginHTTPMethods(t *testing.T) {
+	// PUT, DELETE, PATCH, OPTIONS without Origin should be rejected
+	methods := []string{"PUT", "DELETE", "PATCH", "OPTIONS"}
+	for _, method := range methods {
+		rec := httptest.NewRecorder()
+		originChecker{}.wrap(ok).ServeHTTP(rec, originReq(method, ""))
+		if rec.Code != http.StatusForbidden || errCode(t, rec) != "forbidden_origin" {
+			t.Errorf("%s without Origin: want 403 forbidden_origin, got %d", method, rec.Code)
+		}
+	}
+}
+
+func TestOriginWithUserinfo(t *testing.T) {
+	rec := httptest.NewRecorder()
+	originChecker{}.wrap(ok).ServeHTTP(rec, originReq("POST", "http://evil@example.com"))
+	if rec.Code != http.StatusForbidden || errCode(t, rec) != "forbidden_origin" {
+		t.Errorf("Origin with userinfo: want 403 forbidden_origin, got %d", rec.Code)
+	}
+}
+
+func TestOriginWithQueryFragmentTrailingSlash(t *testing.T) {
+	cases := []struct {
+		name, origin string
+	}{
+		{"query", "http://example.com?x"},
+		{"fragment", "http://example.com#f"},
+		{"trailing slash", "http://example.com/"},
+	}
+	for _, tc := range cases {
+		rec := httptest.NewRecorder()
+		originChecker{}.wrap(ok).ServeHTTP(rec, originReq("POST", tc.origin))
+		if rec.Code != http.StatusForbidden || errCode(t, rec) != "forbidden_origin" {
+			t.Errorf("%s: want 403 forbidden_origin, got %d", tc.name, rec.Code)
+		}
+	}
+}
+
+func TestOriginCaseInsensitiveHost(t *testing.T) {
+	// Host "EXAMPLE.COM" with Origin "http://example.com" should pass
+	rec := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "http://EXAMPLE.COM/api/login", nil)
+	r.Host = "EXAMPLE.COM"
+	r.Header.Set("Origin", "http://example.com")
+	originChecker{}.wrap(ok).ServeHTTP(rec, r)
+	if rec.Code != http.StatusNoContent {
+		t.Errorf("case-insensitive host: want pass, got %d", rec.Code)
+	}
+}
+
+func TestOriginIPv6(t *testing.T) {
+	// Host "[::1]:7878" with Origin "http://[::1]:7878" should pass
+	rec := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "http://[::1]:7878/api/login", nil)
+	r.Host = "[::1]:7878"
+	r.Header.Set("Origin", "http://[::1]:7878")
+	originChecker{}.wrap(ok).ServeHTTP(rec, r)
+	if rec.Code != http.StatusNoContent {
+		t.Errorf("IPv6 with port: want pass, got %d", rec.Code)
+	}
+}
+
+func TestOriginDefaultPortHTTP(t *testing.T) {
+	// Host "example.com:80" with Origin "http://example.com" should pass
+	// because :80 is the default port for http
+	rec := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "http://example.com:80/api/login", nil)
+	r.Host = "example.com:80"
+	r.Header.Set("Origin", "http://example.com")
+	originChecker{}.wrap(ok).ServeHTTP(rec, r)
+	if rec.Code != http.StatusNoContent {
+		t.Errorf("default port HTTP: want pass, got %d", rec.Code)
+	}
+}
+
+func TestOriginDefaultPortHTTPS(t *testing.T) {
+	// TLS + Host "example.com:443" with Origin "https://example.com" should pass
+	// because :443 is the default port for https
+	rec := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "https://example.com:443/api/login", nil)
+	r.Host = "example.com:443"
+	r.Header.Set("Origin", "https://example.com")
+	originChecker{tls: true}.wrap(ok).ServeHTTP(rec, r)
+	if rec.Code != http.StatusNoContent {
+		t.Errorf("default port HTTPS: want pass, got %d", rec.Code)
+	}
+}
+
+func TestRequireSessionInvalidCookie(t *testing.T) {
+	s := auth.NewSessions(auth.SessionTTL, time.Now)
+	h := requireSession(s, ok)
+
+	rec := httptest.NewRecorder()
+	r := httptest.NewRequest("GET", "/api/meta", nil)
+	r.AddCookie(&http.Cookie{Name: cookieName, Value: "invalid_session_id"})
+	h.ServeHTTP(rec, r)
+	if rec.Code != http.StatusUnauthorized || errCode(t, rec) != "unauthorized" {
+		t.Fatalf("invalid cookie: got %d", rec.Code)
+	}
+}
+
+func TestCacheControlHeader(t *testing.T) {
+	// Cache-Control: no-store should be set for /api/* paths
+	rec := httptest.NewRecorder()
+	r := httptest.NewRequest("GET", "/api/containers", nil)
+	securityHeaders(ok).ServeHTTP(rec, r)
+	if got := rec.Header().Get("Cache-Control"); got != "no-store" {
+		t.Errorf("Cache-Control on /api/: want no-store, got %q", got)
+	}
+
+	// Cache-Control should not be set for non-/api paths
+	rec = httptest.NewRecorder()
+	r = httptest.NewRequest("GET", "/", nil)
+	securityHeaders(ok).ServeHTTP(rec, r)
+	if got := rec.Header().Get("Cache-Control"); got != "" {
+		t.Errorf("Cache-Control on /: want empty, got %q", got)
 	}
 }
