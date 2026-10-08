@@ -65,7 +65,13 @@ func (e *engine) ListContainers(ctx context.Context) ([]Container, error) {
 
 func fromSummary(s container.Summary) Container {
 	name := ""
-	if len(s.Names) > 0 {
+	for _, n := range s.Names {
+		if t := strings.TrimPrefix(n, "/"); t != "" && !strings.Contains(t, "/") {
+			name = t // link aliases look like "/other/alias"
+			break
+		}
+	}
+	if name == "" && len(s.Names) > 0 {
 		name = strings.TrimPrefix(s.Names[0], "/")
 	}
 	if name == "" {
@@ -73,20 +79,23 @@ func fromSummary(s container.Summary) Container {
 	}
 	type portKey struct {
 		private, public uint16
-		typ             string
+		typ, ip         string
 	}
 	ports := make([]Port, 0, len(s.Ports))
 	seen := map[portKey]bool{}
 	for _, p := range s.Ports {
-		key := portKey{p.PrivatePort, p.PublicPort, p.Type}
-		if seen[key] {
-			continue // same mapping on IPv4 and IPv6
-		}
-		seen[key] = true
 		ip := ""
 		if p.IP.IsValid() {
 			ip = p.IP.String()
+			if p.IP.IsUnspecified() {
+				ip = "0.0.0.0" // 0.0.0.0 and :: are the same mapping
+			}
 		}
+		key := portKey{p.PrivatePort, p.PublicPort, p.Type, ip}
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
 		ports = append(ports, Port{Private: p.PrivatePort, Public: p.PublicPort, Type: p.Type, IP: ip})
 	}
 	return Container{

@@ -46,3 +46,30 @@ func TestFromSummaryWithoutName(t *testing.T) {
 		t.Fatal("ports must be an empty slice, not nil (JSON [])")
 	}
 }
+
+func TestFromSummaryUnspecifiedOrder(t *testing.T) {
+	c := fromSummary(container.Summary{ID: "x", Ports: []container.PortSummary{
+		{IP: netip.MustParseAddr("::"), PrivatePort: 80, PublicPort: 8080, Type: "tcp"},
+		{IP: netip.MustParseAddr("0.0.0.0"), PrivatePort: 80, PublicPort: 8080, Type: "tcp"},
+	}})
+	if len(c.Ports) != 1 || c.Ports[0].IP != "0.0.0.0" {
+		t.Fatalf("ports = %+v", c.Ports)
+	}
+}
+
+func TestFromSummarySpecificIPsStaySeparate(t *testing.T) {
+	c := fromSummary(container.Summary{ID: "x", Ports: []container.PortSummary{
+		{IP: netip.MustParseAddr("127.0.0.1"), PrivatePort: 80, PublicPort: 8080, Type: "tcp"},
+		{IP: netip.MustParseAddr("192.168.1.5"), PrivatePort: 80, PublicPort: 8080, Type: "tcp"},
+	}})
+	if len(c.Ports) != 2 || c.Ports[0].IP != "127.0.0.1" || c.Ports[1].IP != "192.168.1.5" {
+		t.Fatalf("ports = %+v", c.Ports)
+	}
+}
+
+func TestFromSummaryNameSkipsLinkAlias(t *testing.T) {
+	c := fromSummary(container.Summary{ID: "x", Names: []string{"/other/alias", "/web"}})
+	if c.Name != "web" {
+		t.Fatalf("name = %q", c.Name)
+	}
+}
