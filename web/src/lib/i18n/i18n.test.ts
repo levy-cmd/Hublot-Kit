@@ -11,6 +11,7 @@ describe('i18n', () => {
 	it('every API error code of the spec has a translation', () => {
 		for (const code of API_ERROR_CODES) {
 			expect(fr).toHaveProperty(`error.${code}`);
+			expect(en).toHaveProperty(`error.${code}`);
 		}
 	});
 
