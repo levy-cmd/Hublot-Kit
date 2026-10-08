@@ -28,6 +28,10 @@ func Open(path string) (*Log, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := f.Chmod(0o600); err != nil {
+		f.Close()
+		return nil, err
+	}
 	return &Log{f: f}, nil
 }
 
@@ -47,4 +51,8 @@ func (l *Log) Write(e Event) error {
 	return err
 }
 
-func (l *Log) Close() error { return l.f.Close() }
+func (l *Log) Close() error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.f.Close()
+}
