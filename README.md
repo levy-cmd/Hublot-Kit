@@ -27,7 +27,7 @@ Interface en mode développement (proxy vers l'agent sur 127.0.0.1:7878) :
 
 ## Notes d'exploitation
 
-- Le dossier `--data-dir` est forcé en 0700 au démarrage : utilisez un dossier dédié.
+- Le dossier `--data-dir` doit être dédié à Hublot-Kit. Absent, il est créé en 0700. Existant, ses droits ne sont pas modifiés, mais l'agent refuse de démarrer s'il est accessible en écriture au groupe ou à tous (`/tmp`, par exemple).
 - Après `hublot reset-token`, relancez l'agent : l'ancien jeton reste accepté par un agent déjà lancé.
 - Derrière un reverse proxy HTTPS, renseignez `--public-origin`.
 

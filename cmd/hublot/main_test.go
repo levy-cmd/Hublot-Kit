@@ -103,7 +103,38 @@ func TestRunListenFailureKeepsNoOrphanToken(t *testing.T) {
 	}
 }
 
-func TestRunTightensDataDir(t *testing.T) {
+func modeOf(t *testing.T, dir string) os.FileMode {
+	t.Helper()
+	fi, err := os.Stat(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return fi.Mode().Perm()
+}
+
+func TestRunRefusesWritableDataDir(t *testing.T) {
+	for _, sub := range [][]string{nil, {"reset-token"}} {
+		dir := t.TempDir()
+		if err := os.Chmod(dir, 0o777); err != nil {
+			t.Fatal(err)
+		}
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		var out, errb bytes.Buffer
+		args := append(sub, "--data-dir", dir, "--listen", "127.0.0.1:0")
+		if code := run(ctx, args, noenv, &out, &errb); code != 1 || !strings.Contains(errb.String(), dir) {
+			t.Fatalf("%v: code %d, stderr %q", sub, code, errb.String())
+		}
+		if m := modeOf(t, dir); m != 0o777 {
+			t.Fatalf("%v: mode changed to %v", sub, m)
+		}
+		if _, err := os.Stat(filepath.Join(dir, "token.sha256")); !os.IsNotExist(err) {
+			t.Fatalf("%v: no token may be written, stat err: %v", sub, err)
+		}
+	}
+}
+
+func TestRunKeepsExistingDataDirMode(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.Chmod(dir, 0o755); err != nil {
 		t.Fatal(err)
@@ -114,12 +145,21 @@ func TestRunTightensDataDir(t *testing.T) {
 	if code := run(ctx, []string{"--data-dir", dir, "--listen", "127.0.0.1:0"}, noenv, &out, &errb); code != 0 {
 		t.Fatalf("code %d, stderr %q", code, errb.String())
 	}
-	fi, err := os.Stat(dir)
-	if err != nil {
-		t.Fatal(err)
+	if m := modeOf(t, dir); m != 0o755 {
+		t.Fatalf("mode changed to %v", m)
 	}
-	if fi.Mode().Perm() != 0o700 {
-		t.Fatalf("perm %v", fi.Mode().Perm())
+}
+
+func TestRunCreatesDataDir0700(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "new", "data")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	var out, errb bytes.Buffer
+	if code := run(ctx, []string{"--data-dir", dir, "--listen", "127.0.0.1:0"}, noenv, &out, &errb); code != 0 {
+		t.Fatalf("code %d, stderr %q", code, errb.String())
+	}
+	if m := modeOf(t, dir); m != 0o700 {
+		t.Fatalf("mode %v, want 0700", m)
 	}
 }
 

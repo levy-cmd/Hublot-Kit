@@ -8,6 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"io/fs"
 	"net"
 	"net/http"
 	"os"
@@ -62,13 +63,7 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 		fmt.Fprintln(stderr, "configuration :", err)
 		return 2
 	}
-	if err := os.MkdirAll(cfg.DataDir, 0o700); err == nil {
-		err = os.Chmod(cfg.DataDir, 0o700)
-		if err != nil {
-			fmt.Fprintf(stderr, "dossier de données %s : %v\n", cfg.DataDir, err)
-			return 1
-		}
-	} else {
+	if err := prepareDataDir(cfg.DataDir); err != nil {
 		fmt.Fprintf(stderr, "dossier de données %s : %v\n", cfg.DataDir, err)
 		return 1
 	}
@@ -167,6 +162,29 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 		}
 	}
 	return 0
+}
+
+// prepareDataDir creates the data directory with mode 0700 if it does not
+// exist. An existing directory keeps its mode (never chmod /tmp, ., $HOME…),
+// but one writable by group or others is refused: the token lives there.
+func prepareDataDir(dir string) error {
+	fi, err := os.Stat(dir)
+	if errors.Is(err, fs.ErrNotExist) {
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return err
+		}
+		return os.Chmod(dir, 0o700)
+	}
+	if err != nil {
+		return err
+	}
+	if !fi.IsDir() {
+		return errors.New("ce n'est pas un dossier")
+	}
+	if fi.Mode().Perm()&0o022 != 0 {
+		return fmt.Errorf("accessible en écriture au groupe ou à tous (%v) ; utilisez un dossier dédié, par exemple /var/lib/hublot-kit", fi.Mode().Perm())
+	}
+	return nil
 }
 
 func isLoopback(addr string) bool {
