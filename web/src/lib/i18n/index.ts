@@ -19,6 +19,9 @@ export function detectLang(navLang: string | undefined): Lang {
 
 const lang: Lang = typeof navigator === 'undefined' ? 'fr' : detectLang(navigator.language);
 
+// Screen readers and hyphenation follow <html lang>; app.html ships a static default.
+if (typeof document !== 'undefined') document.documentElement.lang = lang;
+
 export function t(key: Key): string {
 	return dicts[lang][key];
 }

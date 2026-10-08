@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -309,5 +310,37 @@ func TestCSPCarriesScriptHashesFromDeps(t *testing.T) {
 	h.ServeHTTP(rec, httptest.NewRequest("GET", "/api/nope", nil))
 	if csp := rec.Header().Get("Content-Security-Policy"); !strings.Contains(csp, "script-src 'self' 'sha256-Zm9v';") {
 		t.Fatalf("CSP %q lacks the hash", csp)
+	}
+}
+
+func TestThrottleLogSweepsAtMostOncePerWindow(t *testing.T) {
+	old := throttleSweepThreshold
+	throttleSweepThreshold = 10
+	t.Cleanup(func() { throttleSweepThreshold = old })
+	t0 := time.Now()
+	now := t0
+	tl := &throttleLog{last: map[string]time.Time{}, now: func() time.Time { return now }}
+	add := func(prefix string, n int) {
+		for i := 0; i < n; i++ {
+			tl.shouldLog(fmt.Sprintf("%s%d", prefix, i))
+		}
+	}
+	add("a", 12) // sweep at t0
+	now = t0.Add(5 * time.Second)
+	add("b", 11) // no sweep: last one was 5 s ago
+	now = t0.Add(61 * time.Second)
+	add("c", 1) // sweep: a* expire
+	if _, ok := tl.last["a0"]; ok {
+		t.Fatal("a0 should have been swept")
+	}
+	now = t0.Add(66 * time.Second) // b* expired, but the last sweep was 5 s ago
+	add("d", 1)
+	if _, ok := tl.last["b0"]; !ok {
+		t.Fatal("b0 swept again within the same window")
+	}
+	now = t0.Add(122 * time.Second)
+	add("e", 1)
+	if _, ok := tl.last["b0"]; ok {
+		t.Fatal("b0 should have been swept one window later")
 	}
 }

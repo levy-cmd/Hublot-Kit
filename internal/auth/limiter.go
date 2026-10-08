@@ -14,6 +14,8 @@ type Limiter struct {
 	window time.Duration
 	now    func() time.Time
 	fails  map[string][]time.Time
+	// lastSweep bounds the full-map sweep to once per window.
+	lastSweep time.Time
 }
 
 func NewLimiter(max int, window time.Duration, now func() time.Time) *Limiter {
@@ -51,8 +53,9 @@ func (l *Limiter) Fail(key string) {
 		pruned = pruned[len(pruned)-l.max+1:]
 	}
 	l.fails[key] = append(pruned, l.now())
-	// Sweep idle keys if map is getting large
-	if len(l.fails) > sweepThreshold {
+	// Sweep idle keys if the map is getting large, at most once per window.
+	if now := l.now(); len(l.fails) > sweepThreshold && now.Sub(l.lastSweep) >= l.window {
+		l.lastSweep = now
 		for k := range l.fails {
 			l.prune(k)
 		}

@@ -32,11 +32,15 @@ type Deps struct {
 // logClock is the clock used by throttleLog; tests may replace it before New.
 var logClock = time.Now
 
+// throttleSweepThreshold is the map size above which throttleLog drops stale IPs.
+var throttleSweepThreshold = 1024
+
 // throttleLog limits a repeated audit line to once per IP per minute.
 type throttleLog struct {
-	mu   sync.Mutex
-	last map[string]time.Time
-	now  func() time.Time
+	mu        sync.Mutex
+	last      map[string]time.Time
+	now       func() time.Time
+	lastSweep time.Time
 }
 
 func (t *throttleLog) shouldLog(ip string) bool {
@@ -46,7 +50,8 @@ func (t *throttleLog) shouldLog(ip string) bool {
 	if at, ok := t.last[ip]; ok && now.Sub(at) < time.Minute {
 		return false
 	}
-	if len(t.last) > 1024 {
+	if len(t.last) > throttleSweepThreshold && now.Sub(t.lastSweep) >= time.Minute {
+		t.lastSweep = now
 		for k, at := range t.last {
 			if now.Sub(at) >= time.Minute {
 				delete(t.last, k)

@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"fmt"
 	"testing"
 	"time"
 )
@@ -94,5 +95,36 @@ func TestLimiterSweepsIdleKeys(t *testing.T) {
 		if _, ok := l.fails[key]; ok {
 			t.Fatalf("old key %s should have been swept", key)
 		}
+	}
+}
+
+func TestLimiterSweepsAtMostOncePerWindow(t *testing.T) {
+	old := sweepThreshold
+	sweepThreshold = 10
+	t.Cleanup(func() { sweepThreshold = old })
+	c := newClock()
+	l := NewLimiter(5, time.Minute, c.now)
+	add := func(prefix string, n int) {
+		for i := 0; i < n; i++ {
+			l.Fail(fmt.Sprintf("%s%d", prefix, i))
+		}
+	}
+	add("a", 12) // sweep now
+	c.add(5 * time.Second)
+	add("b", 11) // no sweep: last one was 5 s ago
+	c.add(56 * time.Second)
+	add("c", 1) // sweep: a* expire
+	if _, ok := l.fails["a0"]; ok {
+		t.Fatal("a0 should have been swept")
+	}
+	c.add(5 * time.Second) // b* expired, but the last sweep was 5 s ago
+	add("d", 1)
+	if _, ok := l.fails["b0"]; !ok {
+		t.Fatal("b0 swept again within the same window")
+	}
+	c.add(56 * time.Second)
+	add("e", 1)
+	if _, ok := l.fails["b0"]; ok {
+		t.Fatal("b0 should have been swept one window later")
 	}
 }
