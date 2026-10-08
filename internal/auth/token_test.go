@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -23,8 +24,11 @@ func TestGenerateToken(t *testing.T) {
 func TestEnsureTokenCreatesOnce(t *testing.T) {
 	dir := t.TempDir()
 	plain, created, err := EnsureToken(dir)
-	if err != nil || !created || plain == "" {
-		t.Fatalf("first call must create: %q %v %v", plain, created, err)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !created || plain == "" {
+		t.Fatalf("first call must create: %q %v", plain, created)
 	}
 	p := filepath.Join(dir, "token.sha256")
 	raw, err := os.ReadFile(p)
@@ -35,12 +39,29 @@ func TestEnsureTokenCreatesOnce(t *testing.T) {
 	if strings.TrimSpace(string(raw)) != hex.EncodeToString(sum[:]) {
 		t.Fatal("file must hold the hex SHA-256 of the token, never the token")
 	}
-	if st, _ := os.Stat(p); st.Mode().Perm() != 0o600 {
+	st, err := os.Stat(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.Mode().Perm() != 0o600 {
 		t.Fatalf("mode = %v, want 0600", st.Mode().Perm())
 	}
+	// Check no .token-* temp files remain
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), ".token-") {
+			t.Fatalf("temp file left behind: %s", e.Name())
+		}
+	}
 	plain2, created2, err := EnsureToken(dir)
-	if err != nil || created2 || plain2 != "" {
-		t.Fatalf("second call must not recreate nor reveal: %q %v %v", plain2, created2, err)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created2 || plain2 != "" {
+		t.Fatalf("second call must not recreate nor reveal: %q %v", plain2, created2)
 	}
 }
 
@@ -66,12 +87,28 @@ func TestVerifier(t *testing.T) {
 
 func TestResetInvalidatesOldToken(t *testing.T) {
 	dir := t.TempDir()
-	old, _, _ := EnsureToken(dir)
+	old, _, err := EnsureToken(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
 	fresh, err := ResetToken(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	v, _ := LoadVerifier(dir)
+	// Check no .token-* temp files remain
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), ".token-") {
+			t.Fatalf("temp file left behind: %s", e.Name())
+		}
+	}
+	v, err := LoadVerifier(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
 	if v.Check(old) || !v.Check(fresh) {
 		t.Fatal("reset must replace the token")
 	}
@@ -84,5 +121,64 @@ func TestLoadVerifierRejectsCorruptFile(t *testing.T) {
 	}
 	if _, err := LoadVerifier(dir); err == nil {
 		t.Fatal("corrupt file must fail")
+	}
+}
+
+func TestLoadVerifierRejectsWrongLength(t *testing.T) {
+	dir := t.TempDir()
+	// Valid hex but wrong length (not 32 bytes = 64 hex chars)
+	if err := os.WriteFile(filepath.Join(dir, "token.sha256"), []byte("abcd"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadVerifier(dir); err == nil {
+		t.Fatal("wrong-length digest must fail")
+	}
+}
+
+func TestEnsureTokenConcurrent(t *testing.T) {
+	dir := t.TempDir()
+	const n = 8
+	var wg sync.WaitGroup
+	results := make([]struct {
+		plain   string
+		created bool
+		err     error
+	}, n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			p, c, e := EnsureToken(dir)
+			results[idx].plain = p
+			results[idx].created = c
+			results[idx].err = e
+		}(i)
+	}
+	wg.Wait()
+	createdCount := 0
+	var token string
+	for i, r := range results {
+		if r.err != nil {
+			t.Fatalf("goroutine %d: %v", i, r.err)
+		}
+		if r.created {
+			createdCount++
+			token = r.plain
+			if token == "" {
+				t.Fatal("created=true but token empty")
+			}
+		} else if r.plain != "" {
+			t.Fatal("created=false but token non-empty")
+		}
+	}
+	if createdCount != 1 {
+		t.Fatalf("exactly one goroutine should have created; got %d", createdCount)
+	}
+	v, err := LoadVerifier(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !v.Check(token) {
+		t.Fatal("verifier must accept the created token")
 	}
 }
