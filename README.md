@@ -12,7 +12,7 @@ Explorer l'intérieur des conteneurs Docker d'un serveur depuis un navigateur, s
 
 Prérequis : Go 1.27+, Node 24 (≥ 22.17), Docker.
 
-    make test        # tests Go + interface
+    make test        # tests Go + interface (installe lui-même les dépendances web)
     make build       # interface compilée, puis bin/hublot
 
 Lancer l'agent sur macOS (Docker Desktop) :
