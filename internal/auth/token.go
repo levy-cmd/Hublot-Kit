@@ -17,6 +17,9 @@ import (
 
 const tokenFile = "token.sha256"
 
+// linkFile is a package-level variable for os.Link, allowing tests to override it.
+var linkFile = os.Link
+
 // GenerateToken returns 32 random bytes as unpadded base64url (43 characters).
 func GenerateToken() (string, error) {
 	b := make([]byte, 32)
@@ -62,9 +65,20 @@ func writeDigestTemp(dataDir string, tok string) (string, error) {
 	return tmpPath, nil
 }
 
+// syncDir performs a best-effort fsync of the directory.
+// Errors from Sync are ignored (not all filesystems support it).
+func syncDir(dir string) {
+	d, err := os.Open(dir)
+	if err == nil {
+		d.Sync()
+		d.Close()
+	}
+}
+
 // EnsureToken creates the token on first launch using file-locking semantics.
 // The plain token is returned only when it was just created; it is never stored.
-// Exclusive creation is enforced via os.Link; concurrent launches will have at most one succeed.
+// Exclusive creation is enforced via os.Link (or fallback exclusive open on unsupported filesystems).
+// Concurrent launches will have at most one succeed.
 func EnsureToken(dataDir string) (plain string, created bool, err error) {
 	_, err = os.Stat(filepath.Join(dataDir, tokenFile))
 	if err == nil {
@@ -83,18 +97,43 @@ func EnsureToken(dataDir string) (plain string, created bool, err error) {
 	}
 	defer os.Remove(tmpPath)
 	final := filepath.Join(dataDir, tokenFile)
-	err = os.Link(tmpPath, final)
+	err = linkFile(tmpPath, final)
 	if errors.Is(err, fs.ErrExist) {
 		return "", false, nil
 	}
 	if err != nil {
-		return "", false, err
+		// Link failed with non-ErrExist error (e.g., EPERM, EXDEV on filesystems without hard links).
+		// Fall back to exclusive direct create.
+		f, err := os.OpenFile(final, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+		if errors.Is(err, fs.ErrExist) {
+			return "", false, nil
+		}
+		if err != nil {
+			return "", false, err
+		}
+		if _, err := f.WriteString(hex.EncodeToString(digest(tok)) + "\n"); err != nil {
+			f.Close()
+			os.Remove(final)
+			return "", false, err
+		}
+		if err := f.Sync(); err != nil {
+			f.Close()
+			os.Remove(final)
+			return "", false, err
+		}
+		if err := f.Close(); err != nil {
+			os.Remove(final)
+			return "", false, err
+		}
+		syncDir(dataDir)
+		return tok, true, nil
 	}
+	syncDir(dataDir)
 	return tok, true, nil
 }
 
 // ResetToken generates a new token and replaces the stored digest atomically.
-// It fsync's the dataDir to ensure durability on filesystems that require it.
+// It performs a best-effort fsync of the dataDir for durability.
 func ResetToken(dataDir string) (string, error) {
 	tok, err := GenerateToken()
 	if err != nil {
@@ -109,12 +148,7 @@ func ResetToken(dataDir string) (string, error) {
 		os.Remove(tmpPath)
 		return "", err
 	}
-	// Best-effort fsync of dataDir for durability.
-	d, err := os.Open(dataDir)
-	if err == nil {
-		d.Sync()
-		d.Close()
-	}
+	syncDir(dataDir)
 	return tok, nil
 }
 

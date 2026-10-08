@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 )
 
@@ -135,10 +136,48 @@ func TestLoadVerifierRejectsWrongLength(t *testing.T) {
 	}
 }
 
+func TestEnsureTokenLinkUnsupported(t *testing.T) {
+	dir := t.TempDir()
+	// Swap linkFile to simulate a filesystem that doesn't support hard links.
+	oldLinkFile := linkFile
+	linkFile = func(oldname, newname string) error {
+		return syscall.EPERM
+	}
+	t.Cleanup(func() {
+		linkFile = oldLinkFile
+	})
+	plain, created, err := EnsureToken(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !created || plain == "" {
+		t.Fatalf("fallback create should succeed: %q %v", plain, created)
+	}
+	// Verify the token
+	v, err := LoadVerifier(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !v.Check(plain) {
+		t.Fatal("verifier must accept the fallback-created token")
+	}
+	// Check no .token-* temp files remain
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), ".token-") {
+			t.Fatalf("temp file left behind: %s", e.Name())
+		}
+	}
+}
+
 func TestEnsureTokenConcurrent(t *testing.T) {
 	dir := t.TempDir()
 	const n = 8
 	var wg sync.WaitGroup
+	start := make(chan struct{})
 	results := make([]struct {
 		plain   string
 		created bool
@@ -148,12 +187,14 @@ func TestEnsureTokenConcurrent(t *testing.T) {
 		wg.Add(1)
 		go func(idx int) {
 			defer wg.Done()
+			<-start // Wait for all goroutines to be ready
 			p, c, e := EnsureToken(dir)
 			results[idx].plain = p
 			results[idx].created = c
 			results[idx].err = e
 		}(i)
 	}
+	close(start) // Signal all goroutines to proceed
 	wg.Wait()
 	createdCount := 0
 	var token string
@@ -173,6 +214,16 @@ func TestEnsureTokenConcurrent(t *testing.T) {
 	}
 	if createdCount != 1 {
 		t.Fatalf("exactly one goroutine should have created; got %d", createdCount)
+	}
+	// Check no .token-* temp files remain
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), ".token-") {
+			t.Fatalf("temp file left behind: %s", e.Name())
+		}
 	}
 	v, err := LoadVerifier(dir)
 	if err != nil {
