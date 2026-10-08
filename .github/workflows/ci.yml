@@ -5,6 +5,13 @@ on:
     branches: [main]
   pull_request:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   go:
     runs-on: ubuntu-latest
@@ -42,6 +49,7 @@ jobs:
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
+          cache: false
       - run: sudo -E env "PATH=$PATH" go test -tags integration ./...
 
   binary:
@@ -58,4 +66,6 @@ jobs:
           cache: npm
           cache-dependency-path: web/package-lock.json
       - run: make build
-      - run: ./bin/hublot reset-token --data-dir "$RUNNER_TEMP/hk" | grep -q "jeton"
+      - run: |
+          out=$(./bin/hublot reset-token --data-dir "$RUNNER_TEMP/hk")
+          echo "$out" | grep -q "jeton"
