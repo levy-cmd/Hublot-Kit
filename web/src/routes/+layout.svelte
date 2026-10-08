@@ -15,16 +15,23 @@
 			meta = null;
 			return;
 		}
+		let current = true;
 		getMeta()
-			.then((m) => (meta = m))
+			.then((m) => {
+				if (current) meta = m;
+			})
 			.catch((e) => {
-				if (e instanceof ApiError && e.status === 401) goto('/login');
+				if (current && e instanceof ApiError && e.status === 401) goto('/login').catch(() => {});
 			});
+		return () => {
+			current = false;
+		};
 	});
 
 	async function doLogout() {
+		meta = null;
 		await logout().catch(() => {});
-		goto('/login');
+		await goto('/login').catch(() => {});
 	}
 </script>
 

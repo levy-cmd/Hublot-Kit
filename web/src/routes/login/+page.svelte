@@ -26,8 +26,8 @@
 	<h1>{t('login.title')}</h1>
 	<form onsubmit={submit}>
 		<label for="token">{t('login.token')}</label>
-		<input id="token" type="password" autocomplete="current-password" bind:value={token} required />
-		<p class="hint">{t('login.hint')}</p>
+		<input id="token" type="password" autocomplete="current-password" aria-describedby="token-hint" bind:value={token} required />
+		<p class="hint" id="token-hint">{t('login.hint')}</p>
 		<button type="submit" disabled={busy}>{t('login.submit')}</button>
 		{#if error}<p role="alert">{error}</p>{/if}
 	</form>

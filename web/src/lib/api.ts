@@ -14,7 +14,7 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
 		res = await fetch(`/api${path}`, {
 			credentials: 'same-origin',
 			...init,
-			headers: { 'Content-Type': 'application/json', ...(init.headers ?? {}) }
+			headers: { ...(init.body !== undefined ? { 'Content-Type': 'application/json' } : {}), ...(init.headers ?? {}) }
 		});
 	} catch {
 		throw new ApiError(0, 'network');
