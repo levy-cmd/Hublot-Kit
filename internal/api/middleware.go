@@ -45,6 +45,10 @@ func stripDefaultPort(host string, scheme string) string {
 		defaultPort = "443"
 	}
 	if port == defaultPort {
+		// If h contains ":", it's an IPv6 address; re-wrap in brackets
+		if strings.Contains(h, ":") {
+			return "[" + h + "]"
+		}
 		return h
 	}
 	// Port is not default, return original with port

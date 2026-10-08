@@ -252,3 +252,42 @@ func TestCacheControlHeader(t *testing.T) {
 		t.Errorf("Cache-Control on /: want empty, got %q", got)
 	}
 }
+
+func TestOriginIPv6DefaultPortHTTP(t *testing.T) {
+	// Host "[::1]:80" with Origin "http://[::1]" should pass
+	// because :80 is the default port for http (brackets must be preserved)
+	rec := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "http://[::1]:80/api/login", nil)
+	r.Host = "[::1]:80"
+	r.Header.Set("Origin", "http://[::1]")
+	originChecker{}.wrap(ok).ServeHTTP(rec, r)
+	if rec.Code != http.StatusNoContent {
+		t.Errorf("IPv6 default port HTTP: want pass, got %d", rec.Code)
+	}
+}
+
+func TestOriginIPv6DefaultPortHTTPS(t *testing.T) {
+	// TLS + Host "[::1]:443" with Origin "https://[::1]" should pass
+	// because :443 is the default port for https (brackets must be preserved)
+	rec := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "https://[::1]:443/api/login", nil)
+	r.Host = "[::1]:443"
+	r.Header.Set("Origin", "https://[::1]")
+	originChecker{tls: true}.wrap(ok).ServeHTTP(rec, r)
+	if rec.Code != http.StatusNoContent {
+		t.Errorf("IPv6 default port HTTPS: want pass, got %d", rec.Code)
+	}
+}
+
+func TestOriginIPv6NonDefaultPort(t *testing.T) {
+	// Host "[::80]" with Origin "http://[::80]" should pass
+	// (::80 is an IPv6 address, not a port; :80 is not present to strip)
+	rec := httptest.NewRecorder()
+	r := httptest.NewRequest("POST", "http://[::80]/api/login", nil)
+	r.Host = "[::80]"
+	r.Header.Set("Origin", "http://[::80]")
+	originChecker{}.wrap(ok).ServeHTTP(rec, r)
+	if rec.Code != http.StatusNoContent {
+		t.Errorf("IPv6 non-default port: want pass, got %d", rec.Code)
+	}
+}
