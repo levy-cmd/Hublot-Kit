@@ -5,6 +5,8 @@ import (
 	"time"
 )
 
+var sweepThreshold = 1024
+
 // Limiter counts failures per key over a sliding window.
 type Limiter struct {
 	mu     sync.Mutex
@@ -43,5 +45,16 @@ func (l *Limiter) Allowed(key string) bool {
 func (l *Limiter) Fail(key string) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	l.fails[key] = append(l.prune(key), l.now())
+	pruned := l.prune(key)
+	if len(pruned) >= l.max {
+		// Keep only the newest max-1 timestamps, drop the oldest
+		pruned = pruned[len(pruned)-l.max+1:]
+	}
+	l.fails[key] = append(pruned, l.now())
+	// Sweep idle keys if map is getting large
+	if len(l.fails) > sweepThreshold {
+		for k := range l.fails {
+			l.prune(k)
+		}
+	}
 }
