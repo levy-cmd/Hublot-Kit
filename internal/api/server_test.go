@@ -277,3 +277,28 @@ func TestSecureCookieBehindTLS(t *testing.T) {
 		})
 	}
 }
+
+func TestRateLimitedAuditThrottled(t *testing.T) {
+	now := time.Now()
+	logClock = func() time.Time { return now }
+	t.Cleanup(func() { logClock = time.Now })
+	f := newFixture(t, false)
+	for i := 0; i < 5; i++ {
+		f.login(t, "mauvais")
+	}
+	count := func() int {
+		data, _ := os.ReadFile(f.auditP)
+		return strings.Count(string(data), `"result":"rate_limited"`)
+	}
+	for i := 0; i < 10; i++ {
+		f.login(t, "mauvais")
+	}
+	if n := count(); n != 1 {
+		t.Fatalf("want 1 line, got %d", n)
+	}
+	now = now.Add(61 * time.Second)
+	f.login(t, "mauvais")
+	if n := count(); n != 2 {
+		t.Fatalf("want 2 lines after a minute, got %d", n)
+	}
+}

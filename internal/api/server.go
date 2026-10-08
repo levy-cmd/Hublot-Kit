@@ -7,6 +7,8 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/levy-cmd/hublot-kit/internal/audit"
 	"github.com/levy-cmd/hublot-kit/internal/auth"
@@ -26,10 +28,41 @@ type Deps struct {
 	Static       http.Handler // embedded UI; nil in API tests
 }
 
-type server struct{ d Deps }
+// logClock is the clock used by throttleLog; tests may replace it before New.
+var logClock = time.Now
+
+// throttleLog limits a repeated audit line to once per IP per minute.
+type throttleLog struct {
+	mu   sync.Mutex
+	last map[string]time.Time
+	now  func() time.Time
+}
+
+func (t *throttleLog) shouldLog(ip string) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	now := t.now()
+	if at, ok := t.last[ip]; ok && now.Sub(at) < time.Minute {
+		return false
+	}
+	if len(t.last) > 1024 {
+		for k, at := range t.last {
+			if now.Sub(at) >= time.Minute {
+				delete(t.last, k)
+			}
+		}
+	}
+	t.last[ip] = now
+	return true
+}
+
+type server struct {
+	d        Deps
+	throttle *throttleLog
+}
 
 func New(d Deps) http.Handler {
-	s := &server{d: d}
+	s := &server{d: d, throttle: &throttleLog{last: map[string]time.Time{}, now: logClock}}
 	session := func(h http.HandlerFunc) http.Handler { return requireSession(d.Sessions, h) }
 
 	mux := http.NewServeMux()
@@ -49,8 +82,10 @@ func New(d Deps) http.Handler {
 func (s *server) login(w http.ResponseWriter, r *http.Request) {
 	ip := clientIP(r)
 	if !s.d.Limiter.Allowed(ip) {
-		if err := s.d.Audit.Write(audit.Event{Action: "login.fail", Result: "rate_limited", Remote: ip}); err != nil {
-			slog.Error("audit write", "err", err)
+		if s.throttle.shouldLog(ip) {
+			if err := s.d.Audit.Write(audit.Event{Action: "login.fail", Result: "rate_limited", Remote: ip}); err != nil {
+				slog.Error("audit write", "err", err)
+			}
 		}
 		writeError(w, http.StatusTooManyRequests, "rate_limited", "")
 		return
