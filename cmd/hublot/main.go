@@ -3,6 +3,7 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"flag"
 	"fmt"
@@ -43,6 +44,7 @@ Sous-commande :
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	go func() { <-ctx.Done(); stop() }() // a second Ctrl-C then uses the default behaviour
 	os.Exit(run(ctx, os.Args[1:], os.Getenv, os.Stdout, os.Stderr))
 }
 
@@ -60,7 +62,13 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 		fmt.Fprintln(stderr, "configuration :", err)
 		return 2
 	}
-	if err := os.MkdirAll(cfg.DataDir, 0o700); err != nil {
+	if err := os.MkdirAll(cfg.DataDir, 0o700); err == nil {
+		err = os.Chmod(cfg.DataDir, 0o700)
+		if err != nil {
+			fmt.Fprintf(stderr, "dossier de données %s : %v\n", cfg.DataDir, err)
+			return 1
+		}
+	} else {
 		fmt.Fprintf(stderr, "dossier de données %s : %v\n", cfg.DataDir, err)
 		return 1
 	}
@@ -75,6 +83,28 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 		return 0
 	}
 
+	srv := &http.Server{ReadHeaderTimeout: 10 * time.Second}
+	if cfg.TLS() {
+		cert, err := tls.LoadX509KeyPair(cfg.TLSCert, cfg.TLSKey)
+		if err != nil {
+			fmt.Fprintln(stderr, "certificat TLS :", err)
+			return 1
+		}
+		srv.TLSConfig = &tls.Config{Certificates: []tls.Certificate{cert}}
+	}
+
+	if !isLoopback(cfg.Listen) && !cfg.TLS() {
+		fmt.Fprintf(stderr, "ATTENTION : écoute sur %s sans TLS. À réserver à un conteneur publié sur 127.0.0.1 ou à un reverse proxy HTTPS.\n", cfg.Listen)
+	}
+
+	// Listen before creating the token, so a port conflict never burns it.
+	ln, err := net.Listen("tcp", cfg.Listen)
+	if err != nil {
+		fmt.Fprintln(stderr, "écoute :", err)
+		return 1
+	}
+	defer ln.Close()
+
 	tok, created, err := auth.EnsureToken(cfg.DataDir)
 	if err != nil {
 		fmt.Fprintln(stderr, "jeton :", err)
@@ -83,44 +113,38 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 	if created {
 		fmt.Fprintf(stdout, "Jeton d'accès (affiché une seule fois) : %s\n", tok)
 	}
+	fail := func(what string, err error) int {
+		fmt.Fprintln(stderr, what, ":", err)
+		if created {
+			fmt.Fprintln(stderr, "Le jeton affiché plus haut reste valide ; en cas de doute, lancez `hublot reset-token`.")
+		}
+		return 1
+	}
 	verifier, err := auth.LoadVerifier(cfg.DataDir)
 	if err != nil {
-		fmt.Fprintln(stderr, "jeton :", err)
-		return 1
+		return fail("jeton", err)
 	}
 	auditLog, err := audit.Open(filepath.Join(cfg.DataDir, "audit.log"))
 	if err != nil {
-		fmt.Fprintln(stderr, "journal d'audit :", err)
-		return 1
+		return fail("journal d'audit", err)
 	}
 	defer auditLog.Close()
 	docker, err := dockerx.New()
 	if err != nil {
-		fmt.Fprintln(stderr, "client Docker :", err)
-		return 1
+		return fail("client Docker", err)
 	}
 
-	if !isLoopback(cfg.Listen) && !cfg.TLS() {
-		fmt.Fprintf(stderr, "ATTENTION : écoute sur %s sans TLS. À réserver à un conteneur publié sur 127.0.0.1 ou à un reverse proxy HTTPS.\n", cfg.Listen)
-	}
-
-	handler := api.New(api.Deps{
+	srv.Handler = api.New(api.Deps{
 		Docker: docker, Verifier: verifier, Audit: auditLog, Version: version,
 		Sessions: auth.NewSessions(auth.SessionTTL, time.Now),
 		Limiter:  auth.NewLimiter(5, time.Minute, time.Now),
 		ReadOnly: cfg.ReadOnly, TLS: cfg.TLS(), PublicOrigin: cfg.PublicOrigin,
 		Static: web.Handler(),
 	})
-	ln, err := net.Listen("tcp", cfg.Listen)
-	if err != nil {
-		fmt.Fprintln(stderr, "écoute :", err)
-		return 1
-	}
-	srv := &http.Server{Handler: handler, ReadHeaderTimeout: 10 * time.Second}
 	errc := make(chan error, 1)
 	go func() {
 		if cfg.TLS() {
-			errc <- srv.ServeTLS(ln, cfg.TLSCert, cfg.TLSKey)
+			errc <- srv.ServeTLS(ln, "", "")
 		} else {
 			errc <- srv.Serve(ln)
 		}
@@ -138,6 +162,7 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 		defer cancel()
 		if err := srv.Shutdown(shutdownCtx); err != nil {
 			fmt.Fprintln(stderr, "arrêt :", err)
+			srv.Close()
 			return 1
 		}
 	}

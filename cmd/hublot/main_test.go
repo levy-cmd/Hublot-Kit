@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -82,5 +83,52 @@ func TestRunStartsAndStops(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "Jeton d'accès") {
 		t.Fatalf("first launch must print the token once: %q", out.String())
+	}
+}
+
+func TestRunListenFailureKeepsNoOrphanToken(t *testing.T) {
+	busy, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer busy.Close()
+	dir := t.TempDir()
+	var out, errb bytes.Buffer
+	code := run(context.Background(), []string{"--data-dir", dir, "--listen", busy.Addr().String()}, noenv, &out, &errb)
+	if code != 1 || strings.Contains(out.String(), "Jeton d'accès") {
+		t.Fatalf("code %d, out %q, err %q", code, out.String(), errb.String())
+	}
+	if _, err := os.Stat(filepath.Join(dir, "token.sha256")); !os.IsNotExist(err) {
+		t.Fatalf("token must not be created, stat err: %v", err)
+	}
+}
+
+func TestRunTightensDataDir(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	var out, errb bytes.Buffer
+	if code := run(ctx, []string{"--data-dir", dir, "--listen", "127.0.0.1:0"}, noenv, &out, &errb); code != 0 {
+		t.Fatalf("code %d, stderr %q", code, errb.String())
+	}
+	fi, err := os.Stat(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fi.Mode().Perm() != 0o700 {
+		t.Fatalf("perm %v", fi.Mode().Perm())
+	}
+}
+
+func TestRunBadTLSCert(t *testing.T) {
+	dir := t.TempDir()
+	var out, errb bytes.Buffer
+	code := run(context.Background(), []string{"--data-dir", dir, "--listen", "127.0.0.1:0",
+		"--tls-cert", filepath.Join(dir, "no.crt"), "--tls-key", filepath.Join(dir, "no.key")}, noenv, &out, &errb)
+	if code != 1 || strings.Contains(out.String(), "écoute sur") {
+		t.Fatalf("code %d, out %q, err %q", code, out.String(), errb.String())
 	}
 }
