@@ -31,14 +31,18 @@
 <main>
 	<h1>{t('containers.title')}</h1>
 	<div class="tools">
-		<input type="search" placeholder={t('containers.search')} bind:value={query} />
+		<input type="search" aria-label={t('containers.search')} placeholder={t('containers.search')} bind:value={query} />
 		<label><input type="checkbox" bind:checked={showAll} /> {t('containers.showAll')}</label>
 		<button type="button" onclick={load} disabled={loading}>{t('containers.refresh')}</button>
 	</div>
 
 	{#if error}<p role="alert">{error}</p>{/if}
 
-	{#if shown.length === 0 && !loading && !error}
+	{#if error}
+		<!-- error shown above -->
+	{:else if shown.length === 0 && loading}
+		<p>{t('containers.loading')}</p>
+	{:else if shown.length === 0}
 		<p>{t('containers.empty')}</p>
 	{:else}
 		<div class="scroll">

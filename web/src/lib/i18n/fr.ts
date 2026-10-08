@@ -13,6 +13,7 @@ export const fr = {
 	'containers.showAll': 'Afficher les conteneurs arrêtés',
 	'containers.refresh': 'Actualiser',
 	'containers.empty': 'Aucun conteneur',
+	'containers.loading': 'Chargement…',
 	'containers.col.name': 'Nom',
 	'containers.col.image': 'Image',
 	'containers.col.state': 'État',

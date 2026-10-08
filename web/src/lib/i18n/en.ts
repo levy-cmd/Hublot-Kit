@@ -15,6 +15,7 @@ export const en: Record<Key, string> = {
 	'containers.showAll': 'Show stopped containers',
 	'containers.refresh': 'Refresh',
 	'containers.empty': 'No containers',
+	'containers.loading': 'Loading…',
 	'containers.col.name': 'Name',
 	'containers.col.image': 'Image',
 	'containers.col.state': 'State',

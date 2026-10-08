@@ -3,7 +3,8 @@ import { t, type Key } from './i18n/index.ts';
 
 export function formatPorts(ports: Port[]): string {
 	return [...ports]
-		.sort((a, b) => Number(!a.public) - Number(!b.public) || (a.public ?? a.private) - (b.public ?? b.private))
+		.sort((a, b) => Number(!a.public) - Number(!b.public) || (a.public ?? a.private) - (b.public ?? b.private) ||
+				a.type.localeCompare(b.type))
 		.map((p) => (p.public ? `${p.public}→${p.private}/${p.type}` : `${p.private}/${p.type}`))
 		.join(', ');
 }
