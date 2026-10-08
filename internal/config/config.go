@@ -49,8 +49,12 @@ func Load(args []string, getenv func(string) string) (Config, error) {
 		return Config{}, err
 	}
 
+	if fs.NArg() > 0 {
+		return Config{}, fmt.Errorf("arguments positionnels non autorisés: %v", fs.Args())
+	}
+
 	if (c.TLSCert == "") != (c.TLSKey == "") {
-		return Config{}, errors.New("--tls-cert et --tls-key vont ensemble")
+		return Config{}, errors.New("--tls-cert/HUBLOT_TLS_CERT et --tls-key/HUBLOT_TLS_KEY vont ensemble")
 	}
 	if c.PublicOrigin != "" {
 		o, err := normalizeOrigin(c.PublicOrigin)
@@ -75,8 +79,24 @@ func normalizeOrigin(s string) (string, error) {
 	if u.Host == "" {
 		return "", errors.New("hôte manquant")
 	}
+	if u.User != nil {
+		return "", errors.New("authentification utilisateur non autorisée")
+	}
+	if strings.Contains(u.Host, "%") {
+		return "", errors.New("zone ID IPv6 non autorisée dans Host")
+	}
 	if u.Path != "" && u.Path != "/" || u.RawQuery != "" || u.Fragment != "" {
 		return "", errors.New("une origine n'a ni chemin, ni requête, ni fragment")
 	}
-	return scheme + "://" + strings.ToLower(u.Host), nil
+	if u.ForceQuery || (len(s) > 0 && s[len(s)-1] == '#') {
+		return "", errors.New("une origine n'a ni chemin, ni requête, ni fragment")
+	}
+	host := strings.ToLower(u.Host)
+	// Strip default ports
+	if scheme == "https" && strings.HasSuffix(host, ":443") {
+		host = host[:len(host)-4]
+	} else if scheme == "http" && strings.HasSuffix(host, ":80") {
+		host = host[:len(host)-3]
+	}
+	return scheme + "://" + host, nil
 }

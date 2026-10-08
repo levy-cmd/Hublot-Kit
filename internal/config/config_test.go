@@ -58,23 +58,62 @@ func TestPublicOrigin(t *testing.T) {
 		{"https://hublot.example.fr", "https://hublot.example.fr", true},
 		{"https://Hublot.Example.fr/", "https://hublot.example.fr", true},
 		{"http://localhost:7878", "http://localhost:7878", true},
+		{"https://h.example:443", "https://h.example", true},
+		{"http://h.example:80", "http://h.example", true},
+		{"https://h.example:8443", "https://h.example:8443", true},
+		{"http://[::1]:7878", "http://[::1]:7878", true},
+		{"HTTPS://H.EXAMPLE/", "https://h.example", true},
 		{"https://hublot.example.fr/app", "", false},
 		{"ftp://hublot.example.fr", "", false},
 		{"hublot.example.fr", "", false},
+		{"https://u@h.example", "", false},
+		{"http://[fe80::1%25eth0]:80", "", false},
+		{"https://", "", false},
+		{"https://h.example?", "", false},
 	}
 	for _, tc := range cases {
-		c, err := Load([]string{"--public-origin", tc.in}, env(nil))
-		if tc.ok && (err != nil || c.PublicOrigin != tc.want) {
-			t.Errorf("%q: got %q, %v; want %q", tc.in, c.PublicOrigin, err, tc.want)
-		}
-		if !tc.ok && err == nil {
-			t.Errorf("%q: want error", tc.in)
-		}
+		t.Run(tc.in, func(t *testing.T) {
+			c, err := Load([]string{"--public-origin", tc.in}, env(nil))
+			if tc.ok && (err != nil || c.PublicOrigin != tc.want) {
+				t.Errorf("got %q, %v; want %q", c.PublicOrigin, err, tc.want)
+			}
+			if !tc.ok && err == nil {
+				t.Errorf("want error")
+			}
+		})
 	}
 }
 
 func TestUnknownFlag(t *testing.T) {
 	if _, err := Load([]string{"--nope"}, env(nil)); err == nil {
 		t.Fatal("unknown flag must fail")
+	}
+}
+
+func TestFlagPrecedenceReadOnly(t *testing.T) {
+	e := env(map[string]string{"HUBLOT_READ_ONLY": "true"})
+	c, err := Load([]string{"--read-only=false"}, e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.ReadOnly {
+		t.Fatalf("flag must override env: got ReadOnly=%v", c.ReadOnly)
+	}
+}
+
+func TestEnvPublicOrigin(t *testing.T) {
+	e := env(map[string]string{"HUBLOT_PUBLIC_ORIGIN": "https://hublot.example.fr"})
+	c, err := Load(nil, e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.PublicOrigin != "https://hublot.example.fr" {
+		t.Fatalf("env not applied: got %q", c.PublicOrigin)
+	}
+}
+
+func TestPositionalArgs(t *testing.T) {
+	if _, err := Load([]string{"foo"}, env(nil)); err == nil {
+		t.Fatal("positional args must fail")
 	}
 }
