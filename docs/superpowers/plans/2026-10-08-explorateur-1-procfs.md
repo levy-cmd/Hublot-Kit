@@ -6,7 +6,7 @@
 >
 > **Apprendre Go :** les tâches marquées 🎓 (1 et 2) n'utilisent que la bibliothèque standard, sans Linux ni Docker. Elles se codent bien à la main en suivant le plan.
 >
-> **Vérifié avant rédaction (après les corrections de revue) :** le code Go de ce plan a été compilé et testé sur une copie du dépôt, sur macOS et sous Linux dans un conteneur `golang`, en root comme en non-root, avec `-race` et avec `-tags integration` sur Docker Desktop. Les états intermédiaires ont été rejoués : après la tâche 4, 20 tests rouges sur 21 ; les tâches 5 et 6 compilent et passent. Les nouveaux tests ont été éprouvés par mutation : un `Reopen` placé avant le contrôle du type, l'absence de `pidfd_send_signal` ou un créneau rendu avant la copie les font échouer. Le code de l'interface a passé `npm run check`, `eslint`, Vitest et `npm run build`. Il a aussi été parcouru dans Chrome sans tête, contre l'agent lancé par `scripts/dev-agent.sh` : liste, lien vers un fichier, `/proc`, téléchargement de `/` refusé avec son message, `/etc` accepté, `link_in_path` sur un dossier atteint par un lien, aucune erreur console. Le scénario C1 (bind du `/proc` de l'hôte) n'a **pas** été rejoué contre un vrai dockerd : il ne se teste qu'avec le faux client. Les VM Lima n'ont pas été lancées : la tâche 16 le fait.
+> **Vérifié avant rédaction (après deux tours de revue) :** le code Go de ce plan a été compilé et testé sur une copie du dépôt, sur macOS et sous Linux dans un conteneur `golang`, en root comme en non-root, avec `-race` et avec `-tags integration` sur Docker Desktop. Les états intermédiaires ont été rejoués : après la tâche 4, 20 tests rouges sur 21 ; les tâches 5 et 6 compilent et passent. Les nouveaux tests ont été éprouvés par mutation (premier tour) : un `Reopen` placé avant le contrôle du type, l'absence de `pidfd_send_signal` dans `openRoot` ou un créneau rendu avant la copie les font échouer. Au second tour, d'autres mutations sont détectées : la perte de `mounts: info.Mounts` dans `openProcFS`, la perte de la règle « tout le conteneur », une erreur de `VolumeOptions` renvoyée telle quelle, un pilote de volume tiers accepté, l'option `type=` ignorée, un échappement de `mountinfo` invalide accepté. La mutation « `pidfd_send_signal` retiré de `CheckArchive` » n'a pas pu être rejouée : Docker Desktop a cessé de répondre (disque de l'hôte plein) ; à rejouer avant l'exécution de la tâche 7. Le code de l'interface a passé `npm run check`, `eslint`, Vitest et `npm run build`. Il a aussi été parcouru dans Chrome sans tête, contre l'agent lancé par `scripts/dev-agent.sh` : liste, lien vers un fichier, `/proc`, téléchargement de `/` refusé avec son message, `/etc` accepté, `link_in_path` sur un dossier atteint par un lien, aucune erreur console. Le scénario C1 (bind du `/proc` de l'hôte) n'a **pas** été rejoué contre un vrai dockerd : il ne se teste qu'avec le faux client. Les VM Lima n'ont pas été lancées : la tâche 16 le fait.
 
 **Goal:** Sur un conteneur qui tourne, l'utilisateur parcourt toute l'arborescence. Il voit la taille, les droits et le propriétaire de chaque entrée, prévisualise un fichier texte ou une image, et télécharge un fichier ou un dossier (tar). Aucune lecture, ni de l'agent ni de Docker, ne peut sortir de la racine du conteneur vers l'hôte.
 
@@ -48,6 +48,28 @@ Revue du plan par un relecteur Opus et par Codex, constats vérifiés. Une ligne
 - **M7 :** l'ancienne tâche 13 est scindée en tâche 14 (page) et tâche 15 (agent de dev, essai manuel, README).
 - **M8 :** ne pas pousser entre les tâches 4 et 5. → Tâche 4.
 - **Q1 à Q7 :** recommandations conservées (le relecteur est d'accord), à confirmer par l'utilisateur.
+
+Second tour (relecteur Opus et Codex sur la version `af9a207`, constats vérifiés) :
+
+- **R1 (câblage de C1) :** trois tests le couvrent.
+  - (i) `TestForWiresMountsIntoCheckArchive` : `For` avec un faux Docker, dont le « conteneur » est un `sleep` du test, plus l'injection `readCgroup`. `CheckArchive("/etc")` doit refuser en nommant le bind. → Tâche 7.
+  - (ii) `TestCheckArchiveDeadProcess` passe par l'injection `readMountinfo` : il lit le vrai contenu, tue et récolte l'enfant, rend le contenu, puis exige `ErrContainerChanged` et que le pid lu soit `p.pid`. → Tâche 7.
+  - (iii) `TestDownloadMountCheckThroughTheRealView` passe par la route, à travers `fsRequest` et l'`OpenFS` réel, grâce à `fsview.SetCgroupReaderForTests`. Il vérifie le statut, le code et zéro `GetArchive`. → Tâche 12.
+- **R2 :** quatre volets.
+  - (1) Règle « tout le conteneur » (`PseudoMountInMounts`) : un pseudo-système ou un FUSE monté sur ou sous la destination d'un montage d'`Inspect.Mounts` refuse tout tar. La règle par dossier reste.
+  - (2) `HostBind` refuse aussi un volume `local` dont l'option `type` est un pseudo-système ou FUSE, et tout volume d'un autre pilote (inconnu : refus).
+  - (3) Spec §5.2 étape 7 mise à jour. → Tâche 7.
+  - (4) La note sur les sous-montages d'un `rbind` est nuancée (propagation `rprivate`), ainsi que la limite §13. → Tâches 7, 12.
+- **R3 (course entre `CheckArchive` et `GetArchive`) :** limite assumée, sans mécanisme en plus, écrite dans la spec §5.4 et §13. Monter quoi que ce soit dans un conteneur actif exige un conteneur privilégié, donc déjà root sur l'hôte ; dockerd archive à partir des montages configurés (mesuré) ; et R2 (1) couvre tout le conteneur. À remesurer sur `hk-ubuntu`. → Tâches 12, 16.
+- **R4 :** tout échec de `VolumeOptions` donne `ErrForbiddenPath`, avec le nom du volume et sa destination dans le détail. Le test qui acceptait `ErrNotFound` est corrigé, et un test de route vérifie statut, code et zéro `GetArchive`. → Tâches 7, 12.
+- **R5 :** cas `mountinfo` explicites : deux montages empilés au même point, champs de propagation (`shared:`, `master:`, `propagate_from:`), échappements `\011`, `\012`, `\134`. Un échappement invalide fait refuser (échec fermé). → Tâche 7.
+- **R6 :** six points.
+  - Tâche 8 : attendre que `List("/")` montre `m` au lieu d'un `sleep` ; la mesure de Q8 ne conclut « ne voit pas » que sur `dockerx.ErrNotFound`, sinon elle dit « non concluante ».
+  - Tâche 4 : un lien vers `/proc/self/root`, efficace sans root (CI).
+  - Tâche 16 : `/` et `/sys` aussi par `&check=1`.
+  - Tâche 10 : la borne de 10 s d'`Inspect` est notée « non testée ».
+  - Tâche 12 : la puce §7 devient « Binds de l'hôte (conteneur actif) » et rappelle que le tar y est refusé.
+- **Q8 :** le refus strict reste en v0.1 (recommandation retenue, à confirmer). **Portée de (a) :** tout dossier du conteneur (retenue).
 
 ## Découpage de la phase Explorateur (semaines 5 à 9)
 
@@ -112,7 +134,8 @@ Le plan suit la recommandation de chaque question. Pour Q1 à Q7, la recommandat
   - En cgroup v2 (une seule ligne `0::`), c'est exactement la règle de la spec.
 - **Q8 (nouvelle, issue de C1) — Le `/` d'un conteneur actif.** La règle (b) de C1 refuse le tar de `/`, `/proc` et `/sys` d'un conteneur actif, parce que son propre `/proc` est monté dessous. Or une mesure sûre (tâche 8, `TestIntegrationMeasureOwnProcInArchive`, Docker Desktop, Docker 29) montre que le tar d'un conteneur actif **ne voit pas** son propre `/proc` : seuls les binds et volumes y sont montés. Le refus de `/` est donc plus strict que nécessaire.
   - On ne peut pas l'assouplir simplement : dans `mountinfo`, le `/proc` du conteneur et un bind du `/proc` de l'hôte ont le même type.
-  - *Recommandation :* garder la règle stricte en v0.1. L'interface explique de télécharger un sous-dossier. Mesurer de nouveau sur `hk-ubuntu` (tâche 16) avant tout assouplissement, par exemple ne compter que les montages situés sous une destination d'`Inspect.Mounts`.
+  - *Recommandation (retenue, à confirmer par l'utilisateur) :* garder la règle stricte en v0.1. L'interface explique de télécharger un sous-dossier. Mesurer de nouveau sur `hk-ubuntu` (tâche 16) avant tout assouplissement, par exemple ne compter que les montages situés sous une destination d'`Inspect.Mounts` (règle R2 (1), déjà en place).
+  - Portée de la règle (a) (binds) : tout dossier du conteneur, comme pour l'explorateur d'un conteneur arrêté (retenue).
 
 ## Décisions de ce plan (la spec ne tranche pas)
 
@@ -205,7 +228,8 @@ Le plan suit la recommandation de chaque question. Pour Q1 à Q7, la recommandat
 | Pseudo-systèmes par `fstatfs`, lien vers `/proc` (§5.1 ét. 9) | Tâche 4 | Tâche 5 |
 | Chemin sans lien pour le téléchargement d'un dossier (§5.4) | Tâche 4 (`TestStatNoLinks`) | Tâche 5 (`StatNoLinks`) ; tâche 12 (route) |
 | PID réattribué, mauvais cgroup, process mort avant `pidfd_send_signal` (§5.1 ét. 2–5, revue I4) | Tâche 6, étape 1 | Tâche 6, étape 3 |
-| Tar d'un dossier qui traverserait l'hôte : binds, pseudo-systèmes, FUSE (§5.2 ét. 7, §5.4, revue C1) | Tâche 7, étape 1 (faux client, process de test) | Tâche 7, étape 3 ; route : tâche 12, étape 1 → étape 2 (aucun `GetArchive` dans les cas refusés) |
+| Tar d'un dossier qui traverserait l'hôte : binds, volumes `type=`/pilotes tiers, options illisibles, pseudo-systèmes ou FUSE sous le dossier ou sous un montage Docker, `mountinfo` piégé (§5.2 ét. 7, §5.4, revue C1, R2, R4, R5) | Tâche 7, étape 1 (faux client, process de test) | Tâche 7, étape 3 |
+| Câblage de ce contrôle : `Inspect.Mounts` → `For` → `CheckArchive`, pidfd vivant après `mountinfo`, route sans `GetArchive` (revue R1) | Tâche 7, étape 1 (i, ii) ; tâche 12, étape 1 (iii) | Tâche 7, étape 3 (déjà câblé par la tâche 6 : le test le prouve) ; tâche 12, étape 2 |
 | Contenu actif servi en texte (§7) | Tâche 11, étape 1 | Tâche 11, étape 2 |
 
 Entre la tâche 4 et la tâche 5, `go test ./internal/fsview/` échoue **sous Linux** : c'est voulu, les tests sont relus seuls avant l'implémentation. Sur macOS, ces fichiers ne sont pas compilés. **Ne pas pousser la branche entre les tâches 4 et 5** (M8).
@@ -229,8 +253,8 @@ internal/fsview/cgroup.go                 CgroupHasID, NoteCgroupNamespace, chan
 internal/fsview/pseudofs_linux.go         les 15 pseudo-systèmes refusés (fstatfs)
 internal/fsview/procfs_linux.go           procFS : List, Stat, Open, StatNoLinks, Close
 internal/fsview/procfs_archive_linux.go   procFS.CheckArchive (binds + mountinfo)
-internal/fsview/mounts.go                 HostBind, PseudoMountUnder (portables)
-internal/fsview/root_linux.go             openRoot/OpenRoot (pidfd + cgroup + /proc/<pid>/root), openProcFS
+internal/fsview/mounts.go                 HostBind, PseudoMountUnder, PseudoMountInMounts (portables)
+internal/fsview/root_linux.go             openRoot/OpenRoot (pidfd + cgroup + /proc/<pid>/root), openProcFS, SetCgroupReaderForTests
 internal/fsview/procfs_other.go           repli hors Linux
 internal/fsview/for.go                    For(ctx, docker, id)
 internal/fsview/memfs.go                  MemFS : faux FS pour les tests d'autres paquets
@@ -242,6 +266,7 @@ internal/api/fserr.go                     erreurs → codes §6
 internal/api/fs.go                        fsRequest (Inspect d'abord), GET /fs
 internal/api/fs_preview.go                GET /fs/file
 internal/api/fs_download.go               GET /fs/download (&check=1)
+internal/api/fs_download_linux_test.go    contrôle des montages par la route, vue procfs réelle (sans Docker)
 internal/api/integration_test.go          bout en bout (tag integration)
 cmd/hublot/main.go                        + contrôle cgroupns au démarrage
 scripts/test-linux.sh, scripts/test.Dockerfile, scripts/dev-agent.sh
@@ -1186,7 +1211,7 @@ EOF
 > - Chaque piège a un *contrôle* : la lecture naïve par le chemin de l'hôte, elle, doit sortir de la racine ; sinon le piège ne prouve rien.
 > - `assertNoEscape` distingue deux échecs (revue M1) : « ÉVASION » si le secret de l'hôte a été lu, « mauvaise erreur » si l'appel a échoué autrement qu'attendu.
 > - Une racine de conteneur est simulée par un dossier temporaire ouvert en `O_PATH|O_DIRECTORY`, comme `/proc/<pid>/root`.
-> - Les tests des pseudo-systèmes et des liens magiques prennent la vraie racine `/` de la machine de test, dont `/proc` et `/sys` sont réels. Suivre `/proc/1/root` y ramènerait sur un fichier lisible : le test exige une erreur (revue I2).
+> - Les tests des pseudo-systèmes et des liens magiques prennent la vraie racine `/` de la machine de test, dont `/proc` et `/sys` sont réels. Suivre `/proc/1/root` ou `/proc/self/root` y ramènerait sur un fichier lisible : le test exige une erreur (revue I2). Le lien vers `/proc/self/root` garde le test utile sans root (job CI `go`), où `/proc/1/root` est de toute façon refusé (revue R6).
 > - `TestRefusalHappensBeforeReopen` (revue I1) surveille la FIFO et le nœud de périphérique par `inotify`. Un refus correct ne les ouvre **jamais** en lecture : zéro `IN_OPEN`. Une ouverture `O_PATH` n'en produit pas ; si le noyau en produisait, le test se sauterait avec un message.
 > - Le squelette renvoie une erreur partout : 20 tests sur 21 échouent. Seul `TestSymlinkLoopFails` passe, car il n'exige qu'une erreur.
 >
@@ -1745,21 +1770,29 @@ func TestRefusalHappensBeforeReopen(t *testing.T) {
 
 // A magic link (/proc/<pid>/root) leads out of any root: never followed,
 // directly or through an ordinary link. The test machine's "/" is the root:
-// following /proc/1/root would land on a readable file.
+// following it would land on a readable file. /proc/self/root works without
+// root (CI job "go"); /proc/1/root needs it.
 func TestMagicLinksNeverFollowed(t *testing.T) {
 	host := openTestRoot(t, "/")
 	dir := t.TempDir()
 	must(t, os.Symlink("/proc/1/root", filepath.Join(dir, "m")))
-	for _, p := range []string{"/proc/1/root/etc/hostname", "/proc/self/root/etc/hostname", dir + "/m/etc/hostname"} {
+	must(t, os.Symlink("/proc/self/root", filepath.Join(dir, "s")))
+	if _, err := os.ReadFile(dir + "/s/etc/hostname"); err != nil {
+		t.Fatalf("contrôle : la lecture naïve par /proc/self/root doit réussir : %v", err)
+	}
+	for _, p := range []string{"/proc/1/root/etc/hostname", "/proc/self/root/etc/hostname",
+		dir + "/m/etc/hostname", dir + "/s/etc/hostname"} {
 		if b, err := readAll(host, p); err == nil {
 			t.Errorf("%s lu (%d octets) : un lien magique ne doit jamais être suivi", p, len(b))
 		}
 	}
-	if entries, _, err := host.List(ctx, dir+"/m"); err == nil {
-		t.Errorf("List par un lien magique : %d entrées", len(entries))
-	}
-	if _, err := host.StatNoLinks(ctx, dir+"/m/etc"); !errors.Is(err, ErrLinkInPath) {
-		t.Errorf("StatNoLinks par un lien magique : %v", err)
+	for _, l := range []string{"/m", "/s"} {
+		if entries, _, err := host.List(ctx, dir+l); err == nil {
+			t.Errorf("List par le lien magique %s : %d entrées", l, len(entries))
+		}
+		if _, err := host.StatNoLinks(ctx, dir+l+"/etc"); !errors.Is(err, ErrLinkInPath) {
+			t.Errorf("StatNoLinks par le lien magique %s : %v", l, err)
+		}
 	}
 }
 ```
@@ -2119,7 +2152,7 @@ EOF
 - Consumes: `CgroupHasID`, `NoteCgroupNamespace`, `changed` (tâche 2) ; `procFS` (tâche 5) ; `dockerx.Client.Inspect`, `dockerx.ContainerInfo` (avec `Mounts`), `dockerx.ErrNotFound`, `dockerx.Fake.Infos` (tâche 3)
 - Produces:
   - `func OpenRoot(pid int, containerID string) (*os.File, error)` (Linux) et `openRoot(pid, id) (*os.File, pidfd int, error)` (interne) ;
-  - points d'injection de test `var readCgroup func(pid int) ([]byte, error)` et `var afterRootOpen func()` ;
+  - points d'injection de test `var readCgroup func(pid int) ([]byte, error)` et `var afterRootOpen func()`, plus `func SetCgroupReaderForTests(f func(pid int) ([]byte, error)) (restore func())` pour les tests d'autres paquets (tâche 12, revue R1) ;
   - `func For(ctx context.Context, docker dockerx.Client, id string) (FS, error)` et `openProcFS(docker dockerx.Client, info dockerx.ContainerInfo) (FS, error)` (interne, Linux et repli) ;
   - dans `main` : `var selfCgroup func() ([]byte, error)`.
 
@@ -2309,6 +2342,16 @@ var (
 	afterRootOpen = func() {}
 )
 
+// SetCgroupReaderForTests replaces the reading of /proc/<pid>/cgroup and
+// returns the function that restores it. Tests of other packages (api) use it
+// to drive a real procfs view of one of their own processes through the real
+// wiring; production code never calls it.
+func SetCgroupReaderForTests(f func(pid int) ([]byte, error)) (restore func()) {
+	old := readCgroup
+	readCgroup = f
+	return func() { readCgroup = old }
+}
+
 // openRoot runs spec §5.1 steps 2 to 5 and returns an O_PATH descriptor on the
 // root directory of the container whose main process is pid, and the pidfd
 // that pins this process. The caller closes both.
@@ -2459,28 +2502,33 @@ EOF
 
 **Files:**
 - Create: `internal/fsview/mounts.go`, `internal/fsview/mounts_test.go`, `internal/fsview/procfs_archive_linux_test.go`
-- Modify: `internal/fsview/procfs_archive_linux.go` (remplace la garde fermée)
+- Modify: `internal/fsview/procfs_archive_linux.go` (remplace la garde fermée), `docs/superpowers/specs/2026-10-07-hublot-kit-v0.1-design.md` (§5.2 étape 7)
 
 **Interfaces:**
-- Consumes: `procFS` et ses champs (tâche 5) ; `openRoot`, `openProcFS` (tâche 6) ; `dockerx.Mount`, `dockerx.Client.VolumeOptions`, `dockerx.Fake.Volumes` (tâche 3) ; `ErrForbiddenPath`, `changed`, `CleanPath`
+- Consumes: `procFS` et ses champs (tâche 5) ; `openRoot`, `openProcFS`, `For`, `SetCgroupReaderForTests` (tâche 6) ; `dockerx.Mount`, `dockerx.Client.VolumeOptions`, `dockerx.Fake.Volumes` (tâche 3) ; `ErrForbiddenPath`, `changed`, `CleanPath`
 - Produces:
   - `func HostBind(ctx context.Context, docker dockerx.Client, mounts []dockerx.Mount) error` ;
   - `func PseudoMountUnder(mountinfo, dir string) (mountPoint, fsType string, found bool)` ;
+  - `func PseudoMountInMounts(mountinfo string, mounts []dockerx.Mount) (mountPoint, fsType, destination string, found bool)` ;
   - `(*procFS) CheckArchive(ctx, dir) error` ;
-  - `var readMountinfo func(pid int) ([]byte, error)` (interne).
+  - `var readMountinfo func(pid int) ([]byte, error)` (interne, point d'injection de test).
 
 > **À comprendre :** Docker construit `GET /archive` d'un dossier avec les binds et les volumes du conteneur montés dedans. En revue, le tar de `/host`, sur un conteneur lancé avec `-v /proc:/host/proc`, a lu `/proc/kcore` de l'hôte (254 Tio) : dockerd est resté bloqué et le conteneur verrouillé. Nos contrôles de §5.1 ne voient rien de cela : c'est **Docker** qui lit, pas nous. D'où deux contrôles avant tout `GetArchive` de dossier.
 >
 > - **(a) `HostBind` : la règle de §5.2 étape 7.** Elle porte sur `Inspect.Mounts` : un bind dont la source est `/`, `/proc`, `/sys` ou en dessous, ou exactement `/dev`, est refusé.
 >   - Un volume `local` dont les options `o` contiennent `bind` ou `rbind`, avec un `device=…`, est un bind déguisé : sa source est le `device`.
->   - Des options illisibles font refuser (fermé par défaut).
+>   - Un volume `local` dont l'option `type` est un pseudo-système ou FUSE est refusé (revue R2).
+>   - Tout volume d'un autre pilote est refusé : on ne sait pas ce qu'il monte, donc fermé par défaut (revue R2).
+>   - Des options illisibles font refuser par `ErrForbiddenPath`, avec le nom du volume et sa destination (revue R4).
 >   - Le refus vaut pour tout dossier du conteneur, comme pour l'explorateur d'un conteneur arrêté.
-> - **(b) `PseudoMountUnder` : `/proc/<pid>/mountinfo`.** Ce fichier de l'hôte est lu pour le process épinglé par le pidfd, qui doit être vivant *après* la lecture. Ses points de montage sont relatifs à la racine du conteneur.
->   - Un montage de l'un des 15 pseudo-systèmes ou FUSE (`fuse`, `fuseblk`, `fuse.*`) sur, sous ou au-dessus du dossier fait refuser. Un serveur FUSE muet bloquerait dockerd comme `/proc` (§13).
->   - Ce contrôle voit aussi les sous-montages d'un `rbind` (`-v /:/host` montre `/host/proc`), que `Inspect.Mounts` ne montre pas.
->   - Une ligne illisible fait refuser.
+> - **(b) `/proc/<pid>/mountinfo`.** Ce fichier de l'hôte est lu pour le process épinglé par le pidfd, qui doit être vivant *après* la lecture. Ses points de montage sont relatifs à la racine du conteneur. On y cherche les montages de l'un des 15 pseudo-systèmes ou FUSE (`fuse`, `fuseblk`, `fuse.*`) : un serveur FUSE muet bloquerait dockerd comme `/proc` (§13). Deux règles s'appliquent :
+>   - **pour tout le conteneur** (`PseudoMountInMounts`, revue R2) : un tel montage sur ou sous la destination d'un montage d'`Inspect.Mounts` refuse tout tar, car dockerd remonte ces montages pour tout tar du conteneur ;
+>   - **par dossier** (`PseudoMountUnder`) : un tel montage sur, sous ou au-dessus du dossier refuse ce tar.
 >
-> Conséquence : le `/` d'un conteneur actif est toujours refusé, car son propre `/proc` est dessous (voir Q8). Les tests n'utilisent que le faux client et un process `sleep` du test, jamais un vrai bind de `/proc`.
+>   Ce contrôle voit les sous-montages d'un `rbind` présents dans le conteneur (`-v /:/host` montre `/host/proc`), que `Inspect.Mounts` ne montre pas. Il a une limite : avec la propagation `rprivate` par défaut, un montage fait **plus tard** sur l'hôte sous la source d'un bind n'apparaît pas dans le conteneur, alors que dockerd pourrait le voir en remontant le bind. Cette limite est écrite au §13 (tâche 12). Une ligne illisible, ou un échappement invalide, fait refuser (revue R5 ; les montages empilés au même point comptent tous).
+> - **Course entre le contrôle et `GetArchive`** (revue R3) : c'est une limite assumée, écrite au §5.4 et au §13 à la tâche 12. Monter quoi que ce soit dans un conteneur actif exige un conteneur privilégié, donc déjà root sur l'hôte.
+>
+> Conséquence : le `/` d'un conteneur actif est toujours refusé, car son propre `/proc` est dessous (voir Q8). Les tests n'utilisent que le faux client et un process `sleep` du test, jamais un vrai bind de `/proc`. Ils prouvent aussi le câblage (revue R1) : `TestForWiresMountsIntoCheckArchive` fait passer les montages d'`Inspect` par `For` jusqu'à `CheckArchive`, et `TestCheckArchiveDeadProcess` tue l'enfant juste après la lecture de son `mountinfo`.
 
 - [ ] **Step 1: Écrire les tests qui échouent**
 
@@ -2503,45 +2551,58 @@ func TestHostBind(t *testing.T) {
 	docker := &dockerx.Fake{Volumes: map[string]map[string]string{
 		"proc-vol":  {"type": "none", "o": "bind", "device": "/proc"},
 		"sys-vol":   {"o": "rbind,ro", "device": "/sys/kernel"},
+		"proc-type": {"type": "proc", "device": "proc"},
+		"sshfs":     {"type": "fuse.sshfs", "device": "host:/"},
 		"plain-vol": {},
-		"srv-vol":   {"o": "bind", "device": "/srv/data"},
+		"srv-vol":   {"type": "none", "o": "bind", "device": "/srv/data"},
+		"nfs-vol":   {"type": "nfs", "o": "addr=10.0.0.1", "device": ":/export"},
 	}}
 	bind := func(src, dst string) dockerx.Mount { return dockerx.Mount{Type: "bind", Source: src, Destination: dst} }
-	vol := func(name, dst string) dockerx.Mount {
-		return dockerx.Mount{Type: "volume", Name: name, Destination: dst, Driver: "local"}
+	vol := func(name, dst, driver string) dockerx.Mount {
+		return dockerx.Mount{Type: "volume", Name: name, Destination: dst, Driver: driver}
 	}
 	refused := []struct {
 		m    dockerx.Mount
-		name string // the error must name the bind
+		want []string // the error names the mount
 	}{
-		{bind("/", "/host"), "bind / -> /host"},
-		{bind("/proc", "/host/proc"), "bind /proc -> /host/proc"},
-		{bind("/proc/1/ns", "/ns"), "bind /proc/1/ns -> /ns"},
-		{bind("/sys", "/host/sys"), "bind /sys -> /host/sys"},
-		{bind("/sys/fs/cgroup", "/cg"), "bind /sys/fs/cgroup -> /cg"},
-		{bind("/dev", "/host/dev"), "bind /dev -> /host/dev"},
-		{bind("/proc/", "/p"), "bind /proc/ -> /p"},
-		{vol("proc-vol", "/data"), "bind /proc -> /data"},
-		{vol("sys-vol", "/data"), "bind /sys/kernel -> /data"},
+		{bind("/", "/host"), []string{"bind / -> /host"}},
+		{bind("/proc", "/host/proc"), []string{"bind /proc -> /host/proc"}},
+		{bind("/proc/1/ns", "/ns"), []string{"bind /proc/1/ns -> /ns"}},
+		{bind("/sys", "/host/sys"), []string{"bind /sys -> /host/sys"}},
+		{bind("/sys/fs/cgroup", "/cg"), []string{"bind /sys/fs/cgroup -> /cg"}},
+		{bind("/dev", "/host/dev"), []string{"bind /dev -> /host/dev"}},
+		{bind("/proc/", "/p"), []string{"bind /proc/ -> /p"}},
+		{vol("proc-vol", "/data", "local"), []string{"bind /proc -> /data", "proc-vol"}},
+		{vol("sys-vol", "/data", "local"), []string{"bind /sys/kernel -> /data", "sys-vol"}},
+		{vol("proc-type", "/p", "local"), []string{"proc-type", "type=proc", "/p"}},
+		{vol("sshfs", "/remote", "local"), []string{"sshfs", "type=fuse.sshfs", "/remote"}},
+		{vol("ceph", "/c", "rexray/rbd"), []string{"ceph", "/c", "rexray/rbd"}},
+		{vol("anon", "/a", ""), []string{"anon", "/a"}},
+		{vol("gone", "/g", "local"), []string{"gone", "/g", "options illisibles"}},
 	}
 	for _, c := range refused {
 		err := HostBind(ctx, docker, []dockerx.Mount{bind("/srv", "/srv"), c.m})
-		if !errors.Is(err, ErrForbiddenPath) || !strings.Contains(err.Error(), c.name) {
-			t.Errorf("%+v : %v, attendu ErrForbiddenPath qui nomme %q", c.m, err, c.name)
+		if !errors.Is(err, ErrForbiddenPath) {
+			t.Errorf("%+v : %v, attendu ErrForbiddenPath", c.m, err)
+			continue
+		}
+		for _, w := range c.want {
+			if !strings.Contains(err.Error(), w) {
+				t.Errorf("%+v : %q ne nomme pas %q", c.m, err, w)
+			}
 		}
 	}
 	allowed := []dockerx.Mount{
 		bind("/srv/data", "/data"), bind("/dev/log", "/dev/log"), bind("/dev/null", "/x"),
-		bind("/procfs-backup", "/b"), bind("/system", "/s"), vol("plain-vol", "/v"), vol("srv-vol", "/w"),
+		bind("/procfs-backup", "/b"), bind("/system", "/s"),
+		vol("plain-vol", "/v", "local"), vol("srv-vol", "/w", "local"), vol("nfs-vol", "/n", "local"),
 		{Type: "tmpfs", Destination: "/tmp"},
-		{Type: "volume", Name: "proc-vol", Destination: "/z", Driver: "other"}, // not local: no device option to read
 	}
 	if err := HostBind(ctx, docker, allowed); err != nil {
 		t.Fatalf("montages ordinaires refusés : %v", err)
 	}
-	// Unreadable volume options: fail closed, with Docker's error.
-	if err := HostBind(ctx, docker, []dockerx.Mount{vol("gone", "/g")}); !errors.Is(err, dockerx.ErrNotFound) {
-		t.Fatalf("volume illisible : %v", err)
+	if err := HostBind(ctx, nil, []dockerx.Mount{vol("plain-vol", "/v", "local")}); !errors.Is(err, ErrForbiddenPath) {
+		t.Fatalf("sans client Docker, un volume doit être refusé : %v", err)
 	}
 }
 
@@ -2589,6 +2650,60 @@ func TestPseudoMountUnder(t *testing.T) {
 		t.Fatal("fuseblk sous / doit refuser")
 	}
 }
+
+// Review R5: stacked mounts, propagation fields, escapes.
+func TestPseudoMountUnderEdgeCases(t *testing.T) {
+	const mi = `611 600 254:1 / /stack rw,relatime - ext4 /dev/vda1 rw
+612 611 0:63 / /stack rw,relatime - proc proc rw
+613 612 0:64 / /stack rw,relatime - tmpfs tmpfs rw
+614 600 0:65 / /prop rw,relatime shared:5 master:1 propagate_from:2 - sysfs sysfs rw
+615 600 0:66 / /t\011ab rw - proc proc rw
+616 600 0:67 / /n\012l rw - proc proc rw
+617 600 0:68 / /b\134s rw - proc proc rw
+`
+	cases := []struct{ dir, mountPoint, fsType string }{
+		{"/stack", "/stack", "proc"}, // hidden under a tmpfs: still counted
+		{"/prop", "/prop", "sysfs"},  // optional fields before "-"
+		{"/t\tab", "/t\tab", "proc"},
+		{"/n\nl", "/n\nl", "proc"},
+		{"/b\\s", "/b\\s", "proc"},
+	}
+	for _, c := range cases {
+		mp, typ, found := PseudoMountUnder(mi, c.dir)
+		if !found || mp != c.mountPoint || typ != c.fsType {
+			t.Errorf("%q : (%q, %q, %v), attendu (%q, %q, true)", c.dir, mp, typ, found, c.mountPoint, c.fsType)
+		}
+	}
+	for _, bad := range []string{`/bad\08x`, `/bad\9`, `/end\`, `/short\04`} {
+		line := "700 600 254:1 / " + bad + " rw - ext4 /dev/vda1 rw\n"
+		if _, typ, found := PseudoMountUnder(line, "/etc"); !found || !strings.Contains(typ, "échappement") {
+			t.Errorf("%q : échappement invalide accepté (%q, %v)", bad, typ, found)
+		}
+	}
+}
+
+// Review R2: a dangerous mount under a Docker mount refuses the whole container.
+func TestPseudoMountInMounts(t *testing.T) {
+	m := func(dst string) dockerx.Mount { return dockerx.Mount{Type: "bind", Source: "/srv", Destination: dst} }
+	cases := []struct {
+		mounts                []dockerx.Mount
+		mountPoint, fsType, d string
+		found                 bool
+	}{
+		{[]dockerx.Mount{m("/etc/app")}, "", "", "", false},
+		{[]dockerx.Mount{m("/etc/app"), m("/host")}, "/host/proc", "proc", "/host", true},
+		{[]dockerx.Mount{m("/data/")}, "/data/remote", "fuse.sshfs", "/data", true},
+		{[]dockerx.Mount{m("/host/proc")}, "/host/proc", "proc", "/host/proc", true},
+		{[]dockerx.Mount{m("/hostfoo")}, "", "", "", false},
+		{nil, "", "", "", false}, // the container's own /proc is not under any Docker mount
+	}
+	for _, c := range cases {
+		mp, typ, d, found := PseudoMountInMounts(sampleMountinfo, c.mounts)
+		if found != c.found || mp != c.mountPoint || typ != c.fsType || d != c.d {
+			t.Errorf("%+v : (%q, %q, %q, %v)", c.mounts, mp, typ, d, found)
+		}
+	}
+}
 ```
 
 `internal/fsview/procfs_archive_linux_test.go` :
@@ -2603,6 +2718,7 @@ package fsview
 // machine's, where /proc and /sys are pseudo filesystems.
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -2615,11 +2731,17 @@ import (
 	"github.com/levy-cmd/hublot-kit/internal/dockerx"
 )
 
-func childView(t *testing.T) (*procFS, *exec.Cmd) {
+func startChild(t *testing.T) *exec.Cmd {
 	t.Helper()
 	cmd := exec.Command("sleep", "30")
 	must(t, cmd.Start())
 	t.Cleanup(func() { cmd.Process.Kill(); cmd.Wait() })
+	return cmd
+}
+
+func childView(t *testing.T) (*procFS, *exec.Cmd) {
+	t.Helper()
+	cmd := startChild(t)
 	pid := cmd.Process.Pid
 	pidfd, err := unix.PidfdOpen(pid, 0)
 	must(t, err)
@@ -2651,12 +2773,37 @@ func TestCheckArchiveHostBind(t *testing.T) {
 	}
 }
 
+// Review R2: a pseudo filesystem under a Docker mount refuses every directory,
+// not only those that overlap it. Here the test machine's /sys plays a mount
+// found under the destination of a harmless Docker mount.
+func TestCheckArchiveContainerWideRule(t *testing.T) {
+	p, _ := childView(t)
+	p.mounts = []dockerx.Mount{{Type: "tmpfs", Destination: "/sys"}}
+	err := p.CheckArchive(ctx, "/etc")
+	if !errors.Is(err, ErrForbiddenPath) || !strings.Contains(err.Error(), "sous le montage /sys") {
+		t.Fatalf("montage dangereux sous un montage Docker : %v", err)
+	}
+}
+
+// Review R1 (ii): the mount table read must belong to the pinned process. The
+// child dies right after its table is read: CheckArchive must notice.
 func TestCheckArchiveDeadProcess(t *testing.T) {
 	p, cmd := childView(t)
-	cmd.Process.Kill()
-	cmd.Wait()
+	old := readMountinfo
+	t.Cleanup(func() { readMountinfo = old })
+	readPid := 0
+	readMountinfo = func(pid int) ([]byte, error) {
+		readPid = pid
+		b, err := old(pid)
+		cmd.Process.Kill()
+		cmd.Wait() // reaped: its PID is free
+		return b, err
+	}
 	if err := p.CheckArchive(ctx, "/etc"); !errors.Is(err, ErrContainerChanged) {
-		t.Fatalf("process mort : %v, attendu ErrContainerChanged", err)
+		t.Fatalf("process mort après la lecture de mountinfo : %v, attendu ErrContainerChanged", err)
+	}
+	if readPid != p.pid {
+		t.Fatalf("mountinfo lu pour le pid %d, pas pour le process épinglé %d", readPid, p.pid)
 	}
 }
 
@@ -2664,6 +2811,25 @@ func TestCheckArchiveWithoutProcessFailsClosed(t *testing.T) {
 	fsys, _, _ := newRoot(t)
 	if err := fsys.CheckArchive(ctx, "/"); err == nil {
 		t.Fatal("une vue sans process ne peut pas autoriser un tar")
+	}
+}
+
+// Review R1 (i): the mounts of Inspect reach the view built by For.
+func TestForWiresMountsIntoCheckArchive(t *testing.T) {
+	cmd := startChild(t)
+	id := strings.Repeat("ab", 32)
+	restore := SetCgroupReaderForTests(func(int) ([]byte, error) { return []byte("0::/docker/" + id + "\n"), nil })
+	t.Cleanup(restore)
+	docker := &dockerx.Fake{Infos: map[string]dockerx.ContainerInfo{"c": {
+		ID: id, Name: "c", Running: true, Pid: cmd.Process.Pid,
+		Mounts: []dockerx.Mount{{Type: "bind", Source: "/proc", Destination: "/host/proc"}},
+	}}}
+	fsys, err := For(context.Background(), docker, "c")
+	must(t, err)
+	defer fsys.Close()
+	err = fsys.CheckArchive(ctx, "/etc")
+	if !errors.Is(err, ErrForbiddenPath) || !strings.Contains(err.Error(), "bind /proc -> /host/proc") {
+		t.Fatalf("les montages d'Inspect doivent atteindre la vue : %v", err)
 	}
 }
 ```
@@ -2682,7 +2848,6 @@ package fsview
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"path"
 	"slices"
@@ -2694,34 +2859,41 @@ import (
 
 // Docker builds GET /archive of a directory with the container's binds and
 // volumes mounted in it: a bind of the host's /proc puts /proc/kcore (hundreds
-// of TiB) in the tar and locks dockerd (measured in review). Two checks run
-// before every GetArchive of a directory (spec §5.2 step 7, §5.4).
+// of TiB) in the tar and locks dockerd (measured in review). Checks run before
+// every GetArchive of a directory (spec §5.2 step 7, §5.4).
 
-// HostBind refuses a container that has a bind (or a local volume with
-// o=bind/rbind and device=…, which is a bind in disguise) of the host's /,
-// /proc, /sys or a path below them, or of /dev exactly. The error names the
-// bind, e.g. "bind /proc -> /host/proc". A volume whose options cannot be read
-// fails closed.
+// HostBind refuses a container whose mounts may expose the host to the tar
+// (spec §5.2 step 7), with an ErrForbiddenPath that names the mount:
+//   - a bind of the host's /, /proc, /sys or a path below them, or of /dev
+//     exactly;
+//   - a "local" volume with o=bind/rbind and device=… (a bind in disguise,
+//     judged by its device), or whose type=… is a pseudo filesystem or FUSE;
+//   - a volume of any other driver (unknown: refused, fail closed);
+//   - a volume whose options cannot be read (fail closed).
 func HostBind(ctx context.Context, docker dockerx.Client, mounts []dockerx.Mount) error {
 	for _, m := range mounts {
-		src := ""
-		switch {
-		case m.Type == "bind":
-			src = m.Source
-		case m.Type == "volume" && m.Driver == "local":
+		switch m.Type {
+		case "bind":
+			if hostSensitive(m.Source) {
+				return fmt.Errorf("%w : bind %s -> %s", ErrForbiddenPath, m.Source, m.Destination)
+			}
+		case "volume":
+			if m.Driver != "local" {
+				return fmt.Errorf("%w : volume %s -> %s : pilote %q inconnu, refusé", ErrForbiddenPath, m.Name, m.Destination, m.Driver)
+			}
 			if docker == nil {
-				return errors.New("options du volume " + m.Name + " illisibles : pas de client Docker")
+				return fmt.Errorf("%w : volume %s -> %s : options illisibles (pas de client Docker)", ErrForbiddenPath, m.Name, m.Destination)
 			}
 			opts, err := docker.VolumeOptions(ctx, m.Name)
 			if err != nil {
-				return err
+				return fmt.Errorf("%w : volume %s -> %s : options illisibles (%v)", ErrForbiddenPath, m.Name, m.Destination, err)
 			}
-			if hasBindOption(opts["o"]) && opts["device"] != "" {
-				src = opts["device"]
+			if t := opts["type"]; dangerousFSType(t) {
+				return fmt.Errorf("%w : volume %s (type=%s) -> %s", ErrForbiddenPath, m.Name, t, m.Destination)
 			}
-		}
-		if src != "" && hostSensitive(src) {
-			return fmt.Errorf("%w : bind %s -> %s", ErrForbiddenPath, src, m.Destination)
+			if hasBindOption(opts["o"]) && opts["device"] != "" && hostSensitive(opts["device"]) {
+				return fmt.Errorf("%w : bind %s -> %s (volume %s)", ErrForbiddenPath, opts["device"], m.Destination, m.Name)
+			}
 		}
 	}
 	return nil
@@ -2757,27 +2929,51 @@ func dangerousFSType(t string) bool {
 	return slices.Contains(pseudoFSNames, t) || t == "fuse" || t == "fuseblk" || strings.HasPrefix(t, "fuse.")
 }
 
-// PseudoMountUnder reads a /proc/<pid>/mountinfo content (mount points are
-// relative to the process's root) and reports the first mount of a dangerous
-// type whose mount point is dir itself, below dir, or above dir. A line that
-// cannot be parsed counts as dangerous: the check fails closed.
-func PseudoMountUnder(mountinfo, dir string) (mountPoint, fsType string, found bool) {
-	dir = CleanPath(dir)
+// dangerousMount returns the first mount of /proc/<pid>/mountinfo (mount
+// points relative to the process's root) of a dangerous type whose mount point
+// matches. Every line is read, stacked mounts included. A line that cannot be
+// parsed, or with an invalid escape, counts as dangerous: fail closed.
+func dangerousMount(mountinfo string, match func(mountPoint string) bool) (mountPoint, fsType string, found bool) {
 	for _, line := range strings.Split(mountinfo, "\n") {
 		if strings.TrimSpace(line) == "" {
 			continue
 		}
+		// id parent major:minor root mount-point options [optional fields…] - type source super-options
 		f := strings.Fields(line)
 		sep := slices.Index(f, "-")
 		if len(f) < 5 || sep < 5 || sep+1 >= len(f) {
 			return line, "ligne de mountinfo illisible", true
 		}
-		mp, typ := unescapeMountinfo(f[4]), f[sep+1]
-		if dangerousFSType(typ) && (mp == dir || isUnder(mp, dir) || isUnder(dir, mp)) {
+		mp, ok := unescapeMountinfo(f[4])
+		if !ok {
+			return f[4], "échappement de mountinfo invalide", true
+		}
+		if typ := f[sep+1]; dangerousFSType(typ) && match(mp) {
 			return mp, typ, true
 		}
 	}
 	return "", "", false
+}
+
+// PseudoMountUnder: a dangerous mount on, under or above dir (spec §5.4).
+func PseudoMountUnder(mountinfo, dir string) (mountPoint, fsType string, found bool) {
+	dir = CleanPath(dir)
+	return dangerousMount(mountinfo, func(mp string) bool {
+		return mp == dir || isUnder(mp, dir) || isUnder(dir, mp)
+	})
+}
+
+// PseudoMountInMounts: a dangerous mount on or under the destination of one of
+// the container's Docker mounts. dockerd mounts those again to build any tar of
+// the container, so such a mount refuses every directory (review R2).
+func PseudoMountInMounts(mountinfo string, mounts []dockerx.Mount) (mountPoint, fsType, destination string, found bool) {
+	for _, m := range mounts {
+		dst := CleanPath(m.Destination)
+		if mp, typ, ok := dangerousMount(mountinfo, func(mp string) bool { return mp == dst || isUnder(mp, dst) }); ok {
+			return mp, typ, dst, true
+		}
+	}
+	return "", "", "", false
 }
 
 func isUnder(p, parent string) bool {
@@ -2785,20 +2981,26 @@ func isUnder(p, parent string) bool {
 }
 
 // unescapeMountinfo decodes the octal escapes of mountinfo (\040 space,
-// \011 tab, \012 newline, \134 backslash).
-func unescapeMountinfo(s string) string {
+// \011 tab, \012 newline, \134 backslash). A backslash not followed by three
+// octal digits is invalid: ok is false.
+func unescapeMountinfo(s string) (string, bool) {
 	var b strings.Builder
 	for i := 0; i < len(s); i++ {
-		if s[i] == '\\' && i+4 <= len(s) {
-			if n, err := strconv.ParseUint(s[i+1:i+4], 8, 8); err == nil {
-				b.WriteByte(byte(n))
-				i += 3
-				continue
-			}
+		if s[i] != '\\' {
+			b.WriteByte(s[i])
+			continue
 		}
-		b.WriteByte(s[i])
+		if i+4 > len(s) {
+			return "", false
+		}
+		n, err := strconv.ParseUint(s[i+1:i+4], 8, 8)
+		if err != nil {
+			return "", false
+		}
+		b.WriteByte(byte(n))
+		i += 3
 	}
-	return b.String()
+	return b.String(), true
 }
 ```
 
@@ -2820,13 +3022,15 @@ import (
 
 // readMountinfo reads a host file: /proc/<pid>/mountinfo of the process pinned
 // by the view's pidfd (its mount points are relative to the container root).
+// Tests replace it.
 var readMountinfo = func(pid int) ([]byte, error) {
 	return os.ReadFile(fmt.Sprintf("/proc/%d/mountinfo", pid))
 }
 
-// CheckArchive (spec §5.2 step 7, §5.4): no bind of the host's sensitive
-// trees, and no pseudo filesystem or FUSE mount on, under or above dir in the
-// container's mount table, read for the very process the pidfd pins.
+// CheckArchive (spec §5.2 step 7, §5.4), in this order: the container's Docker
+// mounts (HostBind); its mount table, read for the very process the pidfd pins
+// and still alive afterwards; no dangerous mount under any Docker mount (the
+// whole container); none on, under or above dir.
 func (p *procFS) CheckArchive(ctx context.Context, dir string) error {
 	if p.pidfd < 0 {
 		return errors.New("contrôle des montages impossible : vue sans process")
@@ -2838,9 +3042,11 @@ func (p *procFS) CheckArchive(ctx context.Context, dir string) error {
 	if err != nil {
 		return changed("lecture de /proc/%d/mountinfo : %v", p.pid, err)
 	}
-	// Still alive after the read: the table read is the container's.
 	if err := unix.PidfdSendSignal(p.pidfd, 0, nil, 0); err != nil {
 		return changed("le process %d a disparu : %v", p.pid, err)
+	}
+	if mp, typ, dst, bad := PseudoMountInMounts(string(mi), p.mounts); bad {
+		return fmt.Errorf("%w : %s monté sur %s, sous le montage %s du conteneur : aucun tar", ErrForbiddenPath, typ, mp, dst)
 	}
 	if mp, typ, bad := PseudoMountUnder(string(mi), dir); bad {
 		return fmt.Errorf("%w : %s monté sur %s, le tar de %s l'inclurait", ErrForbiddenPath, typ, mp, CleanPath(dir))
@@ -2852,18 +3058,26 @@ func (p *procFS) CheckArchive(ctx context.Context, dir string) error {
 - [ ] **Step 4: Vérifier**
 
 Run (macOS) : `go vet ./internal/... && go test ./internal/fsview/ -run 'HostBind|PseudoMount' -v`
-Expected : PASS (2 tests).
+Expected : PASS (4 tests : `TestHostBind`, `TestPseudoMountUnder`, `TestPseudoMountUnderEdgeCases`, `TestPseudoMountInMounts`).
 
-Run : `GOOS=linux go vet ./internal/fsview/ && scripts/test-linux.sh ./internal/fsview/ -run CheckArchive -v 2>&1 | grep -E '^(--- |ok|FAIL)'`
-Expected : 4 tests `TestCheckArchive…` en `PASS`. Dans le conteneur de test, `/`, `/proc`, `/proc/1`, `/sys` et `/sys/fs` sont refusés, `/etc` est accepté.
+Run : `GOOS=linux go vet ./internal/fsview/ && scripts/test-linux.sh ./internal/fsview/ -run 'CheckArchive|ForWires' -v 2>&1 | grep -E '^(--- |ok|FAIL)'`
+Expected : 6 tests en `PASS` (5 `TestCheckArchive…` et `TestForWiresMountsIntoCheckArchive`). Dans le conteneur de test, `/`, `/proc`, `/proc/1`, `/sys` et `/sys/fs` sont refusés, `/etc` est accepté.
+
+Mutations à rejouer (chacune doit faire échouer au moins un test, puis on restaure) : retirer `mounts: info.Mounts` dans `openProcFS` ; mettre `&& false` derrière le `pidfd_send_signal` de `CheckArchive` ; passer `nil` à `PseudoMountInMounts` ; renvoyer l'erreur de `VolumeOptions` telle quelle ; accepter un pilote autre que `local` ; ignorer `type=` ; accepter un échappement invalide.
 
 Run (non root, comme la CI) : `docker run --rm --user 1000:1000 -e GOCACHE=/tmp/gocache -e HOME=/tmp -v "$PWD":/src -w /src -v hublot-gomod:/go/pkg/mod:ro hublot-test go test -race ./internal/fsview/`
 Expected : `ok`.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5: Spec §5.2 étape 7 (revue R2)**
+
+Dans la spec §5.2 étape 7, après « … les options du volume via l'API d'inspection de volume (`GET /volumes/{nom}`, champ `Options`). », ajouter :
+
+> Est refusé de même un volume `local` dont l'option `type` est l'un des 15 pseudo-systèmes de §5.1 étape 9 ou FUSE (`fuse`, `fuseblk`, `fuse.*`). Sont refusés aussi tout volume d'un pilote autre que `local` (pilote tiers : ce qu'il monte est inconnu) et tout volume dont les options ne se lisent pas. Le détail nomme le volume et sa destination.
+
+- [ ] **Step 6: Commit**
 
 ```bash
-git add internal/fsview
+git add internal/fsview docs/superpowers/specs/2026-10-07-hublot-kit-v0.1-design.md
 git commit -F - <<'EOF'
 explorateur: contrôle des montages avant le tar d'un dossier (binds de l'hôte, mountinfo)
 
@@ -2897,7 +3111,9 @@ EOF
 > - **`CheckArchive`** sur un conteneur sans bind.
 > - **une mesure (revue C1, Q8) :** le tar d'un conteneur actif voit-il son propre `/proc` ?
 >
-> La mesure est sûre : un seul petit pseudo-fichier (`/proc/sys/kernel/hostname`, taille 0 dans l'en-tête tar), un délai de 10 s, jamais un dossier de `/proc`. Le test **consigne** le résultat (`MESURE : …`) sans échouer : sur Docker Desktop, Docker 29, la réponse est « ne voit pas ».
+> La mesure est sûre : un seul petit pseudo-fichier (`/proc/sys/kernel/hostname`, taille 0 dans l'en-tête tar), un délai de 10 s, jamais un dossier de `/proc`. Le test **consigne** le résultat (`MESURE : …`) sans échouer. Il ne conclut « ne voit pas » que sur `dockerx.ErrNotFound` ; toute autre erreur (délai, démon indisponible) donne « non concluante » (revue R6). Sur Docker Desktop, Docker 29, la réponse est « ne voit pas ».
+>
+> La cible `--pid=host` crée `/m` au démarrage : le test attend que `List("/")` le montre, au lieu d'un `sleep` (revue R6).
 >
 > L'aide `docker` lit la sortie standard seule : un `docker run` qui télécharge l'image écrit sa progression sur la sortie d'erreur, qui ne doit pas se mêler à l'ID renvoyé.
 
@@ -3082,7 +3298,17 @@ func TestIntegrationPidHostTarget(t *testing.T) {
 	id := runTarget(t, "hublot-it-fs-pidhost", "--pid=host", "alpine:3", "sh", "-c", "ln -s /proc/1/root /m && sleep 300")
 	fsys := openFor(t, id)
 	ctx := context.Background()
-	time.Sleep(500 * time.Millisecond) // let the shell create /m
+	// Wait for the shell to create /m (seen in the listing of /, never followed).
+	for deadline := time.Now().Add(10 * time.Second); ; {
+		entries, _, err := fsys.List(ctx, "/")
+		if err == nil && hasEntry(entries, "m", TypeSymlink) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("/m n'apparaît pas : %v %v", entries, err)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 	for _, p := range []string{"/proc/1/root/etc/hostname", "/m/etc/hostname", "/m/etc/shadow"} {
 		if rc, err := fsys.Open(ctx, p); err == nil {
 			b, _ := io.ReadAll(rc)
@@ -3130,12 +3356,15 @@ func TestIntegrationMeasureOwnProcInArchive(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	rc, err := dc.GetArchive(ctx, id, "/proc/sys/kernel/hostname")
-	if err != nil {
+	switch {
+	case err == nil:
+		rc.Close()
+		t.Logf("MESURE : GET /archive VOIT le /proc propre du conteneur")
+	case errors.Is(err, dockerx.ErrNotFound):
 		t.Logf("MESURE : GET /archive ne voit pas le /proc propre du conteneur (%v)", err)
-		return
+	default:
+		t.Logf("MESURE : non concluante (%v)", err)
 	}
-	rc.Close()
-	t.Logf("MESURE : GET /archive VOIT le /proc propre du conteneur")
 }
 ```
 
@@ -3750,6 +3979,7 @@ EOF
 > - La vue est fermée à la fin de chaque opération : le descripteur de la racine ne vit pas au-delà.
 > - La fixture des tests passe d'une construction en bloc à `newFixture` + `init`. `init` sert aussi au test de bout en bout (tâche 16), avec un vrai Docker.
 > - `OpenFS` tourne dans les goroutines de la garde : l'ID reçu est protégé par un mutex.
+> - La borne de 10 s d'`Inspect` n'est pas testée (revue R6) : il faudrait un faux Docker qui bloque, pour un gain faible. Elle se vérifie à la relecture de `fsRequest`.
 
 - [ ] **Step 1: Adapter la fixture**
 
@@ -4528,11 +4758,11 @@ EOF
 **Où tester :** macOS (faux client : aucun vrai `GetArchive` dans les cas refusés).
 
 **Files:**
-- Create: `internal/api/fs_download.go`, `internal/api/fs_download_test.go`
+- Create: `internal/api/fs_download.go`, `internal/api/fs_download_test.go`, `internal/api/fs_download_linux_test.go`
 - Modify: `internal/api/server.go` (une route), `docs/superpowers/specs/2026-10-07-hublot-kit-v0.1-design.md` (§5.4, §6, §7, §13)
 
 **Interfaces:**
-- Consumes: `fsRequest` (tâche 10) ; `guarded`, `writeFSError` (tâche 9) ; `FS.Stat`, `FS.Open`, `FS.StatNoLinks`, `FS.CheckArchive` ; `MemFS.ArchiveErr`, `MemFS.OpenFile` ; `dockerx.Client.GetArchive`, `Fake.Archives`, `Fake.ArchiveCalls` (tâche 3)
+- Consumes: `fsRequest` (tâche 10) ; `guarded`, `writeFSError` (tâche 9) ; `FS.Stat`, `FS.Open`, `FS.StatNoLinks`, `FS.CheckArchive` ; `MemFS.ArchiveErr`, `MemFS.OpenFile` ; `fsview.SetCgroupReaderForTests` (tâche 6) ; `dockerx.Client.GetArchive`, `Fake.Archives`, `Fake.ArchiveCalls`, `Fake.Volumes` (tâche 3)
 - Produces:
   - `setAttachment(w, name string)` ;
   - le paramètre `&check=1` (tous les contrôles, puis `204` sans rien lire) ;
@@ -4548,7 +4778,9 @@ EOF
 >   - Puis `CheckArchive` (tâche 7, revue C1) : ni bind de l'hôte, ni pseudo-système ou FUSE dans le tar.
 >   - Enfin `GetArchive` de **cette** chaîne avec l'ID complet, appelé sous la garde, car un démon bloqué y attendrait.
 >
-> Les deux copies sont relayées en flux, et le créneau de la garde reste pris jusqu'à la fin de la copie (revue Codex n°4). Toutes les erreurs sont connues avant le premier octet : elles partent en JSON avec leur statut. `&check=1` s'arrête juste avant de lire (revue M2) : l'interface demande d'abord, puis laisse le navigateur télécharger, sans qu'un tar ait été lancé pour rien chez Docker.
+> Les deux copies sont relayées en flux, et le créneau de la garde reste pris jusqu'à la fin de la copie (revue Codex n°4).
+>
+> `fs_download_linux_test.go` (revue R1 iii, R4) fait passer le contrôle des montages par la route réelle. Il utilise `fsRequest`, l'`OpenFS` par défaut (`fsview.For`), `procfs` et `CheckArchive`. Le « conteneur » est un `sleep` du test, rattaché au cgroup voulu par `SetCgroupReaderForTests`, et décrit par un faux Docker : un bind de `/proc`, un volume aux options illisibles, un pilote tiers. Le test vérifie 403, `forbidden_path`, le nom du montage dans le détail et zéro `GetArchive`. Il tourne sous Linux sans Docker : en root, en non-root et dans le job CI `go`. Toutes les erreurs sont connues avant le premier octet : elles partent en JSON avec leur statut. `&check=1` s'arrête juste avant de lire (revue M2) : l'interface demande d'abord, puis laisse le navigateur télécharger, sans qu'un tar ait été lancé pour rien chez Docker.
 
 - [ ] **Step 1: Écrire les tests qui échouent**
 
@@ -4652,7 +4884,8 @@ func TestDownloadNotRegular(t *testing.T) {
 }
 
 // Review ruling C1: a tar that would cross a host bind, a pseudo filesystem
-// or a FUSE mount is refused before any GetArchive.
+// or a FUSE mount is refused before any GetArchive (the real check, through
+// the real view: fs_download_linux_test.go).
 func TestDownloadDirectoryRefusedByMountCheck(t *testing.T) {
 	f := newFixture(t, false)
 	f.fs.AddDir("/host")
@@ -4746,8 +4979,86 @@ func TestDownloadKeepsItsSlotDuringTheCopy(t *testing.T) {
 }
 ```
 
-Run: `go test ./internal/api/ -run Download`
-Expected: FAIL. Les tests compilent, mais la route n'existe pas encore (`404 not_found`) : `--- FAIL: TestDownloadFile`, `TestDownloadDirectoryRefusedByMountCheck`, etc.
+`internal/api/fs_download_linux_test.go` :
+
+```go
+//go:build linux
+
+package api
+
+// The mount check through the real wiring (review R1 iii, R4): fsRequest,
+// the default OpenFS (fsview.For), procfs and CheckArchive, with a fake Docker
+// whose "container" is one of the test's own processes. No real container,
+// no real bind: GetArchive must never be called.
+
+import (
+	"encoding/json"
+	"net/http"
+	"os/exec"
+	"strings"
+	"testing"
+
+	"github.com/levy-cmd/hublot-kit/internal/dockerx"
+	"github.com/levy-cmd/hublot-kit/internal/fsview"
+)
+
+func TestDownloadMountCheckThroughTheRealView(t *testing.T) {
+	cmd := exec.Command("sleep", "30")
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { cmd.Process.Kill(); cmd.Wait() })
+	t.Cleanup(fsview.SetCgroupReaderForTests(func(int) ([]byte, error) {
+		return []byte("0::/docker/" + webID + "\n"), nil
+	}))
+	fake := &dockerx.Fake{Infos: map[string]dockerx.ContainerInfo{}, Archives: map[string][]byte{},
+		Volumes: map[string]map[string]string{}}
+	setMounts := func(mounts ...dockerx.Mount) {
+		info := dockerx.ContainerInfo{ID: webID, Name: "web", Running: true, Pid: cmd.Process.Pid, Mounts: mounts}
+		fake.Infos["web"], fake.Infos[webID] = info, info
+	}
+	f := &fixture{docker: fake}
+	f.init(t, false, fake, nil) // nil: the real fsview.For
+	c := f.session(t)
+
+	refused := []struct {
+		mount dockerx.Mount
+		names []string
+	}{
+		{dockerx.Mount{Type: "bind", Source: "/proc", Destination: "/host/proc"}, []string{"bind /proc -> /host/proc"}},
+		{dockerx.Mount{Type: "volume", Name: "gone", Destination: "/data", Driver: "local"}, []string{"gone", "/data"}},
+		{dockerx.Mount{Type: "volume", Name: "ceph", Destination: "/c", Driver: "rexray/rbd"}, []string{"ceph", "/c"}},
+	}
+	for _, r := range refused {
+		setMounts(r.mount)
+		for _, q := range []string{"", "&check=1"} {
+			rec := f.do("GET", "/api/containers/web/fs/download?path=/etc"+q, "", c)
+			var body apiError
+			json.Unmarshal(rec.Body.Bytes(), &body)
+			if rec.Code != http.StatusForbidden || body.Error != "forbidden_path" {
+				t.Errorf("%+v %q : %d %s", r.mount, q, rec.Code, rec.Body)
+				continue
+			}
+			for _, n := range r.names {
+				if !strings.Contains(body.Detail, n) {
+					t.Errorf("%+v : le détail %q ne nomme pas %q", r.mount, body.Detail, n)
+				}
+			}
+		}
+	}
+	if len(fake.ArchiveCalls) != 0 {
+		t.Fatalf("GetArchive ne doit jamais être appelé : %v", fake.ArchiveCalls)
+	}
+	// Control: the same process without dangerous mounts passes the check.
+	setMounts(dockerx.Mount{Type: "bind", Source: "/srv/data", Destination: "/data"})
+	if rec := f.do("GET", "/api/containers/web/fs/download?check=1&path=/etc", "", c); rec.Code != http.StatusNoContent {
+		t.Fatalf("contrôle : %d %s", rec.Code, rec.Body)
+	}
+}
+```
+
+Run: `go test ./internal/api/ -run Download ; scripts/test-linux.sh ./internal/api/ -run ThroughTheRealView`
+Expected: FAIL. Les tests compilent, mais la route n'existe pas encore (`404 not_found`) : `--- FAIL: TestDownloadFile`, `TestDownloadDirectoryRefusedByMountCheck`, `TestDownloadMountCheckThroughTheRealView`, etc.
 
 - [ ] **Step 2: Écrire le code**
 
@@ -4866,8 +5177,8 @@ Dans `internal/api/server.go`, sous la route `…/fs/file` :
 Run: `go vet ./... && go test -race -count=3 ./internal/api/ && go test -race ./cmd/... ./internal/... 2>&1 | tail -9`
 Expected : `ok` partout. `-count=3` repasse `TestDownloadKeepsItsSlotDuringTheCopy`, qui fait tourner des requêtes concurrentes.
 
-Run (Linux, sur le vrai `procfs`) : `scripts/test-linux.sh ./internal/...`
-Expected : `ok` partout.
+Run (Linux, sur le vrai `procfs`) : `scripts/test-linux.sh ./internal/... && scripts/test-linux.sh ./internal/api/ -run ThroughTheRealView -v`
+Expected : `ok` partout, et `--- PASS: TestDownloadMountCheckThroughTheRealView`.
 
 - [ ] **Step 4: Mettre la spec à jour (§5.4, §6, §7, §13)**
 
@@ -4875,20 +5186,27 @@ Expected : `ok` partout.
 
 > - Conteneur actif : ouverture par `openat2` `RESOLVE_IN_ROOT | RESOLVE_NO_SYMLINKS | RESOLVE_NO_MAGICLINKS` sur `rootfd`, puis `fstatfs` du descripteur (`forbidden_path`, §5.1 étape 9). Vient ensuite le **contrôle des montages** (`FS.CheckArchive`) : Docker construit le tar avec les binds et volumes du conteneur montés dedans, et un bind du `/proc` de l'hôte y met `/proc/kcore` (254 Tio, dockerd bloqué : mesuré en revue). Deux contrôles :
 >   - (a) la règle des binds de §5.2 étape 7 sur `Inspect.Mounts`, volumes `local` en `o=bind`/`rbind` compris → `forbidden_path` qui nomme le bind ;
->   - (b) `/proc/<pid>/mountinfo`, lu pour le process épinglé par le pidfd, qui doit être vivant après la lecture : un point de montage sur, sous ou au-dessus du dossier, de l'un des 15 types de §5.1 étape 9 ou FUSE (`fuse`, `fuseblk`, `fuse.*`) → `forbidden_path`.
+>   - (b) `/proc/<pid>/mountinfo`, lu pour le process épinglé par le pidfd, qui doit être vivant après la lecture. On y cherche les montages de l'un des 15 types de §5.1 étape 9 ou FUSE (`fuse`, `fuseblk`, `fuse.*`). Un tel montage sur ou sous la destination d'un montage d'`Inspect.Mounts` refuse **tout** tar du conteneur, car dockerd remonte ces montages pour chaque tar. Un tel montage sur, sous ou au-dessus du dossier refuse ce tar. Dans les deux cas → `forbidden_path`. Une ligne illisible fait refuser.
 >
 >   Le `/` d'un conteneur actif est donc refusé, car son propre `/proc` est dessous. Puis `GetArchive` sur exactement le chemin nettoyé, relayé en `.tar` sans mise en mémoire ; le créneau de la garde (§13) reste pris jusqu'à la fin de la copie.
+>
+>   Limite assumée : entre le contrôle et `GetArchive`, un montage peut apparaître dans le conteneur. Monter quoi que ce soit dans un conteneur actif exige un conteneur privilégié, déjà root sur l'hôte. dockerd construit le tar à partir des montages configurés : mesuré sur Docker Desktop, il ne voit pas le `/proc` propre du conteneur. Et la règle « tout le conteneur » couvre ce qui est monté sous un montage Docker au moment du contrôle. À remesurer sur une VM Ubuntu.
 > - `&check=1` : tous les contrôles, puis `204` sans rien lire (aucun `GetArchive`). L'interface vérifie ainsi avant de laisser le navigateur télécharger.
 
 §6, ligne `GET /api/containers/{id}/fs/download?path=` : à la fin de la colonne « Rôle », ajouter « ; `&check=1` : contrôles seuls, `204` ; dossier d'un conteneur actif : `forbidden_path` si le tar traverserait un bind de l'hôte, un pseudo-système ou un FUSE (§5.4) ».
 
 §7, après la puce « **Lecture seule** … », ajouter :
 
-> - **Binds ordinaires de l'hôte (conteneur actif)** : un conteneur lancé avec `-v /:/host` montre l'hôte dans l'explorateur ; par exemple, `/host/etc/shadow` est lisible. Ce n'est refusé ni en lecture ni au listing : l'utilisateur de l'interface est de fait root sur l'hôte (début de §7). Les pseudo-systèmes et les périphériques restent refusés, et le téléchargement d'un dossier applique §5.4.
+> - **Binds de l'hôte (conteneur actif)** : un conteneur lancé avec `-v /:/host` montre l'hôte dans l'explorateur ; par exemple, `/host/etc/shadow` est lisible. La lecture et le listing ne sont pas refusés : l'utilisateur de l'interface est de fait root sur l'hôte (début de §7), et les pseudo-systèmes et les périphériques restent refusés. Le tar d'un dossier, lui, est refusé pour tout le conteneur dès qu'un bind sensible existe : `/`, `/proc`, `/sys` ou dessous, `/dev` (§5.2 étape 7, §5.4).
 
-§13, ajouter deux lignes au tableau :
+§13, remplacer la ligne « Bind d'un dossier hôte contenant un sous-montage `/proc` ou `/sys` (rbind) | … » par :
+
+> | Bind d'un dossier hôte contenant un sous-montage `/proc` ou `/sys` (rbind) | conteneur actif : les sous-montages présents dans le conteneur sont vus par `mountinfo` et refusent tout tar (§5.4). Avec la propagation `rprivate` par défaut, un montage ajouté **plus tard** sur l'hôte sous la source n'apparaît pas dans le conteneur et n'est pas détecté, alors que dockerd pourrait le voir en remontant le bind. Conteneur arrêté : non détecté en v0.1 (`Inspect.Mounts` ne montre que la `Source`) |
+
+puis ajouter trois lignes :
 
 > | Montage FUSE ou pseudo-système sous un dossier téléchargé : dockerd le lit pour construire le tar et peut rester bloqué, conteneur verrouillé | refus avant `GetArchive` par `Inspect.Mounts` et `mountinfo` (§5.4) ; nos propres lectures restent sous la garde (4 par conteneur, 10 s) |
+> | Course entre le contrôle des montages et `GetArchive` (conteneur actif) | limite assumée : monter dans un conteneur actif exige un conteneur privilégié, déjà root sur l'hôte ; dockerd archive à partir des montages configurés ; règle « tout le conteneur » (§5.4) ; à remesurer sur une VM Ubuntu |
 > | Noms de fichiers non UTF-8 : JSON les transporte avec U+FFFD, le fichier ne s'ouvre plus depuis l'interface (`not_found`) | limite v0.1 ; le listing ne casse pas |
 
 - [ ] **Step 5: Commit**
@@ -5834,7 +6152,7 @@ EOF
 - Consumes: `fixture.init`, `fixture.session`, `decodeListing`, `filename`, `errCode` (tâches 10 à 12, Socle) ; `dockerx.New`
 - Produces: rien (tests)
 
-> **À comprendre :** ce test fait passer de vraies requêtes HTTP (par `httptest`) à travers l'API complète, `fsview.For` réel, sur un vrai alpine : liste, aperçu d'un lien, contrôle `&check=1` puis tar de `/etc`, `forbidden_path` sur le tar de `/` et de `/sys` (contrôle des montages), `link_in_path` sur un dossier atteint par un lien (créé par `docker exec`), `not_regular`, `forbidden_path`, `not_found`. Aucun bind de l'hôte n'est utilisé : le scénario C1 ne se teste qu'avec le faux client (tâches 7 et 12). Puis toute la suite tourne sur les trois Linux du projet : Docker Desktop (pilote cgroupfs, `/docker/<id>`), Ubuntu (systemd, `docker-<id>.scope`, AppArmor : la cible `--privileged` exige `apparmor=unconfined`), Fedora (SELinux `enforcing` : `label=disable`).
+> **À comprendre :** ce test fait passer de vraies requêtes HTTP (par `httptest`) à travers l'API complète, `fsview.For` réel, sur un vrai alpine : liste, aperçu d'un lien, contrôle `&check=1` puis tar de `/etc`, `forbidden_path` sur le tar de `/` et de `/sys`, directement et par `&check=1` (contrôle des montages), `link_in_path` sur un dossier atteint par un lien (créé par `docker exec`), `not_regular`, `forbidden_path`, `not_found`. Aucun bind de l'hôte n'est utilisé : le scénario C1 ne se teste qu'avec le faux client (tâches 7 et 12). Puis toute la suite tourne sur les trois Linux du projet : Docker Desktop (pilote cgroupfs, `/docker/<id>`), Ubuntu (systemd, `docker-<id>.scope`, AppArmor : la cible `--privileged` exige `apparmor=unconfined`), Fedora (SELinux `enforcing` : `label=disable`).
 
 - [ ] **Step 1: Écrire le test**
 
@@ -5931,6 +6249,8 @@ func TestIntegrationFilesEndToEnd(t *testing.T) {
 	for path, want := range map[string]string{
 		"/download?path=/":            "forbidden_path", // its own /proc and /sys are under /
 		"/download?path=/sys":         "forbidden_path",
+		"/download?check=1&path=/":    "forbidden_path",
+		"/download?check=1&path=/sys": "forbidden_path",
 		"/download?path=/linkdir":     "link_in_path",
 		"/download?path=/linkdir/apk": "link_in_path",
 		"/file?path=/dev/null":        "not_regular",
@@ -5959,7 +6279,7 @@ limactl shell hk-ubuntu -- sudo dmesg | grep -i 'apparmor="DENIED"' | tail -5
 limactl stop hk-ubuntu
 ```
 
-Expected : `ok` pour les 8 paquets ; aucune ligne `DENIED` datée de l'essai. Relever aussi la ligne `MESURE :` (`limactl shell --workdir "$PWD" hk-ubuntu -- sudo scripts/test-linux.sh -tags integration ./internal/fsview/ -run MeasureOwnProc -v`) : elle tranche Q8 sur Ubuntu. Si le dépôt n'est pas visible dans la VM (`limactl shell hk-ubuntu -- ls "$PWD"`), vérifier le montage `~` de `~/.lima/hk-ubuntu/lima.yaml`.
+Expected : `ok` pour les 8 paquets ; aucune ligne `DENIED` datée de l'essai. Rejouer aussi, dans la VM, la mutation « `&& false` derrière le `pidfd_send_signal` de `CheckArchive` » de la tâche 7 (elle doit faire échouer `TestCheckArchiveDeadProcess`), et confirmer la limite R3 (course entre contrôle et `GetArchive`). Relever aussi la ligne `MESURE :` (`limactl shell --workdir "$PWD" hk-ubuntu -- sudo scripts/test-linux.sh -tags integration ./internal/fsview/ -run MeasureOwnProc -v`) : elle tranche Q8 sur Ubuntu. Si le dépôt n'est pas visible dans la VM (`limactl shell hk-ubuntu -- ls "$PWD"`), vérifier le montage `~` de `~/.lima/hk-ubuntu/lima.yaml`.
 
 - [ ] **Step 4: VM Fedora (SELinux)**
 
