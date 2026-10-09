@@ -1,0 +1,49 @@
+package api
+
+import (
+	"errors"
+	"io/fs"
+	"net/http"
+	"syscall"
+
+	"github.com/levy-cmd/hublot-kit/internal/dockerx"
+	"github.com/levy-cmd/hublot-kit/internal/fsview"
+)
+
+func writeFSError(w http.ResponseWriter, err error) {
+	status, code := fsErrorStatus(err)
+	writeError(w, status, code, err.Error())
+}
+
+// fsErrorStatus maps the errors of file routes to the codes of spec §6. The
+// spec fixes 202 indexing, 400 invalid_name and 429; the other statuses are
+// the choice of plan Explorateur 1 ("Décisions"). Order matters: Docker
+// errors first (a missing socket is ENOENT too, it is not a missing file).
+func fsErrorStatus(err error) (int, string) {
+	switch {
+	case errors.Is(err, errBusy):
+		return http.StatusServiceUnavailable, "internal"
+	case errors.Is(err, errTimeout):
+		return http.StatusGatewayTimeout, "internal"
+	case errors.Is(err, dockerx.ErrNotFound):
+		return http.StatusNotFound, "not_found"
+	case errors.Is(err, dockerx.ErrUnavailable):
+		return http.StatusServiceUnavailable, "docker_unavailable"
+	case errors.Is(err, fsview.ErrContainerChanged):
+		return http.StatusConflict, "container_changed"
+	case errors.Is(err, fsview.ErrForbiddenPath):
+		return http.StatusForbidden, "forbidden_path"
+	case errors.Is(err, fsview.ErrLinkInPath):
+		return http.StatusUnprocessableEntity, "link_in_path"
+	case errors.Is(err, fsview.ErrNotRegular):
+		return http.StatusUnprocessableEntity, "not_regular"
+	case errors.Is(err, fsview.ErrTooLarge):
+		return http.StatusRequestEntityTooLarge, "too_large"
+	case errors.Is(err, fs.ErrNotExist), errors.Is(err, fsview.ErrNotDir), errors.Is(err, syscall.ENOTDIR),
+		errors.Is(err, syscall.ELOOP): // a link loop, or a magic link refused by pathrs
+		return http.StatusNotFound, "not_found"
+	case errors.Is(err, fsview.ErrStopped):
+		return http.StatusNotImplemented, "internal"
+	}
+	return http.StatusInternalServerError, "internal"
+}
