@@ -46,8 +46,6 @@ func fsErrorStatus(err error) (int, string) {
 	case errors.Is(err, fs.ErrNotExist), errors.Is(err, fsview.ErrNotDir), errors.Is(err, syscall.ENOTDIR),
 		errors.Is(err, syscall.ELOOP): // a link loop, or a magic link refused by pathrs
 		return http.StatusNotFound, "not_found"
-	case errors.Is(err, fsview.ErrStopped):
-		return http.StatusNotImplemented, "internal"
 	}
 	return http.StatusInternalServerError, "internal"
 }

@@ -107,13 +107,11 @@ func TestCheckArchiveWithoutProcessFailsClosed(t *testing.T) {
 func TestForWiresMountsIntoCheckArchive(t *testing.T) {
 	cmd := startChild(t)
 	id := strings.Repeat("ab", 32)
-	restore := SetCgroupReaderForTests(func(int) ([]byte, error) { return []byte("0::/docker/" + id + "\n"), nil })
-	t.Cleanup(restore)
 	docker := &dockerx.Fake{Infos: map[string]dockerx.ContainerInfo{"c": {
 		ID: id, Name: "c", Running: true, Pid: cmd.Process.Pid,
 		Mounts: []dockerx.Mount{{Type: "bind", Source: "/proc", Destination: "/host/proc"}},
 	}}}
-	fsys, err := For(context.Background(), docker, "c")
+	fsys, err := NewViews(docker, Options{ReadCgroup: func(int) ([]byte, error) { return []byte("0::/docker/" + id + "\n"), nil }}).For(context.Background(), "c")
 	must(t, err)
 	defer fsys.Close()
 	err = fsys.CheckArchive(ctx, "/etc")

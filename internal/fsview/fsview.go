@@ -6,6 +6,7 @@ package fsview
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"path"
@@ -65,9 +66,7 @@ var (
 	ErrLinkInPath       = errors.New("lien symbolique dans le chemin")
 	ErrContainerChanged = errors.New("le conteneur a changé")
 	ErrTooLarge         = errors.New("trop volumineux")
-	// ErrStopped is temporary: the explorer of stopped containers (tarindex)
-	// arrives with plan Explorateur 2, which removes this error.
-	ErrStopped = errors.New("conteneur arrêté : explorateur pas encore disponible")
+	ErrIndexing         = errors.New("indexation en cours")
 )
 
 // CleanPath returns the absolute, lexically cleaned form of a container path.
@@ -112,3 +111,13 @@ func UnixPerm(m fs.FileMode) uint32 {
 	}
 	return p
 }
+
+// IndexingError: the index of a stopped container is being built (spec §5.2
+// step 2, §6 202 indexing). Progress goes from 0 to 0.99.
+type IndexingError struct{ Progress float64 }
+
+func (e *IndexingError) Error() string {
+	return fmt.Sprintf("%v (%d %%)", ErrIndexing, int(e.Progress*100))
+}
+
+func (e *IndexingError) Unwrap() error { return ErrIndexing }

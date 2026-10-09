@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"testing"
 
 	"golang.org/x/sys/unix"
 
@@ -23,24 +22,13 @@ var (
 	afterRootOpen = func() {}
 )
 
-// SetCgroupReaderForTests replaces the reading of /proc/<pid>/cgroup and
-// returns the function that restores it. Tests of other packages (api) use it
-// to drive a real procfs view of one of their own processes through the real
-// wiring; production code never calls it.
-// It panics outside a test binary. Tests that use it must not call t.Parallel.
-func SetCgroupReaderForTests(f func(pid int) ([]byte, error)) (restore func()) {
-	if !testing.Testing() {
-		panic("fsview.SetCgroupReaderForTests : réservé aux tests")
-	}
-	old := readCgroup
-	readCgroup = f
-	return func() { readCgroup = old }
-}
-
 // openRoot runs spec §5.1 steps 2 to 5 and returns an O_PATH descriptor on the
 // root directory of the container whose main process is pid, and the pidfd
 // that pins this process. The caller closes both.
-func openRoot(pid int, containerID string) (*os.File, int, error) {
+func openRoot(pid int, containerID string, read func(int) ([]byte, error)) (*os.File, int, error) {
+	if read == nil {
+		read = readCgroup
+	}
 	pidfd, err := unix.PidfdOpen(pid, 0)
 	if err != nil {
 		return nil, -1, changed("pidfd_open(%d) : %v", pid, err)
@@ -49,7 +37,7 @@ func openRoot(pid int, containerID string) (*os.File, int, error) {
 		unix.Close(pidfd)
 		return nil, -1, err
 	}
-	cg, err := readCgroup(pid)
+	cg, err := read(pid)
 	if err != nil {
 		return fail(changed("lecture du cgroup du pid %d : %v", pid, err))
 	}
@@ -79,7 +67,7 @@ func openRoot(pid int, containerID string) (*os.File, int, error) {
 
 // OpenRoot is openRoot without the pidfd.
 func OpenRoot(pid int, containerID string) (*os.File, error) {
-	root, pidfd, err := openRoot(pid, containerID)
+	root, pidfd, err := openRoot(pid, containerID, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -87,8 +75,8 @@ func OpenRoot(pid int, containerID string) (*os.File, error) {
 	return root, nil
 }
 
-func openProcFS(docker dockerx.Client, info dockerx.ContainerInfo) (FS, error) {
-	root, pidfd, err := openRoot(info.Pid, info.ID)
+func openProcFS(docker dockerx.Client, info dockerx.ContainerInfo, read func(int) ([]byte, error)) (FS, error) {
+	root, pidfd, err := openRoot(info.Pid, info.ID, read)
 	if err != nil {
 		return nil, err
 	}

@@ -28,6 +28,7 @@ type fixture struct {
 	docker *dockerx.Fake // nil when the fixture talks to a real Docker
 	// File routes: OpenFS returns fs (or openErr) and records the ID it got.
 	fs       *fsview.MemFS
+	views    *fsview.Views // nil: the default of New
 	openErr  error
 	mu       sync.Mutex // OpenFS runs in the guard's goroutines
 	openedID string
@@ -83,7 +84,7 @@ func (f *fixture) init(t *testing.T, readOnly bool, docker dockerx.Client, openF
 	}
 	t.Cleanup(func() { al.Close() })
 	f.h = New(Deps{
-		Docker: docker, OpenFS: openFS, Verifier: v, Audit: al, Version: "test", ReadOnly: readOnly,
+		Docker: docker, Views: f.views, OpenFS: openFS, Verifier: v, Audit: al, Version: "test", ReadOnly: readOnly,
 		Sessions: auth.NewSessions(auth.SessionTTL, time.Now),
 		Limiter:  auth.NewLimiter(5, time.Minute, time.Now),
 	})

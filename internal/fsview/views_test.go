@@ -1,0 +1,446 @@
+package fsview
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/levy-cmd/hublot-kit/internal/dockerx"
+)
+
+var vID = strings.Repeat("ef", 32)
+
+func stoppedInfo(id, name string, mounts ...dockerx.Mount) dockerx.ContainerInfo {
+	return dockerx.ContainerInfo{ID: id, Name: name, FinishedAt: "2026-10-09T10:00:00Z", Mounts: mounts}
+}
+
+func stoppedDocker(t *testing.T, mounts ...dockerx.Mount) *dockerx.Fake {
+	info := stoppedInfo(vID, "db", mounts...)
+	return &dockerx.Fake{
+		Infos: map[string]dockerx.ContainerInfo{"db": info, vID: info},
+		Archives: map[string][]byte{
+			vID + ":/":           mkTar(t, image()...),
+			vID + ":/etc/passwd": fileTar(t, "/etc/passwd", "root:x:0:0"),
+		},
+		Sizes:   map[string]int64{vID: 1 << 20},
+		Volumes: map[string]map[string]string{},
+	}
+}
+
+func (v *Views) count() int {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	return len(v.builds)
+}
+
+func waitCount(t *testing.T, v *Views, want int) {
+	t.Helper()
+	for deadline := time.Now().Add(5 * time.Second); v.count() != want; time.Sleep(time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("index en cache : %d, attendu %d", v.count(), want)
+		}
+	}
+}
+
+// ready polls For until the index is built.
+func ready(t *testing.T, v *Views, id string) FS {
+	t.Helper()
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(5 * time.Millisecond) {
+		fsys, err := v.For(tctx, id)
+		var ie *IndexingError
+		if !errors.As(err, &ie) {
+			if err != nil {
+				t.Fatalf("For(%s) : %v", id, err)
+			}
+			return fsys
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("index jamais prêt : %v", err)
+		}
+	}
+}
+
+func archiveCalls(f *dockerx.Fake, id, p string) int {
+	n := 0
+	for _, c := range f.Calls() {
+		if c == id+":"+p {
+			n++
+		}
+	}
+	return n
+}
+
+// gated holds GET /archive of "/" after free bytes until open is closed,
+// and honours ctx like the real client.
+type gated struct {
+	*dockerx.Fake
+	open chan struct{}
+	free int
+}
+
+func (g *gated) GetArchive(ctx context.Context, id, p string) (io.ReadCloser, error) {
+	rc, err := g.Fake.GetArchive(ctx, id, p)
+	if err != nil || p != "/" {
+		return rc, err
+	}
+	return &gateReader{ctx: ctx, open: g.open, rc: rc, free: g.free}, nil
+}
+
+type gateReader struct {
+	ctx  context.Context
+	open chan struct{}
+	rc   io.ReadCloser
+	free int
+}
+
+func (r *gateReader) Read(b []byte) (int, error) {
+	if r.free > 0 {
+		b = b[:min(len(b), r.free)]
+		n, err := r.rc.Read(b)
+		r.free -= n
+		return n, err
+	}
+	select {
+	case <-r.open:
+		return r.rc.Read(b)
+	case <-r.ctx.Done():
+		return 0, r.ctx.Err()
+	}
+}
+
+func (r *gateReader) Close() error { return r.rc.Close() }
+
+// Spec §5.2 step 7 and Q9 (confirmed): no index, no tar of "/", for a
+// container whose mounts may expose the host.
+func TestViewsHostBindBuildsNothing(t *testing.T) {
+	vol := func(driver string) dockerx.Mount {
+		return dockerx.Mount{Type: "volume", Name: "v", Driver: driver, Destination: "/v"}
+	}
+	refused := []struct {
+		m    dockerx.Mount
+		opts map[string]string
+		name string
+	}{
+		{dockerx.Mount{Type: "bind", Source: "/", Destination: "/host"}, nil, "bind / -> /host"},
+		{dockerx.Mount{Type: "bind", Source: "/proc", Destination: "/host/proc"}, nil, "bind /proc -> /host/proc"},
+		{dockerx.Mount{Type: "bind", Source: "/sys", Destination: "/host/sys"}, nil, "bind /sys -> /host/sys"},
+		{dockerx.Mount{Type: "bind", Source: "/sys/fs/cgroup", Destination: "/cg"}, nil, "bind /sys/fs/cgroup -> /cg"},
+		{dockerx.Mount{Type: "bind", Source: "/dev", Destination: "/dev"}, nil, "bind /dev -> /dev"},
+		{vol("local"), map[string]string{"o": "bind", "device": "/proc"}, "bind /proc -> /v (volume v)"},
+		{vol("local"), map[string]string{"type": "fuse.sshfs"}, "volume v (type=fuse.sshfs) -> /v"},
+		{vol("rexray"), map[string]string{}, `pilote "rexray" inconnu`},
+		{vol("local"), nil, "options illisibles"}, // no options for v: unreadable
+	}
+	for _, c := range refused {
+		f := stoppedDocker(t, c.m)
+		if c.opts != nil {
+			f.Volumes["v"] = c.opts
+		}
+		v := NewViews(f, Options{FirstWait: time.Second})
+		_, err := v.For(tctx, "db")
+		if !errors.Is(err, ErrForbiddenPath) || !strings.Contains(err.Error(), c.name) {
+			t.Errorf("%s : %v", c.name, err)
+		}
+		if n := v.count(); n != 0 || len(f.Calls()) != 0 {
+			t.Errorf("ÉVASION : %s : %d index lancé(s), GetArchive %v", c.name, n, f.Calls())
+		}
+	}
+	for _, m := range []dockerx.Mount{ // controls: indexed
+		{Type: "bind", Source: "/srv/data", Destination: "/data"},
+		{Type: "bind", Source: "/dev/log", Destination: "/dev/log"},
+	} {
+		f := stoppedDocker(t, m)
+		ready(t, NewViews(f, Options{}), "db")
+		if n := archiveCalls(f, vID, "/"); n != 1 {
+			t.Errorf("%+v : %d GET /archive de /", m, n)
+		}
+	}
+}
+
+func TestViewsIndexingThenReady(t *testing.T) {
+	g := &gated{Fake: stoppedDocker(t), open: make(chan struct{})}
+	v := NewViews(g, Options{})
+	var wg sync.WaitGroup
+	for range 10 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, err := v.For(tctx, "db")
+			var ie *IndexingError
+			if !errors.As(err, &ie) || !errors.Is(err, ErrIndexing) || ie.Progress < 0 || ie.Progress > 0.99 {
+				t.Errorf("pendant l'indexation : %v", err)
+			}
+		}()
+	}
+	wg.Wait()
+	close(g.open)
+	fsys := ready(t, v, "db")
+	if _, _, err := fsys.List(tctx, "/etc"); err != nil {
+		t.Fatal(err)
+	}
+	if n := archiveCalls(g.Fake, vID, "/"); n != 1 {
+		t.Errorf("une seule construction par clé : %d GET /archive de /", n)
+	}
+}
+
+func TestViewsProgressCapped(t *testing.T) {
+	g := &gated{Fake: stoppedDocker(t), open: make(chan struct{}), free: 4096}
+	g.Sizes[vID] = 1024 // volumes are in the archive, not in SizeRootFs
+	v := NewViews(g, Options{})
+	defer close(g.open)
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(5 * time.Millisecond) {
+		_, err := v.For(tctx, "db")
+		var ie *IndexingError
+		if !errors.As(err, &ie) {
+			t.Fatalf("attendu indexing : %v", err)
+		}
+		if ie.Progress > 0.99 {
+			t.Fatalf("progression %v au-delà de 0,99", ie.Progress)
+		}
+		if ie.Progress == 0.99 {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("progression bloquée à %v", ie.Progress)
+		}
+	}
+}
+
+func TestViewsCacheKey(t *testing.T) {
+	f := stoppedDocker(t)
+	v := NewViews(f, Options{})
+	ready(t, v, "db")
+	ready(t, v, "db")
+	if n := archiveCalls(f, vID, "/"); n != 1 {
+		t.Fatalf("en cache : %d constructions", n)
+	}
+	info := f.Infos["db"] // restarted then stopped: new FinishedAt
+	info.FinishedAt = "2026-10-09T11:00:00Z"
+	f.Infos["db"], f.Infos[vID] = info, info
+	ready(t, v, "db")
+	if n := archiveCalls(f, vID, "/"); n != 2 || v.count() != 1 {
+		t.Errorf("nouvelle clé : %d constructions, %d index en cache (attendu 2 et 1)", n, v.count())
+	}
+}
+
+// addStopped adds stopped containers named n, of ID strings.Repeat(n[1:], 64).
+func addStopped(t *testing.T, f *dockerx.Fake, names ...string) {
+	for _, n := range names {
+		id := strings.Repeat(n[1:], 64)
+		info := stoppedInfo(id, n)
+		f.Infos[n], f.Infos[id] = info, info
+		f.Archives[id+":/"] = mkTar(t, image()...)
+	}
+}
+
+func TestViewsLRU(t *testing.T) {
+	f := stoppedDocker(t)
+	names := []string{"db", "c2", "c3", "c4"}
+	addStopped(t, f, names[1:]...)
+	v := NewViews(f, Options{MaxCached: 3})
+	for _, n := range names {
+		ready(t, v, n)
+	}
+	if v.count() != 3 {
+		t.Fatalf("%d index en cache, attendu 3", v.count())
+	}
+	ready(t, v, "db") // the least recently used was evicted: built again
+	if n := archiveCalls(f, vID, "/"); n != 2 {
+		t.Errorf("db : %d constructions, attendu 2", n)
+	}
+	ready(t, v, "c4")
+	if n := archiveCalls(f, strings.Repeat("4", 64), "/"); n != 1 {
+		t.Errorf("c4 : %d constructions, attendu 1", n)
+	}
+}
+
+// Review I1: a build in progress is never evicted; four containers polled
+// at once all end up ready.
+func TestViewsFourPolledAtOnce(t *testing.T) {
+	f := stoppedDocker(t)
+	addStopped(t, f, "c2", "c3", "c4")
+	g := &gated{Fake: f, open: make(chan struct{})}
+	v := NewViews(g, Options{MaxCached: 3})
+	names := []string{"db", "c2", "c3", "c4"}
+	for _, n := range names {
+		if _, err := v.For(tctx, n); !errors.Is(err, ErrIndexing) {
+			t.Fatalf("%s : %v", n, err)
+		}
+	}
+	if n := archiveCalls(f, strings.Repeat("4", 64), "/"); n != 0 || v.count() != 3 {
+		t.Fatalf("c4 : %d construction(s), %d index ; attendu 0 et 3 (aucune construction évincée)", n, v.count())
+	}
+	close(g.open)
+	seen := map[string]bool{}
+	for deadline := time.Now().Add(5 * time.Second); len(seen) < len(names); time.Sleep(5 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("jamais prêts : %v", seen)
+		}
+		for _, n := range names {
+			_, err := v.For(tctx, n)
+			if err == nil {
+				seen[n] = true
+			} else if !errors.Is(err, ErrIndexing) {
+				t.Fatalf("%s : %v", n, err)
+			}
+		}
+	}
+}
+
+// R20: three builds finish but their requests went away. The fourth
+// container gets a slot once Grace has passed, not after IdleTTL.
+func TestViewsUnseenIndexesExpire(t *testing.T) {
+	f := stoppedDocker(t)
+	addStopped(t, f, "c2", "c3", "c4")
+	v := NewViews(f, Options{MaxCached: 3, Grace: 300 * time.Millisecond})
+	for _, n := range []string{"db", "c2", "c3"} {
+		v.For(tctx, n) // 202, then never asked again
+	}
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(time.Millisecond) {
+		v.mu.Lock()
+		done := 0
+		for _, b := range v.builds {
+			if finished(b) {
+				done++
+			}
+		}
+		v.mu.Unlock()
+		if done == 3 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("constructions jamais finies")
+		}
+	}
+	c4 := strings.Repeat("4", 64)
+	if _, err := v.For(tctx, "c4"); !errors.Is(err, ErrIndexing) || archiveCalls(f, c4, "/") != 0 {
+		t.Fatalf("pendant Grace : %v, %d construction(s) de c4 (attendu 202 et 0)", err, archiveCalls(f, c4, "/"))
+	}
+	time.Sleep(400 * time.Millisecond)
+	ready(t, v, "c4")
+}
+
+// Review I5: an index unused for IdleTTL is dropped.
+func TestViewsIdleTTL(t *testing.T) {
+	f := stoppedDocker(t)
+	v := NewViews(f, Options{IdleTTL: 50 * time.Millisecond})
+	ready(t, v, "db")
+	waitCount(t, v, 0)
+	ready(t, v, "db")
+	if n := archiveCalls(f, vID, "/"); n != 2 {
+		t.Errorf("%d constructions, attendu 2", n)
+	}
+}
+
+func TestViewsTooLargeSticky(t *testing.T) {
+	f := stoppedDocker(t)
+	v := NewViews(f, Options{Limits: IndexLimits{MaxBytes: 1024}, FirstWait: 5 * time.Second})
+	for range 2 {
+		if _, err := v.For(tctx, "db"); !errors.Is(err, ErrTooLarge) {
+			t.Fatalf("attendu too_large : %v", err)
+		}
+	}
+	if n := archiveCalls(f, vID, "/"); n != 1 {
+		t.Errorf("too_large reste en cache : %d constructions", n)
+	}
+}
+
+func TestViewsDurationCap(t *testing.T) {
+	g := &gated{Fake: stoppedDocker(t), open: make(chan struct{})} // never opened
+	v := NewViews(g, Options{Limits: IndexLimits{MaxDuration: 50 * time.Millisecond}, FirstWait: 5 * time.Second,
+		SlowRetry: 200 * time.Millisecond})
+	for range 2 {
+		if _, err := v.For(tctx, "db"); !errors.Is(err, ErrTooLarge) {
+			t.Fatalf("attendu too_large : %v", err)
+		}
+	}
+	if n := archiveCalls(g.Fake, vID, "/"); n != 1 {
+		t.Fatalf("gardé pendant SlowRetry : %d constructions", n)
+	}
+	time.Sleep(250 * time.Millisecond)
+	v.For(tctx, "db") // Q11: the time cap expires, the bytes cap does not (TestViewsTooLargeSticky)
+	if n := archiveCalls(g.Fake, vID, "/"); n != 2 {
+		t.Errorf("après SlowRetry : %d constructions, attendu 2", n)
+	}
+}
+
+func TestViewsErrorsAreRetried(t *testing.T) {
+	f := stoppedDocker(t)
+	tarOfRoot := f.Archives[vID+":/"]
+	delete(f.Archives, vID+":/")
+	v := NewViews(f, Options{FirstWait: 5 * time.Second})
+	if _, err := v.For(tctx, "db"); !errors.Is(err, dockerx.ErrNotFound) {
+		t.Fatalf("attendu not_found : %v", err)
+	}
+	waitCount(t, v, 0) // not kept
+	f.Archives[vID+":/"] = tarOfRoot
+	ready(t, v, "db")
+	if n := archiveCalls(f, vID, "/"); n != 2 {
+		t.Errorf("%d constructions, attendu 2", n)
+	}
+}
+
+// docker start while dockerd builds the tar: the index would mix two states.
+type startsDuringBuild struct {
+	*dockerx.Fake
+	started atomic.Bool
+}
+
+func (s *startsDuringBuild) GetArchive(ctx context.Context, id, p string) (io.ReadCloser, error) {
+	s.started.Store(true)
+	return s.Fake.GetArchive(ctx, id, p)
+}
+
+func (s *startsDuringBuild) Inspect(ctx context.Context, id string) (dockerx.ContainerInfo, error) {
+	info, err := s.Fake.Inspect(ctx, id)
+	if s.started.Load() {
+		info.Running, info.Pid = true, 4242
+	}
+	return info, err
+}
+
+func TestViewsStartedDuringBuild(t *testing.T) {
+	d := &startsDuringBuild{Fake: stoppedDocker(t)}
+	v := NewViews(d, Options{FirstWait: 5 * time.Second})
+	if _, err := v.For(tctx, "db"); !errors.Is(err, ErrContainerChanged) {
+		t.Fatalf("attendu container_changed : %v", err)
+	}
+	waitCount(t, v, 0)
+}
+
+func TestViewsForget(t *testing.T) {
+	f := stoppedDocker(t)
+	v := NewViews(f, Options{})
+	ready(t, v, "db")
+	v.Forget(vID)
+	if v.count() != 0 {
+		t.Fatal("Forget n'a rien retiré")
+	}
+	ready(t, v, "db")
+	if n := archiveCalls(f, vID, "/"); n != 2 {
+		t.Errorf("%d constructions, attendu 2", n)
+	}
+}
+
+func TestViewsInspectErrors(t *testing.T) {
+	v := NewViews(&dockerx.Fake{}, Options{})
+	if _, err := v.For(tctx, "nope"); !errors.Is(err, dockerx.ErrNotFound) {
+		t.Errorf("inconnu : %v", err)
+	}
+	down := NewViews(&dockerx.Fake{Err: fmt.Errorf("%w : dial", dockerx.ErrUnavailable)}, Options{})
+	if _, err := down.For(tctx, "web"); !errors.Is(err, dockerx.ErrUnavailable) {
+		t.Errorf("Docker arrêté : %v", err)
+	}
+	// Running without a pid: the stopped path, never procfs.
+	f := stoppedDocker(t)
+	info := f.Infos["db"]
+	info.Running = true
+	f.Infos["db"], f.Infos[vID] = info, info
+	ready(t, NewViews(f, Options{}), "db")
+}

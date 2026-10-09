@@ -62,7 +62,7 @@ func openFor(t *testing.T, id string) FS {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	fsys, err := For(ctx, dc, id)
+	fsys, err := NewViews(dc, Options{}).For(ctx, id)
 	if err != nil {
 		t.Fatalf("For(%s) : %v", id, err)
 	}
@@ -154,20 +154,14 @@ func TestIntegrationProcFSAfterRestart(t *testing.T) {
 	}
 }
 
-func TestIntegrationForStoppedContainer(t *testing.T) {
-	needRoot(t)
-	id := runTarget(t, "hublot-it-fs-stopped", "alpine:3", "true")
-	docker(t, "wait", id)
+func TestIntegrationForAbsentContainer(t *testing.T) {
 	dc, err := dockerx.New()
 	if err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	if _, err := For(ctx, dc, id); !errors.Is(err, ErrStopped) {
-		t.Fatalf("conteneur arrêté : %v", err)
-	}
-	if _, err := For(ctx, dc, "hublot-it-absent"); !errors.Is(err, dockerx.ErrNotFound) {
+	if _, err := NewViews(dc, Options{}).For(ctx, "hublot-it-absent"); !errors.Is(err, dockerx.ErrNotFound) {
 		t.Fatalf("conteneur absent : %v", err)
 	}
 }
