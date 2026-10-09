@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { api, ApiError, login } from './api';
+import { api, ApiError, checkDownload, downloadUrl, listDir, login, previewFile } from './api';
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -44,5 +44,47 @@ describe('api', () => {
 		expect(new Headers(fetchMock.mock.calls[0][1]?.headers).has('Content-Type')).toBe(false);
 		await login('x');
 		expect(new Headers(fetchMock.mock.calls[1][1]?.headers).get('Content-Type')).toBe('application/json');
+	});
+});
+
+describe('file routes', () => {
+	it('lists a directory with an encoded id and path', async () => {
+		const fetchMock = vi.fn<typeof fetch>(
+			async () => new Response(JSON.stringify({ path: '/a b', type: 'dir', entries: [], truncated: false }))
+		);
+		vi.stubGlobal('fetch', fetchMock);
+		await expect(listDir('web', '/a b')).resolves.toMatchObject({ path: '/a b', type: 'dir' });
+		expect(fetchMock.mock.calls[0][0]).toBe('/api/containers/web/fs?path=%2Fa%20b');
+	});
+
+	it('builds the download URL', () => {
+		expect(downloadUrl('web', '/etc/my file')).toBe('/api/containers/web/fs/download?path=%2Fetc%2Fmy%20file');
+	});
+
+	it('previews text, images and binaries', async () => {
+		stubFetch(async () => new Response('hello', { headers: { 'Content-Type': 'text/plain; charset=utf-8', ETag: '"abc"' } }));
+		await expect(previewFile('web', '/f')).resolves.toEqual({ kind: 'text', text: 'hello', etag: '"abc"' });
+
+		stubFetch(async () => new Response(new Uint8Array([137, 80, 78, 71]), { headers: { 'Content-Type': 'image/png', ETag: '"x"' } }));
+		const img = await previewFile('web', '/i.png');
+		expect(img.kind).toBe('image');
+		if (img.kind === 'image') expect(img.blob.size).toBe(4);
+
+		stubFetch(async () => new Response(null, { headers: { 'Content-Type': 'application/octet-stream' } }));
+		await expect(previewFile('web', '/bin')).resolves.toEqual({ kind: 'binary' });
+	});
+
+	it('maps preview errors', async () => {
+		stubFetch(async () => new Response(JSON.stringify({ error: 'too_large' }), { status: 413 }));
+		await expect(previewFile('web', '/big')).rejects.toMatchObject({ status: 413, code: 'too_large' });
+	});
+
+	it('checks a download without starting it', async () => {
+		stubFetch(async () => new Response(JSON.stringify({ error: 'link_in_path' }), { status: 422 }));
+		await expect(checkDownload('/api/x?path=%2Fl')).rejects.toMatchObject({ code: 'link_in_path' });
+		const fetchMock = vi.fn<typeof fetch>(async () => new Response(null, { status: 204 }));
+		vi.stubGlobal('fetch', fetchMock);
+		await expect(checkDownload('/api/x?path=%2Fetc')).resolves.toBeUndefined();
+		expect(fetchMock.mock.calls[0][0]).toBe('/api/x?path=%2Fetc&check=1');
 	});
 });
