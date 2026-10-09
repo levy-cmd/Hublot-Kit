@@ -8,23 +8,47 @@
 
 **Goal:** L'utilisateur explore un conteneur arrêté comme un conteneur actif (liste, aperçu, téléchargement), avec une barre de progression pendant la première indexation. Il voit ce que le conteneur a changé par rapport à son image (onglet Changements, marques dans l'explorateur). Aucune lecture ne passe par un lien non résolu, et aucun tar n'est demandé pour un conteneur dont les montages exposent l'hôte.
 
-**Architecture:** `fsview` gagne `tarindex` (§5.2) : un index en mémoire des en-têtes de `GET /archive` de `/`, résolu composant par composant. Le constructeur `For` devient `Views.For` : un `Views` par agent garde le cache des index (LRU 3, clé `ID + FinishedAt`, une seule construction par clé). Une route encore en construction répond `202 indexing` avec la progression. `dockerx` gagne `FinishedAt`, `SizeRootFs` et `Changes` ; `api` gagne `GET /changes`. L'interface gagne la barre de progression, l'onglet Changements et les marques du diff. Le plan solde aussi les trois écarts laissés par le plan 1 : (a) destination Docker sous un lien, (b) `EPERM` de `pidfd_send_signal`, (c) `testing` lié au binaire.
+**Architecture:** `fsview` gagne `tarindex` (§5.2) : un index en mémoire des en-têtes de `GET /archive` de `/`, résolu composant par composant. Le constructeur `For` devient `Views.For` : un `Views` par agent garde le cache des index (LRU 3, clé `ID + FinishedAt`, une seule construction par clé). Une route encore en construction répond `202 indexing` avec la progression. `dockerx` gagne `FinishedAt`, `SizeRootFs` et `Changes` ; `api` gagne `GET /changes`. L'interface gagne la barre de progression, l'onglet Changements et les marques du diff. Le plan solde aussi les trois écarts laissés par le plan 1 : (a) destination Docker sous un lien, (b) vivacité du process (`EPERM` de `pidfd_send_signal`), (c) `testing` lié au binaire.
 
 **Tech Stack:** Go 1.27 (`archive/tar`, `net/http`), `github.com/moby/moby/client` v0.6.1, `github.com/cyphar/filepath-securejoin` v0.7.0 (`pathrs-lite`), `golang.org/x/sys` v0.48.0 ; SvelteKit 3 / Svelte 5, Vitest, Playwright (`@playwright/test`, nouvelle dépendance de développement, exigée par §10).
 
 **Spec:** `docs/superpowers/specs/2026-10-07-hublot-kit-v0.1-design.md` (§4, §5.1 étape 5, §5.2, §5.4, §6, §9, §10, §13). Plan précédent (format, décisions en vigueur, Q1 à Q9) : `docs/superpowers/plans/2026-10-08-explorateur-1-procfs.md`.
+
+## Décisions de revue
+
+Revue du plan, premier tour (relecteur Opus et Codex, « Prêt avec réserves »). Une ligne par correction, avec la tâche qui l'applique.
+
+- **R1 (I1) :** une construction en cours n'est jamais évincée, ni un index qu'aucune requête n'a encore vu. Si les 3 places sont prises ainsi, `202` (progression 0) sans rien lancer. Sinon quatre conteneurs interrogés ensemble s'évinceraient sans fin. Test `TestViewsFourPolledAtOnce`. → Tâche 4.
+- **R2 (I2) :** `&check=1` et `HEAD` sur un fichier d'un conteneur arrêté ne demandent plus rien à Docker. Interface facultative `fsview.OpenChecker` (`CheckOpen`), implémentée par `tarFS` ; `procfs` garde `Open` + `Close`. → Tâches 2, 3, 5.
+- **R3 (I3) :** la première occurrence d'un lien physique doit se résoudre en elle-même et être un fichier régulier, sinon `not_regular`. Test rouge `TestTarHardLinkThroughSymlink` (`/a/` devenu lien vers `/etc`). → Tâches 2, 3.
+- **R4 (I4) :** le montage retrouvé par identifiant doit être le montage Docker. Sa racine (`mountinfo`, champ 4) termine la `Source` du bind, ou finit par `/<nom>/_data` pour un volume. Le sens retenu est « la racine termine la `Source` », et non l'inverse : la racine est un chemin relatif au système de fichiers source. P ≠ `/`, un même P pour une seule destination. Piège « chroot vers / » testé. → Tâche 8.
+- **R5 (I5) :** un index inutilisé 10 min est retiré (`IdleTTL`) ; `MaxHeaders` reste à 1 000 000. `TestMeasureIndexMemory` relève les octets par entrée ; la tâche 13 baisse `MaxHeaders` si 1 000 000 d'entrées dépassent 300 Mo. → Tâches 3, 4, 13.
+- **R6 (Codex) :** `tarFS.List` et `tarFS.Stat` sont donnés en code. → Tâche 3.
+- **R7 :** la mutation qui ne compilait pas est remplacée (contrôle « non-dossier au milieu » supprimé, `maxHops = 41`, `resolve(first)` retiré). → Tâche 3.
+- **R8 :** `io/fs` importé dans `mounts_test.go` ; aucun test n'appelle `scanMountinfo` directement, la phrase est corrigée. → Tâche 8.
+- **R9 :** cas d'une cible de lien qui contient `..` (`/e` → `d/../share/x`, piège `/share/x`). → Tâche 2.
+- **R10 :** `TestTarTrapsAreArmed` lit chaque piège jusqu'à `io.EOF`. → Tâche 2.
+- **R11 (écart b) :** la vivacité passe par `poll` sans attente sur le pidfd, plus par `pidfd_send_signal`, qu'un profil seccomp peut faire répondre `EPERM`. Un zombie compte pour terminé ; le test ne dépend plus de root. → Tâche 7.
+- **R12 :** une requête qui attendait une construction retirée entre-temps (redémarrage, `Forget`) reçoit `202`, jamais `503`. → Tâche 4.
+- **R13 :** dans `CheckArchive`, les contrôles qui ne lisent rien dans le conteneur passent avant `LocateMounts` (`pathrs` + `statx`, qui peuvent buter sur un FUSE). → Tâche 8.
+- **R14 :** le `too_large` du plafond de durée expire après 5 min (`SlowRetry`) ; ceux des octets et des entrées restent. Le message dit que les volumes comptent dans les 4 Gio. → Tâches 4, 10 ; Q10, Q11.
+- **R15 :** `readlink` du test d'intégration passe par `exec`, sans le helper `docker()` qui ferait `Fatalf` : le saut redevient atteignable. → Tâche 8.
+- **R16 :** `scripts/e2e.sh` échoue, avec les logs de l'agent, si l'agent ne répond jamais. → Tâche 12.
+- **R17 :** « décommenter » remplacé par « ajout » partout (tâche 9). **R18 :** essai manuel avec `/tmp/hk-bind` au lieu de `/srv`, que Docker Desktop ne partage pas. → Tâche 10.
+- **R19 (sobriété) :** retirés le troisième test 202 (`fs_test.go`), `TestViewsFirstWait`, la goroutine de `TestFakeSizesDiffsCalls` et Playwright dans la VM (la CI le couvre). Le test d'intégration de la tâche 1 ne garde que la ligne `MESURE`. → Tâches 1, 4, 5, 13.
 
 ## Décisions de ce plan (la spec ne tranche pas)
 
 - **`Views` remplace `For`.** `fsview.NewViews(docker, opt) *Views`, `(*Views).For(ctx, id) (FS, error)`, `(*Views).Forget(id)` (pour le plan 3, après une écriture, §5.2 étape 1). `api.Deps` gagne `Views *fsview.Views` (nil : `NewViews(Docker, DefaultOptions())`) ; `OpenFS` nil vaut `Views.For`. → Tâche 4.
 - **Cache (§5.2 étapes 1, 2, 4).**
   - Clé `ID + "\x00" + FinishedAt`. Une nouvelle clé pour un ID efface les anciennes (redémarré puis arrêté).
-  - Au plus 3 entrées, **constructions en cours comprises** ; l'éviction (moins récemment utilisée) annule une construction en cours. Raison : la mémoire reste bornée même si l'on ouvre quatre gros conteneurs d'affilée.
-  - `too_large` reste en cache jusqu'au prochain arrêt du conteneur (ou au redémarrage de l'agent) ; toute autre erreur (Docker indisponible, `container_changed`) n'est pas gardée : le prochain accès relance.
+  - Au plus 3 entrées, **constructions en cours comprises**. Une construction en cours, ou un index qu'aucune requête n'a encore vu, n'est jamais évincé ; si les 3 places sont prises ainsi, la requête reçoit `202` (progression 0) sans rien lancer (R1).
+  - Un index inutilisé pendant **10 min** est retiré (R5) : l'objectif de 50 Mo « au repos » de §5.2 étape 4 vaut donc dès 10 min sans visite. `MaxHeaders` reste à 1 000 000 ; la tâche 3 mesure les octets par entrée.
+  - `too_large` des plafonds d'octets et d'entrées reste en cache jusqu'au prochain arrêt du conteneur (ou au redémarrage de l'agent). Celui du plafond de durée expire après 5 min (Q11, R14). Toute autre erreur (Docker indisponible, `container_changed`) n'est pas gardée : le prochain accès relance.
   - La requête **qui lance** la construction attend au plus 1 s (`FirstWait`) : un petit conteneur (alpine : 250 ms mesurées au spike) répond sans 202. Les requêtes suivantes ne bloquent jamais : elles ne tiennent pas un créneau de la garde.
 - **Plafond d'entrées.** En plus de 4 Gio et 5 min, la construction s'arrête au-delà de **1 000 000 d'entrées** (`too_large`). Raison : un tar de 4 Gio d'en-têtes vides compte 8 millions d'entrées, soit plus d'un gigaoctet d'index. Ajouté à la spec §5.2 étape 3. → Tâches 3, 4.
 - **Démarré pendant la construction.** Après la fin du tar, un second `Inspect` doit montrer le même `FinishedAt` et un conteneur arrêté ; sinon l'index est jeté, `container_changed`. → Tâche 4.
-- **Lecture d'un fichier (`Open`).** Seul le chemin entièrement résolu part vers `GetArchive`. L'unique entrée reçue doit être un fichier régulier du même nom de base. Sinon (le fichier a changé par `docker cp` depuis l'indexation) → `container_changed`, et l'index est retiré du cache. La lecture va jusqu'à `io.EOF` du tar : une seconde entrée ou une archive tronquée font échouer la lecture. → Tâches 2, 3.
+- **Lecture d'un fichier (`Open`).** Seul le chemin entièrement résolu part vers `GetArchive` ; pour un lien physique, sa première occurrence, qui doit se résoudre en elle-même (R3). `&check=1` et `HEAD` jugent sur l'index seul, par `CheckOpen` (R2). L'unique entrée reçue doit être un fichier régulier du même nom de base. Sinon (le fichier a changé par `docker cp` depuis l'indexation) → `container_changed`, et l'index est retiré du cache. La lecture va jusqu'à `io.EOF` du tar : une seconde entrée ou une archive tronquée font échouer la lecture. → Tâches 2, 3.
 - **Noms du tar.** Chaque nom passe par `CleanPath("/" + nom)` (`/bin/`, `./bin`, `bin` donnent `/bin`). Parents absents : créés comme dossiers. Entrée sous un non-dossier : ignorée (inatteignable). Doublon : le dernier gagne, listé une fois. Lien physique vers une cible inconnue ou non régulière : `TypeOther` (`Open` → `not_regular`). → Tâche 3.
 - **Troncature.** `archive/tar` ne distingue pas une archive coupée net sur une frontière de bloc d'une archive finie. Ce cas n'est pas détecté ; une coupure du corps HTTP, elle, remonte une erreur du client Docker. Limite notée ici, pas dans la spec.
 - **`/proc` et `/sys` d'un conteneur arrêté.** Montrés comme des dossiers vides (spec §5.2 étape 7 : leurs entrées sont ignorées). Pas de `forbidden_path`.
@@ -38,7 +62,7 @@
   - Si le diff échoue dans l'explorateur, aucune marque, sans message : le diff est secondaire là, l'onglet Changements a son propre état d'erreur.
 - **Écarts du plan 1.** Les trois sont traités ici :
   - (a) destination Docker sous un lien : comparaison par identifiant de montage (tâche 8). Raison : tout conteneur qui monte `/var/run/docker.sock` (Portainer, Traefik, Watchtower) voit aujourd'hui refusé le tar de chacun de ses dossiers, et le plan 3 (écriture) ne repasse pas par ce code.
-  - (b) `EPERM` de `pidfd_send_signal` : le process existe (le noyau vérifie le droit après l'avoir trouvé), donc vivant ; seul `ESRCH` vaut `container_changed` ; toute autre erreur → `internal` (tâche 7).
+  - (b) vivacité : `poll` sans attente sur le pidfd (lisible = terminé, zombie compris) remplace `pidfd_send_signal(pidfd, 0)`, qui confondait `EPERM` (droits, seccomp) avec une mort ; échec de `poll` → `internal` (tâche 7, R11).
   - (c) `testing` dans le binaire : `SetCgroupReaderForTests` disparaît au profit de `Options.ReadCgroup` (tâche 4). La vérification est `go list -deps`.
 - **`dockerx.Fake`** gagne un verrou sur `ArchiveCalls` et `Calls()` : la construction d'un index appelle `GetArchive` depuis une goroutine.
 - **Playwright.** Fichiers `web/e2e/*.e2e.ts`, pour que Vitest (qui prend `*.spec.ts` et `*.test.ts`) ne les ramasse pas. Langue `fr-FR`. Agent et conteneur cible lancés par `scripts/e2e.sh`, en local comme en CI.
@@ -47,10 +71,10 @@
 
 Le plan suit la recommandation de chaque question ; une réponse différente change la tâche indiquée.
 
-- **Q10 — Indexation automatique ou à la demande ?** Ouvrir l'onglet Fichiers d'un conteneur arrêté lance la lecture de tout son tar (jusqu'à 4 Gio, volumes compris).
+- **Q10 — Indexation automatique ou à la demande ?** Ouvrir l'onglet Fichiers d'un conteneur arrêté lance la lecture de tout son tar (jusqu'à 4 Gio, volumes compris : ils sont dans l'archive).
   - *Recommandation :* automatique, comme le dit §5.2 étape 2. Les plafonds bornent le coût, le cache évite de recommencer, et un bouton « Indexer » ajouterait un clic au cas d'usage principal (« pourquoi mon app plante »). → Tâches 4, 10.
-- **Q11 — `too_large` définitif ?** Une fois le plafond atteint, le conteneur reste refusé jusqu'à son prochain arrêt ou au redémarrage de l'agent.
-  - *Recommandation :* oui, sans bouton « Réessayer » : le résultat serait le même. Le message propose de démarrer le conteneur pour l'explorer (procfs, sans tar). → Tâches 4, 10.
+- **Q11 — `too_large` définitif ?** Une fois un plafond atteint, faut-il refuser le conteneur jusqu'à son prochain arrêt ?
+  - *Recommandation (revue, R14) :* oui pour les plafonds d'octets et d'entrées : le résultat serait le même. Le plafond de durée, lui, peut tenir à un moment de lenteur de Docker : il expire après 5 min. Pas de bouton « Réessayer ». Le message dit que les volumes comptent dans les 4 Gio et propose de démarrer le conteneur pour l'explorer (procfs, sans tar). → Tâches 4, 10.
 - **Q12 — Très gros diff.** Un `npm install` dans un conteneur peut produire 100 000 changements.
   - *Recommandation :* l'API renvoie tout (forme de la spec). L'onglet affiche les 1 000 premiers, triés, avec le décompte par type et « N changements de plus ». Pas de filtre en v0.1. → Tâches 9, 11.
 - **Q13 — Fichiers supprimés dans l'explorateur.** Ils n'existent plus, donc le listing ne les montre pas.
@@ -86,8 +110,9 @@ Le plan suit la recommandation de chaque question ; une réponse différente cha
 | Liens physiques (§5.2 ét. 6), `/proc` et `/sys` ignorés (§5.2 ét. 7), plafonds (§5.2 ét. 3) | Tâche 2 | Tâche 3 |
 | Binds de l'hôte et extensions Q9 : aucun index, aucun tar (§5.2 ét. 7) | Tâche 4, étape 1 | Tâche 4, étape 3 |
 | Câblage par les routes : `403` sans `GetArchive`, `202` avant tout octet | Tâche 5, étape 1 | Tâche 5, étape 3 |
-| `EPERM` = vivant, `ESRCH` = disparu (§5.1 ét. 5) | Tâche 7, étape 1 | Tâche 7, étape 3 |
-| Destination sous un lien : identifiant de montage, échec fermé (§5.4 b) | Tâche 8, étape 1 | Tâche 8, étape 3 |
+| Lien physique dont la première occurrence passe par un lien (revue I3) ; `&check=1` sans `GetArchive` (revue I2) | Tâche 2 | Tâches 3, 5 |
+| Vivacité par `poll` du pidfd : zombie = terminé, pas de faux « mort » sur `EPERM` (§5.1 ét. 5) | Tâche 7, étape 1 | Tâche 7, étape 2 |
+| Destination sous un lien : identifiant de montage lié au montage Docker, échec fermé, piège du chroot (§5.4 b, revue I4) | Tâche 8, étape 1 | Tâche 8, étape 2 |
 
 **Ne pas pousser la branche entre les tâches 2 et 3** : les tests de `tarindex` y sont rouges, sur macOS comme sous Linux.
 
@@ -112,7 +137,7 @@ internal/fsview/tarindex_test.go     tests d'évasion et de résolution, tar en 
 internal/fsview/views.go             Views (ex-for.go) : For, cache, construction, Forget
 internal/fsview/views_test.go        (ex-for_test.go) cache, binds, progression, plafonds
 internal/fsview/mounts.go            + MountIdent, LocateMounts ; scanMountinfo lit l'ID
-internal/fsview/root_linux.go        alive() (EPERM), lecteur de cgroup passé en paramètre ; − SetCgroupReaderForTests
+internal/fsview/root_linux.go        alive() (poll du pidfd), lecteur de cgroup passé en paramètre ; − SetCgroupReaderForTests
 internal/fsview/procfs_archive_linux.go  + mountIdent (statx), LocateMounts, alive()
 internal/fsview/integration_tarindex_test.go  conteneur arrêté réel (tag integration, portable)
 internal/api/server.go               + Deps.Views, route /changes
@@ -178,9 +203,7 @@ func TestFakeSizesDiffsCalls(t *testing.T) {
 	if _, err := f.Changes(context.Background(), "nope"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("diff inconnu : %v", err)
 	}
-	done := make(chan struct{})
-	go func() { f.GetArchive(context.Background(), "full", "/"); close(done) }()
-	<-done
+	f.GetArchive(context.Background(), "full", "/")
 	if c := f.Calls(); !slices.Equal(c, []string{"full:/"}) {
 		t.Fatalf("appels : %v", c)
 	}
@@ -213,15 +236,14 @@ Implémentations :
 
 Run: `go test -race ./internal/dockerx/ 2>&1 | tail -n 5 && go vet ./... 2>&1 | tail -n 5` — Expected: `ok`, aucun avertissement.
 
-- [ ] **Step 3: Test d'intégration** — ajouter à `internal/dockerx/integration_test.go` (même en-tête de build que le fichier ; importer `strings` si absent) :
+- [ ] **Step 3: Mesure sur un vrai Docker** — ajouter à `internal/dockerx/integration_test.go` (même en-tête de build). `FinishedAt` et `Changes` sont couverts de bout en bout aux tâches 6 et 9 ; ce test ne fait que relever `SizeRootFs`.
 
 ```go
-func TestStoppedContainerRealDocker(t *testing.T) {
-	name := "hublot-it-stopped"
+func TestMeasureSizeRootFs(t *testing.T) {
+	name := "hublot-it-size"
 	exec.Command("docker", "rm", "-f", name).Run()
 	t.Cleanup(func() { exec.Command("docker", "rm", "-f", name).Run() })
-	if out, err := exec.Command("docker", "run", "--name", name, "alpine:3", "sh", "-c",
-		"echo hi > /root/added.txt && rm /etc/alpine-release").CombinedOutput(); err != nil {
+	if out, err := exec.Command("docker", "run", "--name", name, "alpine:3", "true").CombinedOutput(); err != nil {
 		t.Fatalf("docker run : %v %s", err, out)
 	}
 	c, err := New()
@@ -230,23 +252,15 @@ func TestStoppedContainerRealDocker(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
-	info, err := c.Inspect(ctx, name)
-	if err != nil || info.Running || info.FinishedAt == "" || strings.HasPrefix(info.FinishedAt, "0001") {
-		t.Fatalf("inspect : %+v %v", info, err)
-	}
-	size, err := c.SizeRootFs(ctx, info.ID)
+	size, err := c.SizeRootFs(ctx, name)
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Logf("MESURE : SizeRootFs = %d octets", size) // 0 : la progression restera à 0 % (pas une erreur)
-	cs, err := c.Changes(ctx, info.ID)
-	if err != nil || !slices.Contains(cs, Change{"/root/added.txt", "added"}) || !slices.Contains(cs, Change{"/etc/alpine-release", "deleted"}) {
-		t.Fatalf("changes : %+v %v", cs, err)
-	}
+	t.Logf("MESURE : SizeRootFs = %d octets", size) // 0: the progress stays at 0 % (not an error)
 }
 ```
 
-Run: `DOCKER_HOST=unix://$HOME/.docker/run/docker.sock go test -tags integration ./internal/dockerx/ -run StoppedContainerRealDocker -v 2>&1 | grep -E 'MESURE|^(ok|FAIL|---)'` — Expected: `--- PASS`, une ligne `MESURE`.
+Run: `DOCKER_HOST=unix://$HOME/.docker/run/docker.sock go test -tags integration ./internal/dockerx/ -run MeasureSizeRootFs -v 2>&1 | grep -E 'MESURE|^(ok|FAIL|---)'` — Expected: `--- PASS`, une ligne `MESURE`.
 
 - [ ] **Step 4: Commit**
 
@@ -289,12 +303,13 @@ func buildIndex(ctx context.Context, r io.Reader, lim IndexLimits, read *atomic.
 func progress(read, total int64) float64 // read/total, at most 0.99; 0 when total <= 0
 type tarFS struct { docker dockerx.Client; id string; mounts []dockerx.Mount; idx *index; stale func() }
 func newTarFS(docker dockerx.Client, id string, mounts []dockerx.Mount, idx *index, stale func()) *tarFS
-// tarFS implements FS: List, Stat, Open, StatNoLinks, CheckArchive, Close
+// tarFS implements FS: List, Stat, Open, StatNoLinks, CheckArchive, Close;
+// plus CheckOpen(ctx, p) error: the checks of Open, from the index only (review I2)
 ```
 
 > **À comprendre :** ici, « s'échapper », c'est demander à Docker autre chose que le chemin entièrement résolu : le lien lui-même, un `..` lexical, la cible brute. Docker résoudrait ce chemin à sa façon, et ce ne serait plus celui qu'on a vérifié. Le faux Docker sert donc `HOST-SECRET` à chacun de ces chemins piégés. `TestTarTrapsAreArmed` prouve qu'il les sert vraiment ; les autres tests prouvent qu'aucun n'est demandé, et qu'aucun octet `HOST-SECRET` n'est lu, même quand une erreur est renvoyée.
 
-- [ ] **Step 1: Stub compilable** — `internal/fsview/tarindex.go` : en-tête de paquet, les déclarations ci-dessus, `var errNotYet = errors.New("tarindex : pas encore implémenté (tâche 3)")`, `var _ FS = (*tarFS)(nil)`. `buildIndex` renvoie `nil, errNotYet` ; `progress` renvoie `-1` ; `newTarFS` remplit les champs ; chaque méthode de `tarFS` renvoie `errNotYet` (`Close` renvoie `nil`).
+- [ ] **Step 1: Stub compilable** — `internal/fsview/tarindex.go` : en-tête de paquet, les déclarations ci-dessus, `var errNotYet = errors.New("tarindex : pas encore implémenté (tâche 3)")`, `var _ FS = (*tarFS)(nil)`. `buildIndex` renvoie `nil, errNotYet` ; `progress` renvoie `-1` ; `newTarFS` remplit les champs ; chaque méthode de `tarFS`, `CheckOpen` compris, renvoie `errNotYet` (`Close` renvoie `nil`).
 
 - [ ] **Step 2: Écrire les tests** — `internal/fsview/tarindex_test.go` (sans étiquette de build ; noms de helpers choisis pour ne pas heurter ceux de `procfs_test.go`, compilé sous Linux) :
 
@@ -374,6 +389,7 @@ func image() []hdr {
 		tlink("/up", "../../../../usr/lib/os-release"),    // ".." blocked at the root
 		tlink("/lib", "usr/lib"),                          // link on an intermediate directory
 		tlink("/d", "/usr/lib"),                           // ".." after a linked directory
+		tlink("/e", "d/../share/x"),                       // ".." inside a target, after a linked directory
 		tlink("/c1", "c2"), tlink("/c2", "c3"), tlink("/c3", "/etc/passwd"),
 		tlink("/loop1", "loop2"), tlink("/loop2", "loop1"),
 		tlink("/dangling", "/nope"), tlink("/empty", ""),
@@ -397,7 +413,7 @@ var realFiles = map[string]string{
 // traps: what a naive implementation would send to GetArchive.
 var traps = []string{
 	"/etc/os-release", "/abs", "/up", "/lib/os-release", "/lib", "/d/../share/x", "/share/x",
-	"/c1", "/c2", "/c3", "/bin/sh", "/../../../../usr/lib/os-release",
+	"/c1", "/c2", "/c3", "/e", "/bin/sh", "/a/x", "/../../../../usr/lib/os-release",
 	"/usr/lib/../../../../usr/lib/os-release", "../usr/lib/os-release", "usr/lib/os-release",
 	"/proc/kallsyms", "/sys/kernel/x",
 }
@@ -466,7 +482,13 @@ func TestTarTrapsAreArmed(t *testing.T) {
 		if _, err := tr.Next(); err != nil {
 			t.Fatal(err)
 		}
-		b, _ := io.ReadAll(tr)
+		b, err := io.ReadAll(tr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tr.Next(); err != io.EOF { // to the end of the tar
+			t.Fatalf("piège %s : %v, attendu io.EOF", p, err)
+		}
 		rc.Close()
 		if string(b) != "HOST-SECRET" {
 			t.Fatalf("piège %s désarmé : %q", p, b)
@@ -481,6 +503,7 @@ func TestTarOpenResolves(t *testing.T) {
 		{"/up", "/usr/lib/os-release", "NAME=Alpine"},
 		{"/lib/os-release", "/usr/lib/os-release", "NAME=Alpine"},
 		{"/d/../share/x", "/usr/share/x", "SHARE-X"}, // parent of the resolved target, never /share/x
+		{"/e", "/usr/share/x", "SHARE-X"},            // the same "..", inside a link target
 		{"/c1", "/etc/passwd", "root:x:0:0"},
 		{"/bin/sh", "/bin/busybox", "BUSYBOX"},
 		{"/../../etc/passwd", "/etc/passwd", "root:x:0:0"},
@@ -657,6 +680,45 @@ func TestTarOpenReadsToEOF(t *testing.T) {
 	}
 }
 
+// Review I3: the first occurrence of a hard link is a path of the archive,
+// but a later entry can turn one of its directories into a symbolic link.
+// Docker would follow it: Open must refuse, from the index.
+func TestTarHardLinkThroughSymlink(t *testing.T) {
+	v := newTarView(t, nil,
+		tdir("/"), tdir("/etc/"), tdir("/a/"), tfile("/a/x", "HOST-SECRET"),
+		tlink("/a", "/etc"),     // the directory /a becomes a link
+		thard("/h", "/a/x"),     // first occurrence: /a/x, now behind the link
+	)
+	b, err := readTar(v, "/h")
+	noLeak(t, v, b)
+	if !errors.Is(err, ErrNotRegular) {
+		t.Errorf("Open(/h) : %v, attendu ErrNotRegular", err)
+	}
+	if err := v.CheckOpen(tctx, "/h"); !errors.Is(err, ErrNotRegular) {
+		t.Errorf("CheckOpen(/h) : %v", err)
+	}
+}
+
+// Review I2: &check=1 and HEAD on a file judge from the index only (spec
+// §5.4: no GetArchive).
+func TestTarCheckOpen(t *testing.T) {
+	v := newTarView(t, nil, image()...)
+	for _, p := range []string{"/etc/os-release", "/bin/sh", "/e"} {
+		if err := v.CheckOpen(tctx, p); err != nil {
+			t.Errorf("CheckOpen(%s) : %v", p, err)
+		}
+	}
+	for _, p := range []string{"/dev/null", "/run.fifo", "/etc"} {
+		if err := v.CheckOpen(tctx, p); !errors.Is(err, ErrNotRegular) {
+			t.Errorf("CheckOpen(%s) : %v, attendu ErrNotRegular", p, err)
+		}
+	}
+	if err := v.CheckOpen(tctx, "/loop1"); !errors.Is(err, syscall.ELOOP) {
+		t.Errorf("CheckOpen(/loop1) : %v", err)
+	}
+	noLeak(t, v, nil)
+}
+
 func TestTarStatNoLinks(t *testing.T) {
 	v := newTarView(t, nil, image()...)
 	for _, p := range []string{"/etc/passwd", "/bin/sh", "/"} { // a hard link is no symbolic link
@@ -819,6 +881,10 @@ const maxHops = 40
 
 var errTooManyBytes = errors.New("plafond d'octets atteint")
 
+// errTooSlow marks a too_large of the time cap: it expires (Q11), the
+// bytes and entries caps stay.
+var errTooSlow = errors.New("plafond de durée")
+
 // countingReader counts the bytes of GET /archive (progress, MaxBytes) and
 // stops at the end of ctx even if the reader below ignores it.
 type countingReader struct {
@@ -858,7 +924,7 @@ func buildIndex(ctx context.Context, r io.Reader, lim IndexLimits, read *atomic.
 		case errors.Is(err, errTooManyBytes):
 			return nil, fmt.Errorf("%w : index au-delà de %d octets lus", ErrTooLarge, lim.MaxBytes)
 		case err != nil && (errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded)):
-			return nil, fmt.Errorf("%w : index au-delà de %s", ErrTooLarge, lim.MaxDuration)
+			return nil, fmt.Errorf("%w : index au-delà de %s (%w)", ErrTooLarge, lim.MaxDuration, errTooSlow)
 		case err != nil:
 			return nil, fmt.Errorf("lecture de l'archive de / : %w", err)
 		case n >= lim.MaxHeaders:
@@ -1016,20 +1082,67 @@ func notExist(p string) error { return &fs.PathError{Op: "resolve", Path: p, Err
 ```go
 // tarFS is the view of a stopped container (spec §5.2): every lookup in the
 // index; only Open asks Docker, for the resolved path of a regular file.
-// List: resolve(dir); not a directory → ErrNotDir; the entries of
-// children[r] in archive order, cut at MaxEntries (truncated = true).
-// Stat: the entry at resolve(p); Stat follows links like any resolved path.
+func (t *tarFS) List(_ context.Context, dir string) ([]Entry, bool, error) {
+	r, err := t.idx.resolve(dir)
+	if err != nil {
+		return nil, false, err
+	}
+	if t.idx.entries[r].Type != TypeDir {
+		return nil, false, fmt.Errorf("%w : %s", ErrNotDir, dir)
+	}
+	names := t.idx.children[r]
+	truncated := len(names) > MaxEntries
+	if truncated {
+		names = names[:MaxEntries]
+	}
+	out := make([]Entry, 0, len(names))
+	for _, n := range names {
+		out = append(out, t.idx.entries[childPath(r, n)])
+	}
+	return out, truncated, nil
+}
 
-func (t *tarFS) Open(ctx context.Context, p string) (io.ReadCloser, error) {
+// Stat follows links, like any resolved path; List shows the links themselves.
+func (t *tarFS) Stat(_ context.Context, p string) (Entry, error) {
 	r, err := t.idx.resolve(p)
 	if err != nil {
-		return nil, err
+		return Entry{}, err
+	}
+	return t.idx.entries[r], nil
+}
+
+// regularPath is the path Open sends to GetArchive for p: resolved, a
+// regular file. For a hard link, its first occurrence, which must itself
+// resolve to itself (review I3: a later entry may have turned one of its
+// directories into a link, which Docker would follow).
+func (t *tarFS) regularPath(p string) (string, error) {
+	r, err := t.idx.resolve(p)
+	if err != nil {
+		return "", err
 	}
 	if t.idx.entries[r].Type != TypeFile {
-		return nil, fmt.Errorf("%w : %s", ErrNotRegular, p)
+		return "", fmt.Errorf("%w : %s", ErrNotRegular, p)
 	}
 	if first, ok := t.idx.hardlinks[r]; ok {
-		r = first // a regular file of the index, its path free of links
+		_, chained := t.idx.hardlinks[first]
+		if got, err := t.idx.resolve(first); err != nil || got != first || chained || t.idx.entries[first].Type != TypeFile {
+			return "", fmt.Errorf("%w : %s (lien physique vers %s)", ErrNotRegular, p, first)
+		}
+		r = first
+	}
+	return r, nil
+}
+
+// CheckOpen: every check of Open, without asking Docker (&check=1, HEAD).
+func (t *tarFS) CheckOpen(_ context.Context, p string) error {
+	_, err := t.regularPath(p)
+	return err
+}
+
+func (t *tarFS) Open(ctx context.Context, p string) (io.ReadCloser, error) {
+	r, err := t.regularPath(p)
+	if err != nil {
+		return nil, err
 	}
 	rc, err := t.docker.GetArchive(ctx, t.id, r)
 	if err != nil {
@@ -1099,12 +1212,38 @@ func (t *tarFS) CheckArchive(ctx context.Context, _ string) error {
 func (t *tarFS) Close() error { return nil }
 ```
 
-- [ ] **Step 4: Vérifier**
+- [ ] **Step 4: Mesure de la mémoire (revue I5)** — ajouter à `tarindex_test.go` (importer `runtime`) :
 
-Run: `go test -race ./internal/fsview/ 2>&1 | tail -n 3 && go vet ./internal/fsview/ && GOOS=linux go vet ./internal/fsview/ 2>&1 | tail -n 3`
-Expected: `ok` ; aucun avertissement. Mutation à rejouer (le test doit rougir, puis revenir) : remplacer `cur = path.Dir(cur)` par `cur = path.Dir(next)` → `TestTarOpenResolves` échoue ; retirer `hops` du `if` (compteur remis à zéro) → `TestTarHopBudget` échoue.
+```go
+// Review I5: bytes per index entry, against the 50 MB goal of spec §5.2 step 4.
+func TestMeasureIndexMemory(t *testing.T) {
+	const n = 50_000
+	hs := []hdr{tdir("/")}
+	for i := range n {
+		hs = append(hs, tfile(fmt.Sprintf("/usr/share/doc/pkg%03d/file-%06d.txt", i%1000, i), ""))
+	}
+	b := mkTar(t, hs...)
+	var before, after runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&before)
+	idx, err := buildIndex(tctx, bytes.NewReader(b), DefaultIndexLimits, new(atomic.Int64))
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime.GC()
+	runtime.ReadMemStats(&after)
+	per := float64(int64(after.HeapAlloc)-int64(before.HeapAlloc)) / float64(len(idx.entries))
+	t.Logf("MESURE : %.0f octets par entrée, soit %.0f Mo pour 1 000 000 d'entrées", per, per)
+	runtime.KeepAlive(idx)
+}
+```
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 5: Vérifier**
+
+Run: `go test ./internal/fsview/ -run MeasureIndexMemory -v 2>&1 | grep MESURE && go test -race ./internal/fsview/ 2>&1 | tail -n 3 && go vet ./internal/fsview/ && GOOS=linux go vet ./internal/fsview/ 2>&1 | tail -n 3`
+Expected: `ok` ; aucun avertissement. Mutations à rejouer (le test doit rougir, puis revenir) : supprimer le contrôle `if len(todo) > 0 && e.Type != TypeDir` → `TestTarStat` échoue (`/etc/passwd/..` devient `/etc`) ; passer `maxHops` à 41 → `TestTarHopBudget` échoue ; retirer le `resolve(first)` de `regularPath` → `TestTarHardLinkThroughSymlink` échoue.
+
+- [ ] **Step 6: Commit**
 
 ```bash
 git add internal/fsview/tarindex.go
@@ -1138,9 +1277,11 @@ type Options struct {
 	Limits     IndexLimits   // zero fields: DefaultIndexLimits
 	MaxCached  int           // 0: 3
 	FirstWait  time.Duration // the request that starts a build waits that long; 0: no wait
+	IdleTTL    time.Duration // 0: 10 min
+	SlowRetry  time.Duration // 0: 5 min
 	ReadCgroup func(pid int) ([]byte, error) // nil: /proc/<pid>/cgroup
 }
-func DefaultOptions() Options // {DefaultIndexLimits, 3, time.Second, nil}
+func DefaultOptions() Options // {DefaultIndexLimits, 3, time.Second, 10 min, 5 min, nil}
 func NewViews(docker dockerx.Client, opt Options) *Views
 func (v *Views) For(ctx context.Context, id string) (FS, error)
 func (v *Views) Forget(id string)
@@ -1343,13 +1484,6 @@ func TestViewsIndexingThenReady(t *testing.T) {
 	}
 }
 
-func TestViewsFirstWait(t *testing.T) {
-	v := NewViews(stoppedDocker(t), Options{FirstWait: 5 * time.Second})
-	if _, err := v.For(tctx, "db"); err != nil { // a small container answers without 202
-		t.Fatal(err)
-	}
-}
-
 func TestViewsProgressCapped(t *testing.T) {
 	g := &gated{Fake: stoppedDocker(t), open: make(chan struct{}), free: 4096}
 	g.Sizes[vID] = 1024 // volumes are in the archive, not in SizeRootFs
@@ -1390,15 +1524,20 @@ func TestViewsCacheKey(t *testing.T) {
 	}
 }
 
-func TestViewsLRU(t *testing.T) {
-	f := stoppedDocker(t)
-	names := []string{"db", "c2", "c3", "c4"}
-	for _, n := range names[1:] {
+// addStopped adds stopped containers named n, of ID strings.Repeat(n[1:], 64).
+func addStopped(t *testing.T, f *dockerx.Fake, names ...string) {
+	for _, n := range names {
 		id := strings.Repeat(n[1:], 64)
 		info := stoppedInfo(id, n)
 		f.Infos[n], f.Infos[id] = info, info
 		f.Archives[id+":/"] = mkTar(t, image()...)
 	}
+}
+
+func TestViewsLRU(t *testing.T) {
+	f := stoppedDocker(t)
+	names := []string{"db", "c2", "c3", "c4"}
+	addStopped(t, f, names[1:]...)
 	v := NewViews(f, Options{MaxCached: 3})
 	for _, n := range names {
 		ready(t, v, n)
@@ -1413,6 +1552,51 @@ func TestViewsLRU(t *testing.T) {
 	ready(t, v, "c4")
 	if n := archiveCalls(f, strings.Repeat("4", 64), "/"); n != 1 {
 		t.Errorf("c4 : %d constructions, attendu 1", n)
+	}
+}
+
+// Review I1: a build in progress is never evicted; four containers polled
+// at once all end up ready.
+func TestViewsFourPolledAtOnce(t *testing.T) {
+	f := stoppedDocker(t)
+	addStopped(t, f, "c2", "c3", "c4")
+	g := &gated{Fake: f, open: make(chan struct{})}
+	v := NewViews(g, Options{MaxCached: 3})
+	names := []string{"db", "c2", "c3", "c4"}
+	for _, n := range names {
+		if _, err := v.For(tctx, n); !errors.Is(err, ErrIndexing) {
+			t.Fatalf("%s : %v", n, err)
+		}
+	}
+	if n := archiveCalls(f, strings.Repeat("4", 64), "/"); n != 0 || v.count() != 3 {
+		t.Fatalf("c4 : %d construction(s), %d index ; attendu 0 et 3 (aucune construction évincée)", n, v.count())
+	}
+	close(g.open)
+	seen := map[string]bool{}
+	for deadline := time.Now().Add(5 * time.Second); len(seen) < len(names); time.Sleep(5 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("jamais prêts : %v", seen)
+		}
+		for _, n := range names {
+			_, err := v.For(tctx, n)
+			if err == nil {
+				seen[n] = true
+			} else if !errors.Is(err, ErrIndexing) {
+				t.Fatalf("%s : %v", n, err)
+			}
+		}
+	}
+}
+
+// Review I5: an index unused for IdleTTL is dropped.
+func TestViewsIdleTTL(t *testing.T) {
+	f := stoppedDocker(t)
+	v := NewViews(f, Options{IdleTTL: 50 * time.Millisecond})
+	ready(t, v, "db")
+	waitCount(t, v, 0)
+	ready(t, v, "db")
+	if n := archiveCalls(f, vID, "/"); n != 2 {
+		t.Errorf("%d constructions, attendu 2", n)
 	}
 }
 
@@ -1431,9 +1615,20 @@ func TestViewsTooLargeSticky(t *testing.T) {
 
 func TestViewsDurationCap(t *testing.T) {
 	g := &gated{Fake: stoppedDocker(t), open: make(chan struct{})} // never opened
-	v := NewViews(g, Options{Limits: IndexLimits{MaxDuration: 50 * time.Millisecond}, FirstWait: 5 * time.Second})
-	if _, err := v.For(tctx, "db"); !errors.Is(err, ErrTooLarge) {
-		t.Fatalf("attendu too_large : %v", err)
+	v := NewViews(g, Options{Limits: IndexLimits{MaxDuration: 50 * time.Millisecond}, FirstWait: 5 * time.Second,
+		SlowRetry: 200 * time.Millisecond})
+	for range 2 {
+		if _, err := v.For(tctx, "db"); !errors.Is(err, ErrTooLarge) {
+			t.Fatalf("attendu too_large : %v", err)
+		}
+	}
+	if n := archiveCalls(g.Fake, vID, "/"); n != 1 {
+		t.Fatalf("gardé pendant SlowRetry : %d constructions", n)
+	}
+	time.Sleep(250 * time.Millisecond)
+	v.For(tctx, "db") // Q11: the time cap expires, the bytes cap does not (TestViewsTooLargeSticky)
+	if n := archiveCalls(g.Fake, vID, "/"); n != 2 {
+		t.Errorf("après SlowRetry : %d constructions, attendu 2", n)
 	}
 }
 
@@ -1569,23 +1764,38 @@ type Options struct {
 	Limits    IndexLimits   // zero fields: DefaultIndexLimits
 	MaxCached int           // indexes kept, builds in progress included; 0: 3
 	FirstWait time.Duration // the request that starts a build waits that long before 202; 0: no wait
+	IdleTTL   time.Duration // an index unused that long is dropped (review I5); 0: 10 min
+	SlowRetry time.Duration // a too_large of the time cap expires after that (Q11); 0: 5 min
 	// ReadCgroup replaces the reading of /proc/<pid>/cgroup (spec §5.1 step 3).
 	// nil in production; tests give one to a process of their own.
 	ReadCgroup func(pid int) ([]byte, error)
 }
 
 // DefaultOptions and NewViews: see Interfaces. NewViews replaces every zero
-// or negative field of opt.Limits by DefaultIndexLimits' and MaxCached <= 0 by
-// 3, then returns &Views{docker, opt, builds: map[string]*build{}}.
+// or negative field of opt.Limits by DefaultIndexLimits', MaxCached by 3,
+// IdleTTL by 10 min, SlowRetry by 5 min, then returns
+// &Views{docker, opt, builds: map[string]*build{}}.
 
 type build struct {
 	id     string
-	done   chan struct{} // closed once idx or err is set
+	done   chan struct{} // closed once idx, err and doneAt are set
 	cancel context.CancelFunc
 	read   atomic.Int64
 	total  atomic.Int64 // SizeRootFs; 0 while unknown
 	idx    *index
 	err    error
+	doneAt time.Time
+	served bool        // under v.mu: its result reached a request at least once
+	idle   *time.Timer // under v.mu: drops the finished index after IdleTTL unused
+}
+
+func finished(b *build) bool {
+	select {
+	case <-b.done:
+		return true
+	default:
+		return false
+	}
 }
 
 // For: id may be a name or a short ID; errors of Inspect pass through.
@@ -1607,23 +1817,30 @@ func (v *Views) For(ctx context.Context, id string) (FS, error) {
 	if err != nil {
 		return nil, err
 	}
-	return newTarFS(v.docker, info.ID, info.Mounts, idx, func() { v.drop(key) }), nil
+	return newTarFS(v.docker, info.ID, info.Mounts, idx, func() { v.drop(key, nil) }), nil
 }
 
 // Forget(id) removeLocked's every key whose build.id is id, under v.mu
-// (plan Explorateur 3, after a write: spec §5.2 step 1). drop(key) is
-// removeLocked(key) under v.mu.
+// (plan Explorateur 3, after a write: spec §5.2 step 1). drop(key, b)
+// removeLocked's key under v.mu, only if it still holds b (any build if b is nil).
 
 func (v *Views) index(ctx context.Context, key string, info dockerx.ContainerInfo) (*index, error) {
 	v.mu.Lock()
 	b, ok := v.builds[key]
+	if ok && finished(b) && errors.Is(b.err, errTooSlow) && time.Since(b.doneAt) > v.opt.SlowRetry {
+		v.removeLocked(key) // Q11: the time cap may have met a slow moment of Docker
+		ok = false
+	}
 	if !ok {
 		for k, old := range v.builds {
 			if old.id == info.ID {
 				v.removeLocked(k) // restarted since: stale
 			}
 		}
-		b = v.startLocked(key, info)
+		if b = v.startLocked(key, info); b == nil {
+			v.mu.Unlock()
+			return nil, &IndexingError{} // every slot holds a build in progress (review I1)
+		}
 	}
 	v.touchLocked(key)
 	v.mu.Unlock()
@@ -1636,31 +1853,41 @@ func (v *Views) index(ctx context.Context, key string, info dockerx.ContainerInf
 		case <-ctx.Done():
 		}
 	}
-	select {
-	case <-b.done:
-		if b.err != nil {
-			return nil, b.err
-		}
-		return b.idx, nil
-	default:
+	if !finished(b) {
 		return nil, &IndexingError{Progress: progress(b.read.Load(), b.total.Load())}
 	}
+	v.mu.Lock()
+	b.served = true
+	v.mu.Unlock()
+	if b.err != nil {
+		return nil, b.err
+	}
+	return b.idx, nil
 }
 
+// startLocked starts the build of key, or returns nil when no slot can be
+// freed. Review I1: a build in progress is never evicted, nor an index no
+// request has seen yet; otherwise four containers polled at once would evict
+// each other forever. The victim is the least recently used of the others.
 func (v *Views) startLocked(key string, info dockerx.ContainerInfo) *build {
+	for len(v.builds) >= v.opt.MaxCached {
+		i := slices.IndexFunc(v.order, func(k string) bool { b := v.builds[k]; return finished(b) && b.served })
+		if i < 0 {
+			return nil
+		}
+		v.removeLocked(v.order[i])
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), v.opt.Limits.MaxDuration)
 	b := &build{id: info.ID, done: make(chan struct{}), cancel: cancel}
 	v.builds[key] = b
 	v.order = append(v.order, key)
-	for len(v.order) > v.opt.MaxCached {
-		v.removeLocked(v.order[0]) // least recently used; a build in progress is cancelled
-	}
 	go v.run(ctx, key, b, info)
 	return b
 }
 
-// touchLocked moves key to the end of v.order. removeLocked cancels the
-// build of key, deletes it from v.builds and from v.order (missing: no-op).
+// touchLocked moves key to the end of v.order and re-arms its idle timer.
+// removeLocked stops the idle timer, cancels the build of key, deletes it
+// from v.builds and from v.order (missing: no-op).
 
 func (v *Views) run(ctx context.Context, key string, b *build, info dockerx.ContainerInfo) {
 	defer b.cancel()
@@ -1669,22 +1896,31 @@ func (v *Views) run(ctx context.Context, key string, b *build, info dockerx.Cont
 			b.total.Store(size)
 		}
 	}()
-	b.idx, b.err = v.buildFor(ctx, b, info)
-	close(b.done)
-	if b.err != nil && !errors.Is(b.err, ErrTooLarge) {
-		v.mu.Lock()
-		if v.builds[key] == b {
-			v.removeLocked(key) // not kept: the next access builds again
-		}
-		v.mu.Unlock()
+	idx, err := v.buildFor(ctx, b, info)
+	if err != nil && errors.Is(ctx.Err(), context.Canceled) {
+		err = &IndexingError{} // removed meanwhile (restart, Forget): its waiters ask again, never a 503
 	}
+	b.idx, b.err, b.doneAt = idx, err, time.Now()
+	close(b.done)
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if v.builds[key] != b {
+		return
+	}
+	if err != nil && !errors.Is(err, ErrTooLarge) {
+		v.removeLocked(key) // not kept: the next access builds again
+		return
+	}
+	// Review I5: spec §5.2 step 4 counts memory at rest; an index unused for
+	// IdleTTL goes away.
+	b.idle = time.AfterFunc(v.opt.IdleTTL, func() { v.drop(key, b) })
 }
 
 func (v *Views) buildFor(ctx context.Context, b *build, info dockerx.ContainerInfo) (*index, error) {
 	rc, err := v.docker.GetArchive(ctx, info.ID, "/")
 	if err != nil {
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-			return nil, fmt.Errorf("%w : index au-delà de %s", ErrTooLarge, v.opt.Limits.MaxDuration)
+			return nil, fmt.Errorf("%w : index au-delà de %s (%w)", ErrTooLarge, v.opt.Limits.MaxDuration, errTooSlow)
 		}
 		return nil, err
 	}
@@ -1718,7 +1954,7 @@ func (v *Views) buildFor(ctx context.Context, b *build, info dockerx.ContainerIn
   - §4 : « Un constructeur `fsview.For(ctx, docker, containerID)` renvoie `procfs` si le conteneur tourne, `tarindex` sinon. » → « Un `fsview.Views` par agent, qui garde le cache des index (§5.2) : `Views.For(ctx, containerID)` renvoie `procfs` si le conteneur tourne, `tarindex` sinon. »
   - §5.2 étape 2 : ajouter « La requête qui lance la construction attend au plus 1 s : un petit conteneur répond sans `202`. Les requêtes suivantes répondent tout de suite. »
   - §5.2 étape 3 : après « (valeurs proposées : 4 Gio, 5 minutes) », insérer « , et en nombre d'entrées (1 000 000) » ; à la fin de l'étape : « Après la fin du tar, un second `Inspect` doit montrer le conteneur arrêté avec le même `FinishedAt`, sinon l'index est jeté (`container_changed`). »
-  - §5.2 étape 4 : ajouter « Les constructions en cours comptent dans les 3 ; l'éviction annule une construction en cours. Un `too_large` reste en cache jusqu'au prochain arrêt ; toute autre erreur est retentée au prochain accès. »
+  - §5.2 étape 4 : ajouter « Les constructions en cours comptent dans les 3, mais ne sont jamais évincées, pas plus qu'un index qu'aucune requête n'a encore vu : si aucune place ne se libère, la requête reçoit `indexing` sans rien lancer. Un index inutilisé pendant 10 min est retiré (mémoire au repos). Un `too_large` d'octets ou d'entrées reste en cache jusqu'au prochain arrêt ; celui du plafond de durée expire après 5 min ; toute autre erreur est retentée au prochain accès. »
   - §5.2 étape 7 : après la phrase sur le volume `local` en `o=bind`, insérer « Comme pour le tar d'un dossier d'un conteneur actif (§5.4 a), sont refusés aussi les types de montage autres que bind, volume, tmpfs et image, les volumes `local` dont `type=` est un pseudo-système ou FUSE, les volumes d'un pilote tiers et ceux dont les options ne se lisent pas : `GET /archive` de `/` les traverse tous, et un volume qui ne répond pas bloquerait dockerd. »
   - §5.4 puce (a) : « Ces extensions ne valent pas, pour l'instant, pour l'explorateur d'un conteneur arrêté (§5.2) ; » → « Ces extensions valent aussi pour l'explorateur d'un conteneur arrêté (§5.2 étape 7) ; ».
 
@@ -1748,18 +1984,18 @@ EOF
 
 ---
 
-### Task 5: Routes de fichiers sur un conteneur arrêté : `202 indexing`
+### Task 5: Routes de fichiers sur un conteneur arrêté : `202 indexing`, `&check=1` sans `GetArchive`
 
 **Où tester :** macOS.
 
 **Files:**
-- Modify: `internal/api/fserr.go`, `internal/api/fserr_test.go`, `internal/api/fs_test.go`
+- Modify: `internal/api/fserr.go`, `internal/api/fserr_test.go`, `internal/api/fs_download.go`, `internal/fsview/fsview.go`
 - Create: `internal/api/fs_stopped_test.go`
 - Modify: spec §6
 
 **Interfaces:**
-- Consumes: `fsview.IndexingError`, `fsview.ErrIndexing`, `fsview.NewViews`, `fsview.Options`, `fixture.views` (tâche 4).
-- Produces: réponse `202 {"error":"indexing","detail":"…","progress":<0..0.99>}`.
+- Consumes: `fsview.IndexingError`, `fsview.ErrIndexing`, `fsview.NewViews`, `fsview.Options`, `fixture.views` (tâche 4) ; `tarFS.CheckOpen` (tâche 3).
+- Produces: réponse `202 {"error":"indexing","detail":"…","progress":<0..0.99>}` ; `type OpenChecker interface { CheckOpen(ctx context.Context, path string) error }` dans `fsview.go` (facultatif : `procfs` et `MemFS` ne l'implémentent pas et gardent `Open` + `Close`).
 
 - [ ] **Step 1: Tests qui échouent** — `internal/api/fs_stopped_test.go` :
 
@@ -1904,6 +2140,16 @@ func TestStoppedContainerRoutes(t *testing.T) {
 	if len(l.Entries) != 2 {
 		t.Fatalf("listing : %+v", l)
 	}
+	// Review I2: check=1 and HEAD on a file judge from the index (spec §5.4: no GetArchive).
+	if rec := f.do("GET", "/api/containers/db/fs/download?path=/etc/alias&check=1", "", c); rec.Code != http.StatusNoContent {
+		t.Errorf("check=1 d'un fichier : %d %s", rec.Code, rec.Body)
+	}
+	if rec := f.do("HEAD", "/api/containers/db/fs/download?path=/etc/hostname", "", c); rec.Code != http.StatusNoContent {
+		t.Errorf("HEAD d'un fichier : %d", rec.Code)
+	}
+	if calls := fake.Calls(); slices.Contains(calls, dbID+":/etc/hostname") {
+		t.Errorf("check=1 a lu le fichier : %v", calls)
+	}
 	rec = f.do("GET", "/api/containers/db/fs/file?path=/etc/alias", "", c)
 	if rec.Code != http.StatusOK || rec.Body.String() != "db\n" {
 		t.Errorf("aperçu par un lien : %d %q", rec.Code, rec.Body)
@@ -1980,15 +2226,7 @@ func TestIndexingErrorBody(t *testing.T) {
 }
 ```
 
-Dans `fserr_test.go`, ajouter la ligne `{&fsview.IndexingError{Progress: 0.5}, http.StatusAccepted, "indexing"},` avant le cas `errors.New("autre")`. Dans `fs_test.go`, `TestFSListErrors`, avant le cas `nope`, ajouter :
-
-```go
-	f.openErr = &fsview.IndexingError{Progress: 0.42}
-	if rec := f.do("GET", "/api/containers/web/fs?path=/", "", f.session(t)); rec.Code != http.StatusAccepted || errCode(t, rec) != "indexing" {
-		t.Errorf("indexation : %d %s", rec.Code, rec.Body)
-	}
-	f.openErr = nil
-```
+Dans `fserr_test.go`, ajouter la ligne `{&fsview.IndexingError{Progress: 0.5}, http.StatusAccepted, "indexing"},` avant le cas `errors.New("autre")`.
 
 Run: `go test ./internal/api/ -run 'Stopped|Indexing|FSListErrors|FSErrorStatus' 2>&1 | grep -E '^(---|ok|FAIL)' | head -n 12`
 Expected: FAIL — 500 `internal` au lieu de 202 (le code ne connaît pas encore `ErrIndexing`). `TestStoppedHostBindRefusesEveryRoute` passe déjà (tâche 4) : c'est le contrôle du câblage.
@@ -2015,6 +2253,8 @@ func writeFSError(w http.ResponseWriter, err error) {
 ```
 
 et dans `fsErrorStatus`, après les deux cas de la garde : `case errors.Is(err, fsview.ErrIndexing): return http.StatusAccepted, "indexing"`.
+
+`fsview.go` : `OpenChecker` (voir Interfaces), commenté « every check of Open without reading: a view that would have to ask Docker implements it (spec §5.4, &check=1) ». `fs_download.go`, branche fichier : en mode `check`, si `fsys` implémente `fsview.OpenChecker`, appeler `CheckOpen(ctx, p)` et renvoyer `opened{}` ; sinon le code actuel (`Open` puis `Close`) reste.
 
 - [ ] **Step 3: Spec §6** — supprimer « Conteneur arrêté, en attendant l'index (Explorateur 2) : 501 `internal`, temporaire (Q4). » ; après « Statuts HTTP : … `internal` 500. », ajouter « `indexing` 202, corps `{"error":"indexing","detail":"…","progress":0.42}` (progression plafonnée à 0,99), sur toutes les routes de fichiers, `&check=1` et `HEAD` compris. »
 
@@ -2244,9 +2484,9 @@ EOF
 
 ---
 
-### Task 7: `EPERM` de `pidfd_send_signal` veut dire « vivant » (écart b)
+### Task 7: Vivacité du process par `poll` du pidfd (écart b)
 
-**Où tester :** Linux : `scripts/test-linux.sh` (root) **et** en non-root (`docker run --rm --pid=host -u 1000 -v "$PWD":/src -w /src -e GOCACHE=/tmp/gc -e GOPATH=/tmp/gp hublot-test go test ./internal/fsview/ -run Alive`), car le test `EPERM` réel ne se provoque que sans root. `--pid=host` est indispensable : sans lui, le PID 1 du conteneur serait `go` lui-même, du même utilisateur, et le signal réussirait.
+**Où tester :** Linux : `scripts/test-linux.sh`. Le test ne dépend plus des droits : root ou non, même résultat.
 
 **Files:**
 - Modify: `internal/fsview/root_linux.go`, `internal/fsview/procfs_archive_linux.go`, `internal/fsview/root_linux_test.go`
@@ -2254,88 +2494,114 @@ EOF
 
 **Interfaces:**
 - Consumes: `changed()`.
-- Produces: `alive(pidfd, pid int) error` ; seam `sendSignal0 func(pidfd int) error`.
+- Produces: `alive(pidfd, pid int) error` ; seam `pidfdExited func(pidfd int) (bool, error)`.
 
-- [ ] **Step 1: Tests qui échouent** — ajouter à `root_linux_test.go` (importer `golang.org/x/sys/unix` si absent) :
+> **À comprendre :** le plan 1 testait la vie par `pidfd_send_signal(pidfd, 0)`. Un `EPERM` (droits, ou profil seccomp) y passait pour une mort. Or un pidfd devient lisible quand son process se termine (noyau ≥ 5.3, déjà requis par §5.1). `poll` sans attente répond donc sans aucun contrôle de droit. Un zombie compte désormais pour terminé, ce qui est plus juste : sa racine disparaît.
+
+- [ ] **Step 1: Tests qui échouent** — ajouter à `root_linux_test.go` (importer `os/exec`, `time`, `golang.org/x/sys/unix` si absents) :
 
 ```go
-func TestAliveErrnos(t *testing.T) {
-	old := sendSignal0
-	t.Cleanup(func() { sendSignal0 = old })
+func TestAliveSeam(t *testing.T) {
+	old := pidfdExited
+	t.Cleanup(func() { pidfdExited = old })
 	for _, c := range []struct {
-		errno       error
+		exited      bool
+		err         error
 		ok, changed bool
 	}{
-		{nil, true, false},
-		{unix.EPERM, true, false}, // found, then not allowed: alive
-		{unix.ESRCH, false, true}, // gone
-		{unix.EINVAL, false, false},
+		{false, nil, true, false},
+		{true, nil, false, true},
+		{false, unix.EBADF, false, false}, // poll failed: internal, never container_changed
 	} {
-		sendSignal0 = func(int) error { return c.errno }
-		err := alive(3, 42)
-		if (err == nil) != c.ok || errors.Is(err, ErrContainerChanged) != c.changed {
-			t.Errorf("%v : %v", c.errno, err)
+		pidfdExited = func(int) (bool, error) { return c.exited, c.err }
+		if err := alive(3, 42); (err == nil) != c.ok || errors.Is(err, ErrContainerChanged) != c.changed {
+			t.Errorf("%+v : %v", c, err)
 		}
 	}
 }
 
-// A real EPERM: without root, a process may open a pidfd on PID 1, not signal it.
-func TestAliveRealEPERM(t *testing.T) {
-	if os.Geteuid() == 0 {
-		t.Skip("root peut signaler le PID 1 : EPERM ne se provoque qu'en non-root (job CI go, ou -u 1000)")
-	}
+// Real processes. PID 1 cannot be signalled without root (the old EPERM):
+// alive. A zombie still received signal 0: it must now count as exited.
+func TestAliveReal(t *testing.T) {
 	pidfd, err := unix.PidfdOpen(1, 0)
 	if err != nil {
 		t.Fatalf("pidfd_open(1) : %v", err)
 	}
 	defer unix.Close(pidfd)
-	if err := unix.PidfdSendSignal(pidfd, 0, nil, 0); !errors.Is(err, unix.EPERM) {
-		t.Fatalf("contrôle : %v, attendu EPERM", err)
-	}
 	if err := alive(pidfd, 1); err != nil {
-		t.Fatalf("EPERM veut dire vivant : %v", err)
+		t.Errorf("PID 1 : %v", err)
+	}
+	cmd := exec.Command("sleep", "30")
+	must(t, cmd.Start())
+	t.Cleanup(func() { cmd.Process.Kill(); cmd.Wait() })
+	cfd, err := unix.PidfdOpen(cmd.Process.Pid, 0)
+	must(t, err)
+	defer unix.Close(cfd)
+	if err := alive(cfd, cmd.Process.Pid); err != nil {
+		t.Fatalf("vivant : %v", err)
+	}
+	must(t, cmd.Process.Kill()) // not reaped: a zombie
+	for deadline := time.Now().Add(5 * time.Second); !errors.Is(alive(cfd, cmd.Process.Pid), ErrContainerChanged); time.Sleep(time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("un zombie compte encore comme vivant")
+		}
 	}
 }
 ```
 
-Run: `GOOS=linux go vet ./internal/fsview/ 2>&1 | tail -n 3` — Expected: `undefined: sendSignal0`, `undefined: alive`.
+Run: `GOOS=linux go vet ./internal/fsview/ 2>&1 | tail -n 3` — Expected: `undefined: pidfdExited`, `undefined: alive`.
 
 - [ ] **Step 2: Implémenter** — dans `root_linux.go` :
 
 ```go
-// sendSignal0 is pidfd_send_signal(pidfd, 0); a seam for the tests of alive.
-var sendSignal0 = func(pidfd int) error { return unix.PidfdSendSignal(pidfd, 0, nil, 0) }
-
-// alive is spec §5.1 step 5 on the process pidfd pins. ESRCH: gone. EPERM:
-// the kernel found that very process before checking the right to signal it,
-// so it is alive. Anything else is an error of its own (500 internal).
-func alive(pidfd, pid int) error {
-	switch err := sendSignal0(pidfd); {
-	case err == nil, errors.Is(err, unix.EPERM):
-		return nil
-	case errors.Is(err, unix.ESRCH):
-		return changed("le process %d a disparu", pid)
-	default:
-		return fmt.Errorf("pidfd_send_signal(%d) : %w", pid, err)
+// pidfdExited polls pidfd without waiting: readable once the process has
+// exited, zombie included. A seam for the tests of alive.
+var pidfdExited = func(pidfd int) (bool, error) {
+	fds := []unix.PollFd{{Fd: int32(pidfd), Events: unix.POLLIN}}
+	for {
+		n, err := unix.Poll(fds, 0)
+		if err == unix.EINTR {
+			continue
+		}
+		if err != nil {
+			return false, err
+		}
+		if fds[0].Revents&unix.POLLNVAL != 0 {
+			return false, unix.EBADF
+		}
+		return n > 0 && fds[0].Revents&(unix.POLLIN|unix.POLLHUP) != 0, nil
 	}
+}
+
+// alive is spec §5.1 step 5 on the process pidfd pins: exited →
+// container_changed; poll failed → an error of its own (500 internal).
+func alive(pidfd, pid int) error {
+	exited, err := pidfdExited(pidfd)
+	if err != nil {
+		return fmt.Errorf("poll du pidfd du process %d : %w", pid, err)
+	}
+	if exited {
+		return changed("le process %d s'est terminé", pid)
+	}
+	return nil
 }
 ```
 
-Dans `openRoot`, le bloc `if err := unix.PidfdSendSignal(…)` devient `if err := alive(pidfd, pid); err != nil { unix.Close(fd); return fail(err) }`. Dans `procfs_archive_linux.go`, `CheckArchive` : `if err := alive(p.pidfd, p.pid); err != nil { return err }`.
+Dans `openRoot`, le bloc `if err := unix.PidfdSendSignal(…)` devient `if err := alive(pidfd, pid); err != nil { unix.Close(fd); return fail(err) }`. Dans `CheckArchive`, le bloc équivalent devient `if err := alive(p.pidfd, p.pid); err != nil { return err }`. Plus aucun `PidfdSendSignal` : `grep -rn PidfdSendSignal internal | grep -v _test` est vide.
 
-- [ ] **Step 3: Spec §5.1 étape 5** — « `pidfd_send_signal(pidfd, 0)` doit réussir : … Sinon → fermer, `container_changed`. » → « `pidfd_send_signal(pidfd, 0)` doit réussir, ou échouer en `EPERM` (le noyau a trouvé le process avant de vérifier le droit de le signaler : il est vivant). Le process est donc toujours vivant, le PID n'a pas été réattribué entre les étapes 2 et 4, et `rootfd` est bien sa racine. `ESRCH` → fermer, `container_changed` ; toute autre erreur → fermer, `internal`. »
+- [ ] **Step 3: Spec §5.1 étape 5** — « `pidfd_send_signal(pidfd, 0)` doit réussir : le process est toujours vivant, donc le PID n'a pas été réattribué entre les étapes 2 et 4, et `rootfd` est bien sa racine. Sinon → fermer, `container_changed`. » → « Le `pidfd` ne doit pas être lisible (`poll` sans attente ; il le devient quand le process se termine, zombie compris) : le process est toujours vivant, donc le PID n'a pas été réattribué entre les étapes 2 et 4, et `rootfd` est bien sa racine. Lisible → fermer, `container_changed` ; échec de `poll` → fermer, `internal`. `pidfd_send_signal(pidfd, 0)` n'est pas utilisé : il répond `EPERM` sans droit de signaler (ou sous un profil seccomp). » Adapter de même la mention de §5.4 (b) « qui doit être vivant après la lecture » si elle cite le signal.
 
 - [ ] **Step 4: Vérifier**
 
-Run: `scripts/test-linux.sh ./internal/fsview/ -run 'Alive|OpenRoot|CheckArchive' -v 2>&1 | grep -E '^(---|ok|FAIL)'` puis la commande non-root de « Où tester », filtrée par `| tail -n 3`.
-Expected: root : `TestAliveRealEPERM` **SKIP** avec son message, le reste PASS (dont `TestOpenRootDetectsDeadProcess`, qui couvre `ESRCH` réel) ; non-root : `TestAliveRealEPERM` PASS.
+Run: `scripts/test-linux.sh ./internal/fsview/ -run 'Alive|OpenRoot|CheckArchive' -v 2>&1 | grep -E '^(---|ok|FAIL)'` puis, en non-root, `docker run --rm --pid=host -u 1000 -v "$PWD":/src -w /src -e GOCACHE=/tmp/gc -e GOPATH=/tmp/gp hublot-test go test ./internal/fsview/ -run Alive 2>&1 | tail -n 3`
+Expected: tout PASS, aucun SKIP, dans les deux cas. Contrôle de l'ancienne implémentation (à rejouer une fois) : avec le signal 0, `TestAliveReal` échoue sur le zombie.
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add internal/fsview docs/superpowers/specs/2026-10-07-hublot-kit-v0.1-design.md
 git commit -F - <<'EOF'
-explorateur: EPERM de pidfd_send_signal veut dire vivant, seul ESRCH vaut container_changed
+explorateur: vivacité du process par poll du pidfd, sans pidfd_send_signal
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 EOF
@@ -2343,36 +2609,38 @@ EOF
 
 ---
 
-### Task 8: Destination Docker sous un lien : comparaison par identifiant de montage (écart a)
+### Task 8: Destination Docker sous un lien : identifiant de montage lié au montage Docker (écart a)
 
-**Où tester :** macOS (logique portable) ; `scripts/test-linux.sh` (le conteneur de test monte `/var/run/docker.sock` et `/var/run` → `/run` dans l'image `golang`) ; intégration Linux.
+**Où tester :** macOS (logique portable) ; `scripts/test-linux.sh` (le conteneur de test monte `/var/run/docker.sock`, et `/var/run` → `/run` dans l'image `golang`) ; intégration Linux.
 
 **Files:**
 - Modify: `internal/fsview/mounts.go`, `internal/fsview/mounts_test.go`, `internal/fsview/procfs_archive_linux.go`, `internal/fsview/procfs_archive_linux_test.go`, `internal/fsview/integration_test.go`
 - Modify: spec §5.4 puce (b), §13 (dernière ligne)
 
 **Interfaces:**
-- Consumes: `scanMountinfo`, `CheckVisibleMounts`, `PseudoMountInMounts`, `procFS.root`, `pathrs.OpenatInRoot`.
-- Produces: `type MountIdent struct{ MountID, Dev, Ino uint64 }` ; `LocateMounts(mountinfo string, mounts []dockerx.Mount, ident func(p string) (MountIdent, error)) []dockerx.Mount` ; `(*procFS).mountIdent(p string) (MountIdent, error)` ; `scanMountinfo`'s `visit` reçoit `(id uint64, mountPoint, fsType string)`.
+- Consumes: `scanMountinfo`, `CheckVisibleMounts`, `PseudoMountInMounts`, `PseudoMountUnder`, `alive` (tâche 7), `procFS.root`, `pathrs.OpenatInRoot`.
+- Produces: `type MountIdent struct{ MountID, Dev, Ino uint64 }` ; `type mountLine struct{ ID uint64; Root, Point, FSType string }` (champs 1, 4, 5 et type) ; `scanMountinfo(mountinfo string, visit func(mountLine) bool)` ; `LocateMounts(mountinfo string, mounts []dockerx.Mount, ident func(p string) (MountIdent, error)) []dockerx.Mount` ; `(*procFS).mountIdent(p string) (MountIdent, error)`.
 
-> **À comprendre :** `-v /var/run/docker.sock:/var/run/docker.sock` dans une image où `/var/run` → `/run` : Docker résout la destination dans le conteneur et monte en `/run/docker.sock`, que `mountinfo` montre. `CheckVisibleMounts` ne trouve pas `/var/run/docker.sock` et refuse tout tar (échec fermé, plan 1). La preuve qu'il s'agit du même montage : la destination, résolue dans le conteneur par `pathrs`, est sur le montage n (`statx` `STATX_MNT_ID`, noyau ≥ 5.8). `mountinfo` montre n au point P. Et P, résolu à son tour, donne le même montage, le même périphérique et le même inode. Sans les trois, on refuse comme avant.
+> **À comprendre :** prenons `-v /var/run/docker.sock:/var/run/docker.sock` dans une image où `/var/run` → `/run`. Docker monte en `/run/docker.sock`, que `mountinfo` montre. `CheckVisibleMounts` ne trouve pas `/var/run/docker.sock` et refuse tout tar. Retrouver le montage par son identifiant (`statx` `STATX_MNT_ID`, noyau ≥ 5.8) ne suffit pas : si le PID 1 s'est chrooté sur un point de montage, des liens plantés dedans peuvent mener chaque destination vers une racine de montage visible (revue I4). Le montage trouvé doit donc **être** ce montage Docker : sa racine (`mountinfo`, champ 4) doit terminer la `Source` d'un bind, ou finir par `/<Name>/_data` pour un volume. De plus, P ne peut pas être `/`, et un même P ne peut pas servir deux destinations.
 
-- [ ] **Step 1: Tests qui échouent** — `mounts_test.go` (portable) :
+- [ ] **Step 1: Tests qui échouent** — `mounts_test.go` (portable ; importer `io/fs`) :
 
 ```go
 func TestLocateMounts(t *testing.T) {
 	mi := strings.Join([]string{
 		"20 1 0:20 / / rw - overlay overlay rw",
 		"42 20 0:5 /docker.sock /run/docker.sock rw - tmpfs tmpfs rw",
-		"43 20 0:30 / /run/x rw - tmpfs tmpfs rw",
+		"43 20 8:1 /var/lib/docker/volumes/v/_data /run/x rw - ext4 /dev/sda1 rw",
 		"44 43 0:4 / /run/x/proc rw - proc proc rw",
 	}, "\n")
 	ids := map[string]MountIdent{
 		"/var/run/docker.sock": {42, 5, 7}, "/run/docker.sock": {42, 5, 7}, // same mount, same inode
-		"/var/run/plain": {20, 20, 99}, "/": {20, 20, 2}, // not a mount: on "/", another inode
-		"/var/run/x": {43, 30, 2}, "/run/x": {43, 30, 2},
-		"/var/run/stale": {77, 1, 1}, // ID absent from the table
-		"/var/run/other": {42, 5, 8}, // same mount, another inode
+		"/var/run/sock2":       {42, 5, 7}, // a second destination onto that mount
+		"/var/run/plain":       {20, 20, 99}, "/": {20, 20, 2}, // not a mount: on "/", another inode
+		"/data":                {20, 20, 2}, // links planted after a chroot lead /data to the root
+		"/var/run/x":           {43, 30, 2}, "/run/x": {43, 30, 2},
+		"/var/run/stale":       {77, 1, 1}, // ID absent from the table
+		"/var/run/other":       {42, 5, 8}, // same mount, another inode
 	}
 	ident := func(p string) (MountIdent, error) {
 		if id, ok := ids[p]; ok {
@@ -2380,9 +2648,11 @@ func TestLocateMounts(t *testing.T) {
 		}
 		return MountIdent{}, fs.ErrNotExist
 	}
-	bind := func(dst string) dockerx.Mount { return dockerx.Mount{Type: "bind", Source: "/src", Destination: dst} }
+	sock := func(dst string) dockerx.Mount {
+		return dockerx.Mount{Type: "bind", Source: "/var/run/docker.sock", Destination: dst}
+	}
 
-	in := []dockerx.Mount{bind("/var/run/docker.sock")}
+	in := []dockerx.Mount{sock("/var/run/docker.sock")}
 	got := LocateMounts(mi, in, ident)
 	if got[0].Destination != "/run/docker.sock" || in[0].Destination != "/var/run/docker.sock" {
 		t.Fatalf("localisé : %v (entrée %v, qui ne doit pas changer)", got, in)
@@ -2390,28 +2660,34 @@ func TestLocateMounts(t *testing.T) {
 	if err := CheckVisibleMounts(mi, got); err != nil {
 		t.Fatalf("après localisation : %v", err)
 	}
-	// Fail closed: not a mount, unknown ID, another inode, unresolvable.
-	for _, d := range []string{"/var/run/plain", "/var/run/stale", "/var/run/other", "/var/run/absent"} {
-		got := LocateMounts(mi, []dockerx.Mount{bind(d)}, ident)
-		if got[0].Destination != d {
-			t.Errorf("ÉVASION : %s déplacé vers %s", d, got[0].Destination)
-		}
-		if err := CheckVisibleMounts(mi, got); !errors.Is(err, ErrForbiddenPath) {
-			t.Errorf("%s : %v, attendu un refus", d, err)
+	vol := []dockerx.Mount{{Type: "volume", Name: "v", Destination: "/var/run/x"}}
+	if _, _, dst, bad := PseudoMountInMounts(mi, LocateMounts(mi, vol, ident)); !bad || dst != "/run/x" {
+		t.Errorf("le point retrouvé nourrit la règle « tout le conteneur » : %v %v", bad, dst)
+	}
+	// Fail closed: each of these stays where it is, and the tar is refused.
+	refused := map[string][]dockerx.Mount{
+		"pas un montage":       {sock("/var/run/plain")},
+		"ID inconnu":           {sock("/var/run/stale")},
+		"autre inode":          {sock("/var/run/other")},
+		"introuvable":          {sock("/var/run/absent")},
+		"chroot vers /":        {{Type: "bind", Source: "/srv", Destination: "/data"}},
+		"autre source":         {{Type: "bind", Source: "/srv/other.sock", Destination: "/var/run/docker.sock"}},
+		"autre volume":         {{Type: "volume", Name: "w", Destination: "/var/run/x"}},
+		"tmpfs":                {{Type: "tmpfs", Destination: "/var/run/docker.sock"}},
+		"même point deux fois": {sock("/var/run/docker.sock"), sock("/var/run/sock2")},
+		"point déjà visible":   {sock("/run/docker.sock"), sock("/var/run/docker.sock")},
+	}
+	for name, ms := range refused {
+		if err := CheckVisibleMounts(mi, LocateMounts(mi, ms, ident)); !errors.Is(err, ErrForbiddenPath) {
+			t.Errorf("ÉVASION : %s accepté", name)
 		}
 	}
-	// The located point feeds the whole-container rule (review R2).
-	got = LocateMounts(mi, []dockerx.Mount{bind("/var/run/x")}, ident)
-	if _, _, dst, bad := PseudoMountInMounts(mi, got); !bad || dst != "/run/x" {
-		t.Errorf("proc sous /run/x : %v %v", bad, dst)
-	}
-	// A visible destination is never resolved.
-	LocateMounts(mi, []dockerx.Mount{bind("/run/docker.sock")}, func(string) (MountIdent, error) {
+	// A visible destination is never resolved; an unreadable ID locates nothing.
+	LocateMounts(mi, []dockerx.Mount{sock("/run/docker.sock")}, func(string) (MountIdent, error) {
 		t.Error("ident appelé pour une destination visible")
 		return MountIdent{}, nil
 	})
-	// An unreadable mount ID: nothing is located.
-	if got := LocateMounts("x 20 0:20 / / rw - overlay overlay rw", []dockerx.Mount{bind("/var/run/docker.sock")}, ident); got[0].Destination != "/var/run/docker.sock" {
+	if got := LocateMounts("x 20 0:20 / / rw - overlay overlay rw", in, ident); got[0].Destination != "/var/run/docker.sock" {
 		t.Errorf("ID illisible : %v", got)
 	}
 }
@@ -2428,41 +2704,49 @@ func TestCheckArchiveDestinationUnderSymlink(t *testing.T) {
 	must(t, os.Mkdir(filepath.Join(dir, "real"), 0o755))
 	must(t, os.WriteFile(filepath.Join(dir, "real", "f"), nil, 0o644))
 	must(t, os.Symlink("real", filepath.Join(dir, "link")))
-	p.mounts = []dockerx.Mount{{Type: "bind", Source: "/x", Destination: filepath.Join(dir, "link", "f")}}
+	p.mounts = []dockerx.Mount{{Type: "bind", Source: "/x/f", Destination: filepath.Join(dir, "link", "f")}}
 	if err := p.CheckArchive(ctx, "/etc"); !errors.Is(err, ErrForbiddenPath) || !strings.Contains(err.Error(), "ne montre pas la destination") {
 		t.Fatalf("lien sans montage : %v", err)
 	}
 	// The real case: scripts/test-linux.sh mounts the Docker socket at
-	// /var/run/docker.sock, and /var/run -> /run in the golang image.
+	// /var/run/docker.sock, and /var/run -> /run in the golang image. Its
+	// Source is the mount's root as mountinfo shows it (host layouts differ).
 	mi, err := os.ReadFile(fmt.Sprintf("/proc/%d/mountinfo", cmd.Process.Pid))
 	must(t, err)
+	root := ""
+	for _, line := range strings.Split(string(mi), "\n") {
+		if f := strings.Fields(line); len(f) > 4 && f[4] == "/run/docker.sock" {
+			root = f[3]
+		}
+	}
 	target, err := os.Readlink("/var/run")
 	if err == nil && !path.IsAbs(target) {
 		target = path.Join("/var", target)
 	}
-	if err != nil || path.Clean(target) != "/run" || !strings.Contains(string(mi), " /run/docker.sock ") {
+	if err != nil || path.Clean(target) != "/run" || root == "" || root == "/" {
 		t.Skip("précondition absente : socket Docker monté sous /var/run -> /run (lancer par scripts/test-linux.sh)")
 	}
-	p.mounts = []dockerx.Mount{{Type: "bind", Source: "/var/run/docker.sock", Destination: "/var/run/docker.sock"}}
+	p.mounts = []dockerx.Mount{{Type: "bind", Source: root, Destination: "/var/run/docker.sock"}}
 	if err := p.CheckArchive(ctx, "/etc"); err != nil {
 		t.Fatalf("socket Docker sous /var/run -> /run : %v", err)
 	}
 }
 ```
 
-`integration_test.go` (fsview, `integration && linux`) :
+`integration_test.go` (fsview, `integration && linux` ; importer `path`) :
 
 ```go
 func TestIntegrationDockerSocketUnderVarRun(t *testing.T) {
 	needRoot(t)
 	name := "hublot-it-sock"
 	id := runTarget(t, name, "-v", "/var/run/docker.sock:/var/run/docker.sock", "alpine:3", "sleep", "300")
-	l := docker(t, "exec", name, "readlink", "/var/run")
-	if !path.IsAbs(l) {
+	out, err := exec.Command("docker", "exec", name, "readlink", "/var/run").Output() // not docker(): it would Fatalf
+	l := strings.TrimSpace(string(out))
+	if err == nil && !path.IsAbs(l) {
 		l = path.Join("/var", l)
 	}
-	if path.Clean(l) != "/run" {
-		t.Skipf("précondition absente : /var/run -> %q dans alpine:3", l)
+	if err != nil || path.Clean(l) != "/run" {
+		t.Skipf("précondition absente : /var/run n'est pas un lien vers /run dans alpine:3 (%q, %v)", l, err)
 	}
 	if err := openFor(t, id).CheckArchive(context.Background(), "/etc"); err != nil {
 		t.Fatalf("tar de /etc refusé à cause du socket Docker : %v", err)
@@ -2470,12 +2754,10 @@ func TestIntegrationDockerSocketUnderVarRun(t *testing.T) {
 }
 ```
 
-(importer `path` dans `integration_test.go`.)
-
 Run: `go test ./internal/fsview/ -run LocateMounts 2>&1 | tail -n 3` — Expected: FAIL à la compilation (`MountIdent`, `LocateMounts` indéfinis).
 
 - [ ] **Step 2: Implémenter** — `mounts.go` :
-  - `scanMountinfo(mountinfo string, visit func(id uint64, mountPoint, fsType string) bool)` : lire `id, err := strconv.ParseUint(f[0], 10, 64)` ; en cas d'erreur, `return line, "identifiant de montage illisible", true` (échec fermé). Adapter ses appelants (`dangerousMount`, `CheckVisibleMounts`, et les tests de `mounts_test.go` qui l'appellent) en ajoutant un paramètre `_ uint64`. Un test existant dont la ligne `mountinfo` aurait un premier champ non numérique est corrigé vers le vrai format.
+  - `scanMountinfo(mountinfo string, visit func(mountLine) bool)` : `ID` par `strconv.ParseUint(f[0], 10, 64)`, `Root` = `f[3]` et `Point` = `f[4]`, tous deux par `unescapeMountinfo`. Un ID illisible ou un échappement invalide arrête le parcours, `return line, "…", true` (échec fermé, comme aujourd'hui). Adapter ses deux appelants, `dangerousMount` et `CheckVisibleMounts` ; aucun test ne l'appelle directement.
   - Ajouter :
 
 ```go
@@ -2484,21 +2766,29 @@ Run: `go test ./internal/fsview/ -run LocateMounts 2>&1 | tail -n 3` — Expecte
 type MountIdent struct{ MountID, Dev, Ino uint64 }
 
 // LocateMounts returns a copy of mounts where each destination the mount
-// table does not show verbatim is replaced by the mount point of the very
-// same mount, when that is proved: the destination, resolved in the
-// container (ident follows links, never out of the root), is on mount n;
-// mountinfo shows n at P; P resolves to mount n, same device, same inode.
-// Typical case: /var/run/docker.sock with /var/run -> /run, shown at
-// /run/docker.sock. Anything else leaves the destination as is, and
-// CheckVisibleMounts refuses it (fail closed).
+// table does not show verbatim is replaced by the mount point P of the very
+// same mount, when all of this holds; otherwise it stays, and
+// CheckVisibleMounts refuses it (fail closed):
+//   - the destination, resolved in the container (ident: pathrs, links
+//     followed, never out of the root), is on mount n; P resolves to mount
+//     n with the same device and inode;
+//   - review I4: mount n is this Docker mount (sameMount), so links planted
+//     after a chroot cannot map it onto another mount;
+//   - P is not "/", and no other Docker mount shows, or is mapped to, P.
 func LocateMounts(mountinfo string, mounts []dockerx.Mount, ident func(p string) (MountIdent, error)) []dockerx.Mount {
+	lines := map[uint64]mountLine{}
 	points := map[string]bool{}
-	byID := map[uint64]string{}
-	if _, _, bad := scanMountinfo(mountinfo, func(id uint64, mp, _ string) bool {
-		points[mp], byID[id] = true, mp
+	if _, _, bad := scanMountinfo(mountinfo, func(l mountLine) bool {
+		lines[l.ID], points[l.Point] = l, true
 		return false
 	}); bad {
 		return mounts
+	}
+	taken := map[string]bool{}
+	for _, m := range mounts {
+		if d := CleanPath(m.Destination); points[d] {
+			taken[d] = true
+		}
 	}
 	out := slices.Clone(mounts)
 	for i, m := range out {
@@ -2510,16 +2800,29 @@ func LocateMounts(mountinfo string, mounts []dockerx.Mount, ident func(p string)
 		if err != nil {
 			continue
 		}
-		p, ok := byID[want.MountID]
-		if !ok {
+		l, ok := lines[want.MountID]
+		if !ok || l.Point == "/" || taken[l.Point] || !sameMount(m, l.Root) {
 			continue
 		}
-		if got, err := ident(p); err != nil || got != want {
+		if got, err := ident(l.Point); err != nil || got != want {
 			continue
 		}
-		out[i].Destination = p
+		out[i].Destination, taken[l.Point] = l.Point, true
 	}
 	return out
+}
+
+// sameMount ties a mountinfo root (field 4) to a Docker mount: the end of a
+// bind's Source, or the data directory of a named volume. Anything else
+// (tmpfs, a bind of a host mount root shown as "/") cannot be tied: false.
+func sameMount(m dockerx.Mount, root string) bool {
+	switch m.Type {
+	case "bind":
+		return root != "/" && strings.HasSuffix(CleanPath(m.Source), root)
+	case "volume":
+		return m.Name != "" && strings.HasSuffix(root, "/"+m.Name+"/_data")
+	}
+	return false
 }
 ```
 
@@ -2543,23 +2846,56 @@ func (p *procFS) mountIdent(name string) (MountIdent, error) {
 	}
 	return MountIdent{MountID: st.Mnt_id, Dev: unix.Mkdev(st.Dev_major, st.Dev_minor), Ino: st.Ino}, nil
 }
+
+// CheckArchive (spec §5.2 step 7, §5.4). The checks that read nothing in the
+// container come first; ident (pathrs + statx) may meet a FUSE mount there.
+func (p *procFS) CheckArchive(ctx context.Context, dir string) error {
+	if p.pidfd < 0 {
+		return errors.New("contrôle des montages impossible : vue sans process")
+	}
+	if err := HostBind(ctx, p.docker, p.mounts); err != nil {
+		return err
+	}
+	raw, err := readMountinfo(p.pid)
+	if err != nil {
+		return changed("lecture de /proc/%d/mountinfo : %v", p.pid, err)
+	}
+	if err := alive(p.pidfd, p.pid); err != nil {
+		return err
+	}
+	mi := string(raw)
+	if mp, typ, dst, bad := PseudoMountInMounts(mi, p.mounts); bad {
+		return fmt.Errorf("%w : %s monté sur %s, sous le montage %s du conteneur : aucun tar", ErrForbiddenPath, typ, mp, dst)
+	}
+	if mp, typ, bad := PseudoMountUnder(mi, dir); bad {
+		return fmt.Errorf("%w : %s monté sur %s, le tar de %s l'inclurait", ErrForbiddenPath, typ, mp, CleanPath(dir))
+	}
+	mounts := LocateMounts(mi, p.mounts, p.mountIdent)
+	if err := CheckVisibleMounts(mi, mounts); err != nil {
+		return err
+	}
+	if mp, typ, dst, bad := PseudoMountInMounts(mi, mounts); bad {
+		return fmt.Errorf("%w : %s monté sur %s, sous le montage %s du conteneur : aucun tar", ErrForbiddenPath, typ, mp, dst)
+	}
+	return nil
+}
 ```
 
-Dans `CheckArchive`, après `alive` : `mounts := LocateMounts(string(mi), p.mounts, p.mountIdent)`, puis `CheckVisibleMounts(string(mi), mounts)` et `PseudoMountInMounts(string(mi), mounts)` (au lieu de `p.mounts`). `HostBind` garde `p.mounts` (il juge les sources, pas les destinations).
+`HostBind` garde `p.mounts` : il juge les sources, pas les destinations.
 
-- [ ] **Step 3: Spec** — §5.4 puce (b) : « La table des montages doit montrer la racine `/` et chaque destination d'`Inspect.Mounts` telle quelle, sinon refus (PID 1 chrooté, destination sous un lien). » → « La table des montages doit montrer la racine `/` et chaque destination d'`Inspect.Mounts`, telle quelle ou retrouvée par identifiant de montage : la destination résolue dans le conteneur (`statx` `STATX_MNT_ID`) est sur le montage n, `mountinfo` montre n au point P, et P résolu donne le même montage, le même périphérique et le même inode. Sinon refus (PID 1 chrooté). » §13, dernière ligne : remplacer « ; tout tar de dossier d'un tel conteneur est refusé (fail closed). Une comparaison par identifiant de montage est prévue plus tard » par « : la destination est retrouvée par identifiant de montage (§5.4 b) ; sans preuve, refus (fail closed) ».
+- [ ] **Step 3: Spec** — §5.4 puce (b) : « La table des montages doit montrer la racine `/` et chaque destination d'`Inspect.Mounts` telle quelle, sinon refus (PID 1 chrooté, destination sous un lien). » → « La table des montages doit montrer la racine `/` et chaque destination d'`Inspect.Mounts`, telle quelle ou retrouvée par identifiant de montage. Pour la retrouver : la destination résolue dans le conteneur (`statx` `STATX_MNT_ID`) est sur le montage n ; `mountinfo` montre n au point P, et P résolu donne le même montage, le même périphérique et le même inode. La racine du montage n (champ 4) doit terminer la `Source` du bind, ou finir par `/<nom>/_data` pour un volume. P n'est pas `/`, et il ne sert qu'une seule destination. Sinon refus (PID 1 chrooté). Les contrôles qui ne lisent rien dans le conteneur passent avant cette résolution. » §13, dernière ligne : remplacer « ; tout tar de dossier d'un tel conteneur est refusé (fail closed). Une comparaison par identifiant de montage est prévue plus tard » par « : la destination est retrouvée par identifiant de montage, lié au montage Docker (§5.4 b) ; sans preuve, refus (fail closed) ».
 
 - [ ] **Step 4: Vérifier**
 
 Run: `go test -race ./internal/fsview/ 2>&1 | tail -n 3 && scripts/test-linux.sh -race ./internal/fsview/ -run 'CheckArchive|Locate' -v 2>&1 | grep -E '^(---|ok|FAIL)' && scripts/test-linux.sh -tags integration ./internal/fsview/ -run 'DockerSocket|CheckArchive' 2>&1 | tail -n 3`
-Expected: `ok` ; sous Linux, `TestCheckArchiveDestinationUnderSymlink` **PASS** (pas SKIP : la précondition est remplie dans `scripts/test-linux.sh`). Mutation : faire renvoyer `p` sans le second `ident` → la ligne `/var/run/other` du test portable rougit.
+Expected: `ok` ; sous Linux, `TestCheckArchiveDestinationUnderSymlink` **PASS** (pas SKIP). Si `TestIntegrationDockerSocketUnderVarRun` échoue sur Docker Desktop, la racine du montage ne termine pas la `Source` d'`Inspect` (socket mandataire) : relever les deux valeurs et en discuter avant tout assouplissement. Mutations : retirer `sameMount` → « chroot vers / » et « autre source » rougissent ; retirer le second `ident` → « autre inode » rougit.
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add internal/fsview docs/superpowers/specs/2026-10-07-hublot-kit-v0.1-design.md
 git commit -F - <<'EOF'
-explorateur: destination Docker sous un lien retrouvée par identifiant de montage (socket Docker sous /var/run)
+explorateur: destination Docker sous un lien retrouvée par identifiant de montage, liée au montage Docker
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 EOF
@@ -2573,7 +2909,7 @@ EOF
 
 **Files:**
 - Create: `internal/api/changes.go`, `internal/api/changes_test.go`
-- Modify: `internal/api/server.go` (route), `internal/api/integration_stopped_test.go` (décommenter), spec §6 (ligne de la table)
+- Modify: `internal/api/server.go` (route), `internal/api/integration_stopped_test.go` (ajout de la vérification de `/changes`), spec §6 (ligne de la table)
 
 **Interfaces:**
 - Consumes: `dockerx.Client.Changes`, `containerRef`, `writeFSError`, `session`.
@@ -2765,7 +3101,7 @@ export function fsErrorMessage(code: string, detail: string | undefined, stopped
 | `files.indexing` | `Indexation du conteneur arrêté` | `Indexing the stopped container` |
 | `files.indexingHint` | `Première ouverture : l'agent lit les en-têtes de l'archive du conteneur. Les suivantes sont immédiates.` | `First opening: the agent reads the headers of the container archive. Later ones are immediate.` |
 | `files.stoppedUnavailable` | `Explorateur indisponible pour ce conteneur arrêté : un de ses montages pourrait exposer l'hôte. Les changements restent consultables.` | `File explorer unavailable for this stopped container: one of its mounts could expose the host. Changes remain available.` |
-| `files.stoppedTooLarge` | `Conteneur trop volumineux pour être indexé (4 Gio, 5 minutes ou 1 000 000 d'entrées au plus). Démarrez-le pour l'explorer.` | `Container too large to index (at most 4 GiB, 5 minutes or 1,000,000 entries). Start it to explore it.` |
+| `files.stoppedTooLarge` | `Conteneur trop volumineux pour être indexé (au plus 4 Gio, volumes compris, 5 minutes ou 1 000 000 d'entrées). Démarrez-le pour l'explorer.` | `Container too large to index (at most 4 GiB, volumes included, 5 minutes or 1,000,000 entries). Start it to explore it.` |
 
 - [ ] **Step 3: Composants**
 
@@ -2804,7 +3140,7 @@ export function fsErrorMessage(code: string, detail: string | undefined, stopped
 Run: `cd web && export PATH=/opt/homebrew/bin:$PATH && npx vitest run 2>&1 | tail -n 5 && npm run check 2>&1 | tail -n 3 && npm run lint 2>&1 | tail -n 3 && npm run build 2>&1 | tail -n 2 && grep -rn 'stoppedSoon\|501' src | wc -l`
 Expected: tests verts, `check` et `lint` sans erreur, build OK, `0`.
 
-Essai manuel : `make web && scripts/dev-agent.sh`, puis dans un autre terminal `docker run --name hk-big node:22 true`. Ouvrir `hk-big` : barre de progression, puis le listing sans recharger la page. Ensuite `docker run --name hk-bind -v /srv:/srv alpine:3 true` doit s'explorer. Ne **pas** essayer un bind de `/proc` contre le vrai démon (règle C1). Relever la durée d'indexation de `node:22` pour la tâche 13.
+Essai manuel : `make web && scripts/dev-agent.sh`, puis dans un autre terminal `docker run --name hk-big node:22 true`. Ouvrir `hk-big` : barre de progression, puis le listing sans recharger la page. Ensuite `mkdir -p /tmp/hk-bind && docker run --name hk-bind -v /tmp/hk-bind:/data alpine:3 true` doit s'explorer (`/tmp` est partagé par Docker Desktop, `/srv` ne l'est pas). Ne **pas** essayer un bind de `/proc` contre le vrai démon (règle C1). Relever la durée d'indexation de `node:22` pour la tâche 13.
 
 - [ ] **Step 5: Commit**
 
@@ -3015,6 +3351,7 @@ docker run -d --name hublot-e2e-agent \
   -p 127.0.0.1:7879:7878 \
   alpine:3 /hublot --listen 0.0.0.0:7878 --data-dir /data >/dev/null
 for _ in $(seq 1 40); do curl -sf -o /dev/null http://127.0.0.1:7879/login && break; sleep 0.5; done
+curl -sf -o /dev/null http://127.0.0.1:7879/login || { echo "l'agent ne répond pas" >&2; docker logs hublot-e2e-agent 2>&1 | tail -n 20; exit 1; }
 cd web && HUBLOT_URL=http://127.0.0.1:7879 HUBLOT_TOKEN="$tok" npx playwright test
 ```
 
@@ -3083,13 +3420,11 @@ EOF
 Run (pour chaque VM) : `limactl start hk-ubuntu >/dev/null && limactl shell --workdir "$PWD" hk-ubuntu -- sudo scripts/test-linux.sh -race -tags integration ./cmd/... ./internal/... 2>&1 | grep -E '^(ok|FAIL|---)|MESURE' | tail -n 30`, puis idem `hk-fedora`.
 Expected: `ok` pour chaque paquet. `TestCheckArchiveDestinationUnderSymlink` et `TestIntegrationDockerSocketUnderVarRun` passent (pas de SKIP). Lignes `MESURE` relevées.
 
-- [ ] **Step 2: Parcours Playwright dans une VM** — `limactl shell --workdir "$PWD" hk-ubuntu -- scripts/e2e.sh 2>&1 | tail -n 5` (si Node manque dans la VM : le noter, la CI le couvre).
+- [ ] **Step 2: Mesures** — avec l'agent de dev, indexer un conteneur arrêté de `node:22` : nombre d'entrées (`docker export hk-big | tar -t | wc -l`) et durée (premier 202 → premier 200 dans l'onglet Réseau). Reprendre la ligne `MESURE` de `TestMeasureIndexMemory` (tâche 3 : octets par entrée). Ajouter au paragraphe « Spike » de §5.2 : « Mesuré (plan Explorateur 2, Docker Desktop) : `node:22`, <entrées> entrées, <durée> s ; index : <octets> octets par entrée, soit <Mo> Mo pour 1 000 000 d'entrées. » Si un index de 1 000 000 d'entrées dépasse 300 Mo, baisser `MaxHeaders` en conséquence, dans le code et la spec.
 
-- [ ] **Step 3: Mesure** — avec l'agent de dev, indexer un conteneur arrêté de `node:22` : nombre d'entrées (`List` cumulé, ou `docker export hk-big | tar -t | wc -l`), durée (horodatage du premier 202 → premier 200 dans l'onglet Réseau). Ajouter au paragraphe « Spike » de §5.2 : « Mesuré (plan Explorateur 2, Docker Desktop) : `node:22`, N entrées, X s. »
+- [ ] **Step 3: Revue de branche** — demander la revue complète de la branche (sous-agent indépendant + Codex), corriger, puis cocher les cases de ce plan et y noter les constats.
 
-- [ ] **Step 4: Revue de branche** — demander la revue complète de la branche (sous-agent indépendant + Codex), corriger, puis cocher les cases de ce plan et y noter les constats.
-
-- [ ] **Step 5: Commit**
+- [ ] **Step 4: Commit**
 
 ```bash
 git add docs/superpowers
