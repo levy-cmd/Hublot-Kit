@@ -9,13 +9,16 @@
 	let id = $derived(page.params.id ?? '');
 	let container = $state<Container | null>(null);
 	let error = $state('');
+	let reloads = $state(0); // bumped by the Reload button
 
 	// The list gives the name, image and state; GET /api/containers/{id}
 	// arrives with the X-ray tab (phase Observation).
 	$effect(() => {
 		const wanted = id;
+		void reloads;
 		let current = true;
 		error = '';
+		container = null;
 		listContainers()
 			.then((list) => {
 				if (!current) return;
@@ -38,7 +41,10 @@
 
 <main>
 	<p><a href="/">← {t('nav.containers')}</a></p>
-	{#if error}<p role="alert">{error}</p>{/if}
+	{#if error}
+			<p role="alert">{error}</p>
+			<button type="button" onclick={() => reloads++}>{t('files.reload')}</button>
+		{/if}
 	{#if container}
 		<h1>{container.name} <small class="state {container.state}">{stateLabel(container.state)}</small></h1>
 		<p class="image">{container.image}</p>

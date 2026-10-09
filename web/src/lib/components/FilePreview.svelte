@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import { ApiError, checkDownload, downloadUrl, previewFile, type Entry, type Preview } from '#lib/api.ts';
-	import { baseName, formatMode, formatSize } from '#lib/files.ts';
+	import { baseName, downloadErrorMessage, formatMode, formatSize } from '#lib/files.ts';
 	import { errorMessage, t } from '#lib/i18n/index.ts';
 
 	let { id, path, entry }: { id: string; path: string; entry?: Entry } = $props();
@@ -11,9 +11,11 @@
 	let error = $state('');
 	let loading = $state(false);
 	let downloadError = $state('');
+	let reloads = $state(0); // bumped by the Reload button: same path, new request
 
 	$effect(() => {
 		const wanted = path;
+		void reloads; // dependency: the Reload button re-runs this effect
 		let current = true;
 		let url = '';
 		preview = null;
@@ -52,7 +54,8 @@
 			await checkDownload(url);
 			location.assign(url); // Content-Disposition: attachment, the page stays
 		} catch (e) {
-			downloadError = errorMessage(e instanceof ApiError ? e.code : 'unknown');
+			downloadError =
+				e instanceof ApiError ? downloadErrorMessage(e.code, e.detail) : downloadErrorMessage('unknown');
 		}
 	}
 </script>
@@ -73,6 +76,7 @@
 	<p>{t('files.loading')}</p>
 {:else if error}
 	<p role="alert">{error}</p>
+	<button type="button" onclick={() => reloads++}>{t('files.reload')}</button>
 {:else if preview?.kind === 'text'}
 	<pre>{preview.text}</pre>
 {:else if preview?.kind === 'image' && imageUrl}
