@@ -14,6 +14,7 @@ import (
 	"io/fs"
 	"os"
 	"os/exec"
+	"path"
 	"strings"
 	"testing"
 	"time"
@@ -255,5 +256,44 @@ func TestIntegrationMeasureOwnProcInArchive(t *testing.T) {
 		t.Logf("MESURE : GET /archive ne voit pas le /proc propre du conteneur (%v)", err)
 	default:
 		t.Logf("MESURE : non concluante (%v)", err)
+	}
+}
+
+func TestIntegrationDockerSocketUnderVarRun(t *testing.T) {
+	needRoot(t)
+	name := "hublot-it-sock"
+	id := runTarget(t, name, "-v", "/var/run/docker.sock:/var/run/docker.sock", "alpine:3", "sleep", "300")
+	// Not docker(): a readlink on a path that is no link exits 1, which is the
+	// exact precondition we skip on; anything else fails.
+	out, err := exec.Command("docker", "exec", name, "readlink", "/var/run").Output()
+	var ee *exec.ExitError
+	if err != nil && !errors.As(err, &ee) {
+		t.Fatalf("docker exec readlink /var/run : %v", err)
+	}
+	l := strings.TrimSpace(string(out))
+	if err == nil && !path.IsAbs(l) {
+		l = path.Join("/var", l)
+	}
+	if err != nil || path.Clean(l) != "/run" {
+		t.Skipf("précondition absente : /var/run n'est pas un lien vers /run dans alpine:3 (%q, %v)", l, err)
+	}
+	// Docker Desktop shows a proxy socket whose mount root (mountinfo field 4)
+	// does not end the Source: spec §5.4 (b) refuses it on purpose. Skip on
+	// exactly that, naming both values; anywhere else the tar must pass.
+	const source = "/var/run/docker.sock"
+	root := ""
+	for _, line := range strings.Split(docker(t, "exec", name, "cat", "/proc/1/mountinfo"), "\n") {
+		if f := strings.Fields(line); len(f) > 4 && f[4] == "/run/docker.sock" {
+			root = f[3]
+		}
+	}
+	if root == "" {
+		t.Fatal("/run/docker.sock absent de mountinfo dans le conteneur")
+	}
+	if root == "/" || !strings.HasSuffix(source, root) {
+		t.Skipf("précondition absente : la racine du montage (%q) ne termine pas la Source (%q), socket mandataire de Docker Desktop (spec §5.4 b : refus voulu)", root, source)
+	}
+	if err := openFor(t, id).CheckArchive(context.Background(), "/etc"); err != nil {
+		t.Fatalf("tar de /etc refusé à cause du socket Docker : %v", err)
 	}
 }

@@ -3,6 +3,7 @@ package fsview
 import (
 	"context"
 	"errors"
+	"io/fs"
 	"strings"
 	"testing"
 
@@ -208,5 +209,73 @@ func TestCheckVisibleMounts(t *testing.T) {
 	}
 	if err := CheckVisibleMounts("garbage\n", nil); !errors.Is(err, ErrForbiddenPath) {
 		t.Fatalf("ligne illisible : %v", err)
+	}
+}
+
+func TestLocateMounts(t *testing.T) {
+	mi := strings.Join([]string{
+		"20 1 0:20 / / rw - overlay overlay rw",
+		"42 20 0:5 /docker.sock /run/docker.sock rw - tmpfs tmpfs rw",
+		"43 20 8:1 /var/lib/docker/volumes/v/_data /run/x rw - ext4 /dev/sda1 rw",
+		"44 43 0:4 / /run/x/proc rw - proc proc rw",
+	}, "\n")
+	ids := map[string]MountIdent{
+		"/var/run/docker.sock": {42, 5, 7}, "/run/docker.sock": {42, 5, 7}, // same mount, same inode
+		"/var/run/sock2": {42, 5, 7},                     // a second destination onto that mount
+		"/var/run/plain": {20, 20, 99}, "/": {20, 20, 2}, // not a mount: on "/", another inode
+		"/data":      {20, 20, 2}, // links planted after a chroot lead /data to the root
+		"/data2":     {43, 30, 2}, // ... or /data2 to the root of another mount
+		"/var/run/x": {43, 30, 2}, "/run/x": {43, 30, 2},
+		"/var/run/stale": {77, 1, 1}, // ID absent from the table
+		"/var/run/other": {42, 5, 8}, // same mount, another inode
+	}
+	ident := func(p string) (MountIdent, error) {
+		if id, ok := ids[p]; ok {
+			return id, nil
+		}
+		return MountIdent{}, fs.ErrNotExist
+	}
+	sock := func(dst string) dockerx.Mount {
+		return dockerx.Mount{Type: "bind", Source: "/var/run/docker.sock", Destination: dst}
+	}
+
+	in := []dockerx.Mount{sock("/var/run/docker.sock")}
+	got := LocateMounts(mi, in, ident)
+	if got[0].Destination != "/run/docker.sock" || in[0].Destination != "/var/run/docker.sock" {
+		t.Fatalf("localisé : %v (entrée %v, qui ne doit pas changer)", got, in)
+	}
+	if err := CheckVisibleMounts(mi, got); err != nil {
+		t.Fatalf("après localisation : %v", err)
+	}
+	vol := []dockerx.Mount{{Type: "volume", Name: "v", Destination: "/var/run/x"}}
+	if _, _, dst, bad := PseudoMountInMounts(mi, LocateMounts(mi, vol, ident)); !bad || dst != "/run/x" {
+		t.Errorf("le point retrouvé nourrit la règle « tout le conteneur » : %v %v", bad, dst)
+	}
+	// Fail closed: each of these stays where it is, and the tar is refused.
+	refused := map[string][]dockerx.Mount{
+		"pas un montage":               {sock("/var/run/plain")},
+		"ID inconnu":                   {sock("/var/run/stale")},
+		"autre inode":                  {sock("/var/run/other")},
+		"introuvable":                  {sock("/var/run/absent")},
+		"chroot vers /":                {{Type: "bind", Source: "/srv", Destination: "/data"}},
+		"chroot vers un autre montage": {{Type: "bind", Source: "/srv", Destination: "/data2"}},
+		"autre source":                 {{Type: "bind", Source: "/srv/other.sock", Destination: "/var/run/docker.sock"}},
+		"autre volume":                 {{Type: "volume", Name: "w", Destination: "/var/run/x"}},
+		"tmpfs":                        {{Type: "tmpfs", Destination: "/var/run/docker.sock"}},
+		"même point deux fois":         {sock("/var/run/docker.sock"), sock("/var/run/sock2")},
+		"point déjà visible":           {sock("/run/docker.sock"), sock("/var/run/docker.sock")},
+	}
+	for name, ms := range refused {
+		if err := CheckVisibleMounts(mi, LocateMounts(mi, ms, ident)); !errors.Is(err, ErrForbiddenPath) {
+			t.Errorf("ÉVASION : %s accepté", name)
+		}
+	}
+	// A visible destination is never resolved; an unreadable ID locates nothing.
+	LocateMounts(mi, []dockerx.Mount{sock("/run/docker.sock")}, func(string) (MountIdent, error) {
+		t.Error("ident appelé pour une destination visible")
+		return MountIdent{}, nil
+	})
+	if got := LocateMounts("x 20 0:20 / / rw - overlay overlay rw", in, ident); got[0].Destination != "/var/run/docker.sock" {
+		t.Errorf("ID illisible : %v", got)
 	}
 }
