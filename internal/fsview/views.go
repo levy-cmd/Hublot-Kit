@@ -172,6 +172,9 @@ func (v *Views) index(ctx context.Context, key string, info dockerx.ContainerInf
 	}
 	v.mu.Lock()
 	b.served = true
+	if b.err != nil && !errors.Is(b.err, ErrTooLarge) && v.builds[key] == b {
+		v.removeLocked(key) // delivered once: the next access builds again
+	}
 	v.mu.Unlock()
 	if b.err != nil {
 		return nil, b.err
@@ -250,8 +253,7 @@ func (v *Views) run(ctx context.Context, key string, b *build, info dockerx.Cont
 		return
 	}
 	if err != nil && !errors.Is(err, ErrTooLarge) {
-		v.removeLocked(key) // not kept: the next access builds again
-		return
+		return // kept until one request has received it (see index), so that a poll never rebuilds before seeing the error
 	}
 	if err != nil {
 		return // a too_large holds no index: sticky until FinishedAt changes (Q11, R21)

@@ -444,3 +444,53 @@ func TestViewsInspectErrors(t *testing.T) {
 	f.Infos["db"], f.Infos[vID] = info, info
 	ready(t, NewViews(f, Options{}), "db")
 }
+
+// failsLate holds GET /archive of "/" until open is closed, then fails.
+type failsLate struct {
+	*dockerx.Fake
+	open chan struct{}
+}
+
+func (f *failsLate) GetArchive(ctx context.Context, id, p string) (io.ReadCloser, error) {
+	if p == "/" {
+		f.Fake.GetArchive(ctx, id, p) // recorded
+		<-f.open
+		return nil, errors.New("docker : boom")
+	}
+	return f.Fake.GetArchive(ctx, id, p)
+}
+
+// Review: an error after FirstWait is delivered to the next request, once;
+// polls never rebuild before seeing it.
+func TestViewsLateErrorDeliveredOnce(t *testing.T) {
+	d := &failsLate{Fake: stoppedDocker(t), open: make(chan struct{})}
+	v := NewViews(d, Options{FirstWait: 20 * time.Millisecond})
+	if _, err := v.For(tctx, "db"); !errors.Is(err, ErrIndexing) {
+		t.Fatalf("attendu indexing : %v", err)
+	}
+	close(d.open)
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(time.Millisecond) {
+		v.mu.Lock()
+		done := false
+		for _, b := range v.builds {
+			done = finished(b)
+		}
+		v.mu.Unlock()
+		if done {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("construction jamais finie")
+		}
+	}
+	if _, err := v.For(tctx, "db"); err == nil || errors.Is(err, ErrIndexing) {
+		t.Fatalf("l'erreur doit être livrée : %v", err)
+	}
+	if n := archiveCalls(d.Fake, vID, "/"); n != 1 {
+		t.Fatalf("%d GET /archive avant la livraison, attendu 1", n)
+	}
+	v.For(tctx, "db") // delivered: builds again
+	if n := archiveCalls(d.Fake, vID, "/"); n != 2 {
+		t.Errorf("%d GET /archive après la livraison, attendu 2", n)
+	}
+}
