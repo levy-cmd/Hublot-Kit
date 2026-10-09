@@ -57,7 +57,12 @@
 				}
 				listing = null;
 				const code = e instanceof ApiError ? e.code : 'unknown';
-				error = code === 'forbidden_path' ? t('files.inaccessible') : errorMessage(code);
+				error =
+						e instanceof ApiError && e.status === 501
+							? t('container.stoppedSoon')
+							: code === 'forbidden_path'
+								? t('files.inaccessible')
+								: errorMessage(code);
 			})
 			.finally(() => {
 				if (current) loading = false;
@@ -155,7 +160,7 @@
 </div>
 
 <style>
-	.browser { display: grid; gap: 1rem; }
+	.browser { display: grid; gap: 1rem; grid-template-columns: minmax(0, 1fr); }
 	@media (min-width: 60rem) {
 		.browser { grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); }
 	}

@@ -36,7 +36,12 @@
 					return;
 				}
 				const code = e instanceof ApiError ? e.code : 'unknown';
-				error = code === 'too_large' ? t('files.tooLarge') : errorMessage(code);
+				error =
+						e instanceof ApiError && e.status === 501
+							? t('container.stoppedSoon')
+							: code === 'too_large'
+								? t('files.tooLarge')
+								: errorMessage(code);
 			})
 			.finally(() => {
 				if (current) loading = false;

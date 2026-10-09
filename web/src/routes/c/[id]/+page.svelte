@@ -58,6 +58,7 @@
 			<FileBrowser id={container.id} />
 		{:else}
 			<p>{t('container.stoppedSoon')}</p>
+			<button type="button" onclick={() => reloads++}>{t('files.reload')}</button>
 		{/if}
 	{/if}
 </main>
