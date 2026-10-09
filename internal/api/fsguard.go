@@ -70,6 +70,12 @@ func guarded[T any](g *fsGuard, ctx context.Context, id string, fn func() (T, er
 	}
 	done := make(chan result, 1)
 	go func() {
+		// A bare goroutine is not covered by net/http's per-handler recover.
+		defer func() {
+			if p := recover(); p != nil {
+				done <- result{err: fmt.Errorf("panic: %v", p)}
+			}
+		}()
 		v, err := fn()
 		done <- result{v, err}
 	}()

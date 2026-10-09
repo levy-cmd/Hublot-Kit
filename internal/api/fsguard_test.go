@@ -10,7 +10,11 @@ import (
 func busy(g *fsGuard) int {
 	g.mu.Lock()
 	defer g.mu.Unlock()
-	return len(g.busy)
+	n := 0
+	for _, c := range g.busy {
+		n += c
+	}
+	return n
 }
 
 func TestGuardKeepsTheSlotUntilRelease(t *testing.T) {
@@ -95,5 +99,17 @@ func TestGuardStopsWithTheRequest(t *testing.T) {
 	defer close(block)
 	if _, _, err := guarded(g, ctx, "c", func() (int, error) { <-block; return 0, nil }, nil); !errors.Is(err, errTimeout) {
 		t.Fatalf("requête annulée : %v", err)
+	}
+}
+
+func TestGuardSurvivesAPanic(t *testing.T) {
+	g := newFSGuard(1, time.Second)
+	_, release, err := guarded(g, context.Background(), "c", func() (int, error) { panic("boom") }, nil)
+	release()
+	if err == nil {
+		t.Fatal("une panique doit devenir une erreur")
+	}
+	if busy(g) != 0 {
+		t.Fatalf("créneau non rendu après une panique : %d", busy(g))
 	}
 }

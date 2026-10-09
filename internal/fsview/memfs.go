@@ -27,6 +27,8 @@ type MemFS struct {
 	Closed   atomic.Int32 // number of Close calls
 }
 
+var _ FS = (*MemFS)(nil)
+
 func NewMemFS() *MemFS {
 	return &MemFS{Entries: map[string]Entry{}, Content: map[string][]byte{}}
 }
