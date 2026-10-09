@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"mime"
@@ -10,9 +11,11 @@ import (
 	"net/url"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/levy-cmd/hublot-kit/internal/dockerx"
 	"github.com/levy-cmd/hublot-kit/internal/fsview"
 )
 
@@ -46,7 +49,7 @@ func TestDownloadFile(t *testing.T) {
 func TestDownloadOddFileName(t *testing.T) {
 	f := newFixture(t, false)
 	c := f.session(t)
-	for _, name := range []string{"rapport final.txt", "été-🎉.log", "a\"b;c.txt", "new\nline"} {
+	for _, name := range []string{"rapport final.txt", "été-🎉.log", "a\"b;c.txt", "new\nline", "cr\rname", "tab\tname", "\xff.bin"} {
 		f.fs.AddFile("/"+name, []byte("x"))
 		rec := f.do("GET", "/api/containers/web/fs/download?path="+escape(name), "", c)
 		if rec.Code != http.StatusOK || filename(t, rec) != name {
@@ -66,6 +69,9 @@ func TestDownloadDirectoryAsTar(t *testing.T) {
 	// Exactly the cleaned path, with the full ID (never the name "web").
 	if len(f.docker.ArchiveCalls) != 1 || f.docker.ArchiveCalls[0] != webID+":/etc" {
 		t.Fatalf("appels archive : %v", f.docker.ArchiveCalls)
+	}
+	if n := f.docker.ArchiveCloses.Load(); n != 1 {
+		t.Fatalf("fermetures du corps du tar : %d", n)
 	}
 	f.docker.Archives[webID+":/"] = []byte("ROOT")
 	if rec := f.do("GET", "/api/containers/web/fs/download?path=/", "", f.session(t)); filename(t, rec) != "rootfs.tar" {
@@ -187,4 +193,90 @@ func TestDownloadKeepsItsSlotDuringTheCopy(t *testing.T) {
 	if rec := f.do("GET", "/api/containers/web/fs?path=/", "", c); rec.Code != http.StatusOK {
 		t.Fatalf("créneaux non rendus après la copie : %d %s", rec.Code, rec.Body)
 	}
+}
+
+// HEAD matches the GET pattern: it must not start a tar for nothing.
+func TestDownloadHeadRunsChecksOnly(t *testing.T) {
+	f := newFixture(t, false)
+	f.fs.AddDir("/etc")
+	f.docker.Archives[webID+":/etc"] = []byte("TAR")
+	rec := f.do("HEAD", "/api/containers/web/fs/download?path=/etc", "", f.session(t))
+	if rec.Code != http.StatusNoContent || len(f.docker.ArchiveCalls) != 0 {
+		t.Fatalf("%d, appels archive %v", rec.Code, f.docker.ArchiveCalls)
+	}
+}
+
+func TestDownloadArchiveErrors(t *testing.T) {
+	f := newFixture(t, false)
+	f.fs.AddDir("/etc") // no entry in Fake.Archives: GetArchive says not found
+	c := f.session(t)
+	rec := f.do("GET", "/api/containers/web/fs/download?path=/etc", "", c)
+	if rec.Code != http.StatusNotFound || errCode(t, rec) != "not_found" || rec.Header().Get("Content-Disposition") != "" {
+		t.Fatalf("absent : %d %v %s", rec.Code, rec.Header(), rec.Body)
+	}
+	f.docker.Archives[webID+":/etc"] = []byte("TAR")
+	f.docker.Err = fmt.Errorf("%w : down", dockerx.ErrUnavailable)
+	f.docker.Infos = map[string]dockerx.ContainerInfo{"web": f.docker.Infos["web"], webID: f.docker.Infos[webID]}
+	// Inspect also fails under Err: the route answers 503 before any byte.
+	rec = f.do("GET", "/api/containers/web/fs/download?path=/etc", "", c)
+	if rec.Code != http.StatusServiceUnavailable || rec.Header().Get("Content-Disposition") != "" {
+		t.Fatalf("indisponible : %d %v %s", rec.Code, rec.Header(), rec.Body)
+	}
+}
+
+// brokenReader gives some bytes, then fails (dockerd cut, EIO on a FUSE file).
+type brokenReader struct {
+	sent   bool
+	closed *atomic.Int32
+}
+
+func (r *brokenReader) Read(p []byte) (int, error) {
+	if !r.sent {
+		r.sent = true
+		return copy(p, "partial"), nil
+	}
+	return 0, errors.New("EIO")
+}
+
+func (r *brokenReader) Close() error { r.closed.Add(1); return nil }
+
+// A copy that fails midway must abort the response (no clean final chunk the
+// browser would take for a complete file), and still free the slot.
+func TestDownloadCopyErrorAbortsTheResponse(t *testing.T) {
+	f := newFixture(t, false)
+	var closed atomic.Int32
+	f.fs.AddFile("/bad", nil)
+	f.fs.OpenFile = func(string) (io.ReadCloser, error) { return &brokenReader{closed: &closed}, nil }
+	c := f.session(t)
+	srv := httptest.NewServer(f.h)
+	defer srv.Close()
+	// More failures than slots: a leaked slot would make the listing busy.
+	n := fsMaxPerContainer + 1
+	for range n {
+		req, _ := http.NewRequest("GET", srv.URL+"/api/containers/web/fs/download?path=/bad", nil)
+		req.AddCookie(c)
+		resp, err := http.DefaultClient.Do(req)
+		if err == nil {
+			_, err = io.ReadAll(resp.Body)
+			resp.Body.Close()
+		}
+		if err == nil {
+			t.Fatal("le client doit voir une erreur de transport, pas un corps complet")
+		}
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for closed.Load() != int32(n) && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
+	}
+	if closed.Load() != int32(n) {
+		t.Fatalf("fermetures du lecteur : %d, attendu %d", closed.Load(), n)
+	}
+	var code int
+	for time.Now().Before(deadline) {
+		if code = f.do("GET", "/api/containers/web/fs?path=/", "", c).Code; code == http.StatusOK {
+			return
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	t.Fatalf("créneau non rendu après l'abandon : %d", code)
 }

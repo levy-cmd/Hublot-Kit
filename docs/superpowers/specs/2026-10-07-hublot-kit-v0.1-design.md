@@ -180,9 +180,9 @@ Limite assumée : entre l'étape 2 et l'étape 5, un process du conteneur peut e
     Le `/` d'un conteneur actif est donc refusé, car son propre `/proc` est dessous. Puis `GetArchive` sur exactement le chemin nettoyé, relayé en `.tar` sans mise en mémoire ; le créneau de la garde (§13) reste pris jusqu'à la fin de la copie.
 
     Limite assumée : entre le contrôle et `GetArchive`, un montage peut apparaître dans le conteneur. Monter quoi que ce soit dans un conteneur actif exige `CAP_SYS_ADMIN` dans le conteneur (conteneur privilégié, ou `--cap-add SYS_ADMIN` : par exemple rclone ou s3fs avec `/dev/fuse`), ou root sur l'hôte (propagation `rshared`) ; limite assumée pour la v0.1. dockerd construit le tar à partir des montages configurés : mesuré sur Docker Desktop, il ne voit pas le `/proc` propre du conteneur. Et la règle « tout le conteneur » couvre ce qui est monté sous un montage Docker au moment du contrôle. À remesurer sur une VM Ubuntu.
-  - `&check=1` : tous les contrôles, puis `204` sans rien lire (aucun `GetArchive`). L'interface vérifie ainsi avant de laisser le navigateur télécharger.
   - Conteneur arrêté : l'index montre qu'aucun composant n'est un lien (§5.2 ; `indexing` pendant la construction, `forbidden_path` si l'explorateur est indisponible), puis `GetArchive(chemin nettoyé)` relayé de même.
   - Pour télécharger un dossier atteint par un lien, l'interface navigue d'abord vers la cible (§5.1 étape 8).
+- `&check=1` : tous les contrôles, puis `204` sans rien lire (aucun `GetArchive`). L'interface vérifie ainsi avant de laisser le navigateur télécharger. Il vaut pour un fichier comme pour un dossier ; une requête `HEAD` est traitée de même.
 - Toujours `Content-Disposition: attachment`.
 
 ## 6. API

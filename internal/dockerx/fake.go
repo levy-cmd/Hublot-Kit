@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"sync/atomic"
 )
 
 // Fake is an in-memory Client for tests of other packages. It is not safe for
@@ -17,6 +18,8 @@ type Fake struct {
 	Archives map[string][]byte
 	// ArchiveCalls records every GetArchive call as id + ":" + path.
 	ArchiveCalls []string
+	// ArchiveCloses counts the Close calls of the readers GetArchive returned.
+	ArchiveCloses atomic.Int32
 	// Volumes answers VolumeOptions, by volume name.
 	Volumes map[string]map[string]string
 	Err     error
@@ -50,8 +53,15 @@ func (f *Fake) GetArchive(_ context.Context, id, path string) (io.ReadCloser, er
 	if !ok {
 		return nil, fmt.Errorf("%w : %s:%s", ErrNotFound, id, path)
 	}
-	return io.NopCloser(bytes.NewReader(b)), nil
+	return &countingCloser{Reader: bytes.NewReader(b), n: &f.ArchiveCloses}, nil
 }
+
+type countingCloser struct {
+	io.Reader
+	n *atomic.Int32
+}
+
+func (c *countingCloser) Close() error { c.n.Add(1); return nil }
 
 func (f *Fake) VolumeOptions(_ context.Context, name string) (map[string]string, error) {
 	if f.Err != nil {

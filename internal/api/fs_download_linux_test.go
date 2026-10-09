@@ -10,6 +10,7 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"os"
 	"os/exec"
 	"strings"
 	"testing"
@@ -72,5 +73,17 @@ func TestDownloadMountCheckThroughTheRealView(t *testing.T) {
 	setMounts()
 	if rec := f.do("GET", "/api/containers/web/fs/download?check=1&path=/etc", "", c); rec.Code != http.StatusNoContent {
 		t.Fatalf("contrôle : %d %s", rec.Code, rec.Body)
+	}
+	// Positive case: a mount whose destination is visible in the mount table.
+	if mi, err := os.ReadFile("/proc/self/mountinfo"); err == nil && strings.Contains(string(mi), " /dev/shm ") {
+		setMounts(dockerx.Mount{Type: "tmpfs", Destination: "/dev/shm"})
+		if rec := f.do("GET", "/api/containers/web/fs/download?check=1&path=/etc", "", c); rec.Code != http.StatusNoContent {
+			t.Fatalf("tmpfs /dev/shm visible : %d %s", rec.Code, rec.Body)
+		}
+		if len(fake.ArchiveCalls) != 0 {
+			t.Fatalf("GetArchive appelé : %v", fake.ArchiveCalls)
+		}
+	} else {
+		t.Log("/dev/shm n'est pas un point de montage ici : cas positif ignoré")
 	}
 }

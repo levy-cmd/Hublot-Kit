@@ -18,7 +18,8 @@ func (s *server) fsDownload(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	check := r.URL.Query().Get("check") == "1"
+	// HEAD matches the GET pattern: like check=1, it reads nothing.
+	check := r.URL.Query().Get("check") == "1" || r.Method == http.MethodHead
 	ctx := r.Context()
 	type opened struct {
 		rc  io.ReadCloser // nil in check mode
@@ -85,7 +86,12 @@ func (s *server) fsDownload(w http.ResponseWriter, r *http.Request) {
 		name += ".tar"
 	}
 	setAttachment(w, name)
-	io.Copy(w, o.rc) // streamed, never held in memory; the client may leave
+	// Streamed, never held in memory. A failure midway (dockerd cut, EIO on a
+	// FUSE file) aborts the response: a clean final chunk would let the browser
+	// save a truncated file as complete. The defers above still run.
+	if _, err := io.Copy(w, o.rc); err != nil {
+		panic(http.ErrAbortHandler)
+	}
 }
 
 // setAttachment: always saved, never rendered (spec §5.4, §7).
