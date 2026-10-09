@@ -47,7 +47,7 @@ Revue du plan par un relecteur Opus et par Codex, constats vérifiés. Une ligne
 - **M6 :** la limite Q6 entre dans la spec §13. → Tâche 12.
 - **M7 :** l'ancienne tâche 13 est scindée en tâche 14 (page) et tâche 15 (agent de dev, essai manuel, README).
 - **M8 :** ne pas pousser entre les tâches 4 et 5. → Tâche 4.
-- **Q1 à Q7 :** recommandations conservées (le relecteur est d'accord), à confirmer par l'utilisateur.
+- **Q1 à Q7 :** recommandations conservées (le relecteur est d'accord), confirmées par l'utilisateur le 2026-10-09.
 
 Second tour (relecteur Opus et Codex sur la version `af9a207`, constats vérifiés) :
 
@@ -120,7 +120,7 @@ L'ordre 1 → 2 → 3 diffère de l'ordre « procfs, écriture, tarindex » envi
 
 ## Questions ouvertes
 
-Le plan suit la recommandation de chaque question. Pour Q1 à Q7, la recommandation est retenue et reste à confirmer par l'utilisateur ; une réponse différente change la tâche indiquée.
+Le plan suit la recommandation de chaque question. Pour Q1 à Q7, la recommandation est retenue et confirmée par l'utilisateur (2026-10-09) ; une réponse différente change la tâche indiquée.
 
 - **Q1 — « Arborescence complète » (F2, §9).** Arbre dépliable, ou un dossier à la fois avec fil d'Ariane ?
   - *Recommandation (retenue, à confirmer) :* un dossier à la fois, avec fil d'Ariane, lien « dossier parent » et l'état dans l'URL (`?path=…&file=…`). Ça marche au téléphone (§9), avec le retour arrière du navigateur et des liens partageables. Un arbre dépliable reste possible plus tard sans changer l'API. → Tâche 14.
@@ -147,7 +147,7 @@ Le plan suit la recommandation de chaque question. Pour Q1 à Q7, la recommandat
   - En cgroup v2 (une seule ligne `0::`), c'est exactement la règle de la spec.
 - **Q8 (nouvelle, issue de C1) — Le `/` d'un conteneur actif.** La règle (b) de C1 refuse le tar de `/`, `/proc` et `/sys` d'un conteneur actif, parce que son propre `/proc` est monté dessous. Or une mesure sûre (tâche 8, `TestIntegrationMeasureOwnProcInArchive`, Docker Desktop, Docker 29) montre que le tar d'un conteneur actif **ne voit pas** son propre `/proc` : seuls les binds et volumes y sont montés. Le refus de `/` est donc plus strict que nécessaire.
   - On ne peut pas l'assouplir simplement : dans `mountinfo`, le `/proc` du conteneur et un bind du `/proc` de l'hôte ont le même type.
-  - *Recommandation (retenue, à confirmer par l'utilisateur) :* garder la règle stricte en v0.1. L'interface explique de télécharger un sous-dossier. Mesurer de nouveau sur `hk-ubuntu` (tâche 16) avant tout assouplissement, par exemple ne compter que les montages situés sous une destination d'`Inspect.Mounts` (règle R2 (1), déjà en place).
+  - *Recommandation (retenue, confirmée par l'utilisateur le 2026-10-09) :* garder la règle stricte en v0.1. L'interface explique de télécharger un sous-dossier. Mesurer de nouveau sur `hk-ubuntu` (tâche 16) avant tout assouplissement, par exemple ne compter que les montages situés sous une destination d'`Inspect.Mounts` (règle R2 (1), déjà en place).
   - Portée de la règle (a) (binds) : tout dossier du conteneur, comme pour l'explorateur d'un conteneur arrêté (retenue).
 
 - **Q9 (troisième tour) — Extensions de `HostBind` pour un conteneur arrêté.** Pour le tar d'un dossier d'un conteneur actif (§5.4), `HostBind` refuse aussi :
@@ -156,7 +156,7 @@ Le plan suit la recommandation de chaque question. Pour Q1 à Q7, la recommandat
   - les volumes dont les options ne se lisent pas.
 
   Pour un conteneur **arrêté**, la règle de §5.2 étape 7 rend l'explorateur **entier** indisponible (`List`, `Stat`, `Open`, téléchargement). Y appliquer ces extensions couperait l'exploration de tout conteneur arrêté qui a un volume de pilote tiers (plugin NFS, rexray, s3fs…), même inoffensif. La spec §5.2 n'est donc pas modifiée par ce plan.
-  - *Recommandation (à confirmer par l'utilisateur, à trancher au plan 2) :* les appliquer aussi aux conteneurs arrêtés. L'index se construit par `GET /archive` de `/`, qui traverse tous les volumes. Un volume FUSE ou de pilote tiers qui ne répond pas y bloquerait dockerd exactement comme le tar d'un dossier, et nos plafonds (4 Gio, 5 min) n'arrêtent pas un dockerd bloqué.
+  - *Recommandation (confirmée par l'utilisateur le 2026-10-09, à appliquer au plan 2) :* les appliquer aussi aux conteneurs arrêtés. L'index se construit par `GET /archive` de `/`, qui traverse tous les volumes. Un volume FUSE ou de pilote tiers qui ne répond pas y bloquerait dockerd exactement comme le tar d'un dossier, et nos plafonds (4 Gio, 5 min) n'arrêtent pas un dockerd bloqué.
   - Le message nomme le volume. Pour explorer ce conteneur, il reste le conteneur actif : listing et lecture par `procfs`, sans tar.
 
 ## Décisions de ce plan (la spec ne tranche pas)
