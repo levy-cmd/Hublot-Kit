@@ -6,6 +6,7 @@ require (
 	github.com/containerd/errdefs v1.0.0
 	github.com/moby/moby/api v1.56.1
 	github.com/moby/moby/client v0.6.1
+	golang.org/x/sys v0.48.0
 )
 
 require (
@@ -25,5 +26,4 @@ require (
 	go.opentelemetry.io/otel v1.35.0 // indirect
 	go.opentelemetry.io/otel/metric v1.35.0 // indirect
 	go.opentelemetry.io/otel/trace v1.35.0 // indirect
-	golang.org/x/sys v0.33.0 // indirect
 )

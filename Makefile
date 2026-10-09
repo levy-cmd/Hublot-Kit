@@ -1,4 +1,4 @@
-.PHONY: web-deps web build test
+.PHONY: web-deps web build test test-linux
 
 web-deps:
 	cd web && npm ci
@@ -17,3 +17,6 @@ test: web-deps
 	go vet ./cmd/... ./internal/...
 	go test -race ./cmd/... ./internal/...
 	cd web && npm run check && npm run lint && npx vitest run
+
+test-linux:
+	scripts/test-linux.sh -race -tags integration ./cmd/... ./internal/...
