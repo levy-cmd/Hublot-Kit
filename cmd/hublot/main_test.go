@@ -8,6 +8,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/levy-cmd/hublot-kit/internal/fsview"
 )
 
 func noenv(string) string { return "" }
@@ -260,5 +262,34 @@ func TestRunBadTLSCert(t *testing.T) {
 		"--tls-cert", filepath.Join(dir, "no.crt"), "--tls-key", filepath.Join(dir, "no.key")}, noenv, &out, &errb)
 	if code != 1 || strings.Contains(out.String(), "écoute sur") {
 		t.Fatalf("code %d, out %q, err %q", code, out.String(), errb.String())
+	}
+}
+func TestRunWarnsPrivateCgroupNamespace(t *testing.T) {
+	old := selfCgroup
+	selfCgroup = func() ([]byte, error) { return []byte("0::/\n"), nil }
+	t.Cleanup(func() { selfCgroup = old; fsview.NoteCgroupNamespace("") })
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	var out, errb bytes.Buffer
+	if code := run(ctx, []string{"--data-dir", t.TempDir(), "--listen", "127.0.0.1:0"}, noenv, &out, &errb); code != 0 {
+		t.Fatalf("code %d, stderr %q", code, errb.String())
+	}
+	if !strings.Contains(errb.String(), "--cgroupns=host") {
+		t.Fatalf("avertissement absent : %q", errb.String())
+	}
+}
+
+func TestRunNoWarningOnHostCgroup(t *testing.T) {
+	old := selfCgroup
+	selfCgroup = func() ([]byte, error) { return []byte("0::/system.slice/hublot.service\n"), nil }
+	t.Cleanup(func() { selfCgroup = old; fsview.NoteCgroupNamespace("") })
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	var out, errb bytes.Buffer
+	if code := run(ctx, []string{"--data-dir", t.TempDir(), "--listen", "127.0.0.1:0"}, noenv, &out, &errb); code != 0 {
+		t.Fatalf("code %d, stderr %q", code, errb.String())
+	}
+	if strings.Contains(errb.String(), "cgroupns") {
+		t.Fatalf("avertissement inattendu : %q", errb.String())
 	}
 }

@@ -22,10 +22,15 @@ import (
 	"github.com/levy-cmd/hublot-kit/internal/auth"
 	"github.com/levy-cmd/hublot-kit/internal/config"
 	"github.com/levy-cmd/hublot-kit/internal/dockerx"
+	"github.com/levy-cmd/hublot-kit/internal/fsview"
 	"github.com/levy-cmd/hublot-kit/internal/web"
 )
 
 var version = "dev" // set by -ldflags "-X main.version=…"
+
+// selfCgroup reads the agent's own cgroup for the startup check of spec §8;
+// tests replace it. Outside Linux the read fails and the check is skipped.
+var selfCgroup = func() ([]byte, error) { return os.ReadFile("/proc/self/cgroup") }
 
 const usage = `Usage : hublot [options]
         hublot reset-token [--data-dir DIR]
@@ -127,6 +132,9 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 	docker, err := dockerx.New()
 	if err != nil {
 		return fail("client Docker", err)
+	}
+	if b, err := selfCgroup(); err == nil && fsview.NoteCgroupNamespace(string(b)) {
+		fmt.Fprintln(stderr, "ATTENTION : espace de noms cgroup privé (/proc/self/cgroup = 0::/) : l'explorateur répondra container_changed. Lancez l'agent avec --cgroupns=host.")
 	}
 
 	srv.Handler = api.New(api.Deps{
