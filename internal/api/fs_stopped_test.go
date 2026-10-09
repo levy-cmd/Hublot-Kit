@@ -72,7 +72,7 @@ func stoppedFake(t *testing.T, mounts ...dockerx.Mount) *dockerx.Fake {
 				stEntry{name: "/etc/alias", link: "hostname", typ: tar.TypeSymlink},
 				stEntry{name: "/conf", link: "etc", typ: tar.TypeSymlink}),
 			dbID + ":/etc/hostname": stTar(t, stEntry{name: "hostname", body: "db\n", typ: tar.TypeReg}),
-			dbID + ":/etc": stTar(t, stEntry{name: "etc/", typ: tar.TypeDir}, stEntry{name: "etc/hostname", body: "db\n", typ: tar.TypeReg}),
+			dbID + ":/etc":          stTar(t, stEntry{name: "etc/", typ: tar.TypeDir}, stEntry{name: "etc/hostname", body: "db\n", typ: tar.TypeReg}),
 		},
 		Volumes: map[string]map[string]string{},
 	}

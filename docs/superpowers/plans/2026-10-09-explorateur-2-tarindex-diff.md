@@ -3519,7 +3519,7 @@ Expected: `ok` pour chaque paquet. `TestCheckArchiveDestinationUnderSymlink` et 
 
 - [x] **Step 2: Mesures** — avec l'agent de dev, indexer un conteneur arrêté de `node:22` : nombre d'entrées (`docker export hk-big | tar -t | wc -l`) et durée (premier 202 → premier 200 dans l'onglet Réseau). Reprendre la ligne `MESURE` de `TestMeasureIndexMemory` (tâche 3 : octets par entrée). Ajouter au paragraphe « Spike » de §5.2 : « Mesuré (plan Explorateur 2, Docker Desktop) : `node:22`, <entrées> entrées, <durée> s ; index : <octets> octets par entrée, soit <Mo> Mo pour 1 000 000 d'entrées. » Si un index de 1 000 000 d'entrées dépasse 300 Mo, baisser `MaxHeaders` en conséquence, dans le code et la spec.
 
-- [ ] **Step 3: Revue de branche** — demander la revue complète de la branche (sous-agent indépendant + Codex), corriger, puis cocher les cases de ce plan et y noter les constats.
+- [x] **Step 3: Revue de branche** — demander la revue complète de la branche (sous-agent indépendant + Codex), corriger, puis cocher les cases de ce plan et y noter les constats.
 
 - [x] **Step 4: Commit**
 
@@ -3537,4 +3537,4 @@ EOF
 - hk-ubuntu (AppArmor) et hk-fedora (SELinux) : `go test -race -tags integration ./cmd/... ./internal/...` donne `ok` pour chaque paquet. `TestCheckArchiveDestinationUnderSymlink` et `TestIntegrationDockerSocketUnderVarRun` passent sur les deux, sans SKIP.
 - Mesure : `TestMeasureIndexMemory` donne 237 octets par entrée sur les deux VM, soit 237 Mo pour 1 000 000 d'entrées, sous le seuil de 300 Mo : `MaxHeaders` reste à 1 000 000.
 - `node:22` sur hk-fedora : 33 538 entrées (`docker export | tar -t | wc -l`) ; l'index lui-même se construit en 1,0 s depuis un fichier tar, l'export du démon prend 7 à 8 s. Le délai 202 → 200 dans l'onglet Réseau n'a pas été relevé (pas d'essai manuel de l'interface).
-- Step 3 (revue de branche) : reste à faire par le contrôleur ; case non cochée.
+- Step 3 (revue de branche) : la revue finale (Opus + Codex) a conclu « prête à fusionner avec corrections » ; les corrections sont appliquées dans ce commit. La CI de la PR reste à observer.
