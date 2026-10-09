@@ -157,11 +157,12 @@ func TestSymlinkLoopFails(t *testing.T) {
 }
 
 func TestListShowsLinksWithoutFollowing(t *testing.T) {
-	fsys, rp, _ := newRoot(t)
+	fsys, rp, marker := newRoot(t)
 	must(t, os.WriteFile(filepath.Join(rp, "a.txt"), []byte("hello"), 0o640))
 	must(t, os.Chmod(filepath.Join(rp, "a.txt"), 0o640)) // the umask may have changed it
 	must(t, os.Mkdir(filepath.Join(rp, "dir"), 0o755))
 	must(t, os.Symlink("/etc/passwd", filepath.Join(rp, "link")))
+	must(t, os.Symlink(marker, filepath.Join(rp, "hostlink")))
 	entries, truncated, err := fsys.List(ctx, "/")
 	must(t, err)
 	if truncated {
@@ -177,8 +178,11 @@ func TestListShowsLinksWithoutFollowing(t *testing.T) {
 	if e := got["dir"]; e.Type != TypeDir {
 		t.Errorf("dir : %+v", e)
 	}
-	if e := got["link"]; e.Type != TypeSymlink || e.LinkTarget != "/etc/passwd" {
+	if e := got["link"]; e.Type != TypeSymlink || e.LinkTarget != "/etc/passwd" || e.Size != int64(len("/etc/passwd")) {
 		t.Errorf("link : %+v (le lien doit être montré, jamais suivi)", e)
+	}
+	if e := got["hostlink"]; e.Type != TypeSymlink || e.LinkTarget != marker || e.Size != int64(len(marker)) {
+		t.Errorf("hostlink : %+v (lstat, pas la taille du fichier de l'hôte)", e)
 	}
 }
 
@@ -310,8 +314,10 @@ func TestOpenRefusesDirectory(t *testing.T) {
 func TestOpenRefusesDevice(t *testing.T) {
 	fsys, rp, _ := newRoot(t)
 	// /dev/null's numbers: reading it would read the host device.
-	if err := unix.Mknod(filepath.Join(rp, "dev"), unix.S_IFCHR|0o666, int(unix.Mkdev(1, 3))); err != nil {
+	if err := unix.Mknod(filepath.Join(rp, "dev"), unix.S_IFCHR|0o666, int(unix.Mkdev(1, 3))); errors.Is(err, unix.EPERM) {
 		t.Skipf("mknod refusé (%v) : ce test demande CAP_MKNOD (scripts/test-linux.sh, job CI privilégié)", err)
+	} else if err != nil {
+		t.Fatalf("mknod : %v", err)
 	}
 	if err := openWithTimeout(t, fsys, "/dev"); !errors.Is(err, ErrNotRegular) {
 		t.Fatalf("attendu ErrNotRegular, reçu %v", err)
@@ -431,8 +437,16 @@ func TestRefusalHappensBeforeReopen(t *testing.T) {
 	fsys, rp, _ := newRoot(t)
 	reg := filepath.Join(rp, "reg")
 	must(t, os.WriteFile(reg, []byte("x"), 0o644))
-	if n := countOpens(t, reg, func() { fsys.Stat(ctx, "/reg") }); n != 0 {
+	// Calibration with the test's own O_PATH open, not with the code under test.
+	if n := countOpens(t, reg, func() {
+		if fd, err := unix.Open(reg, unix.O_PATH|unix.O_CLOEXEC, 0); err == nil {
+			unix.Close(fd)
+		}
+	}); n != 0 {
 		t.Skipf("ce noyau signale IN_OPEN pour un O_PATH (%d événements) : test non concluant", n)
+	}
+	if n := countOpens(t, reg, func() { fsys.Stat(ctx, "/reg") }); n != 0 {
+		t.Fatalf("Stat a ouvert le fichier %d fois : Stat ne doit jamais faire Reopen", n)
 	}
 	if n := countOpens(t, reg, func() { readAll(fsys, "/reg") }); n == 0 {
 		t.Fatal("contrôle : la lecture d'un fichier régulier doit produire un IN_OPEN")
@@ -440,14 +454,19 @@ func TestRefusalHappensBeforeReopen(t *testing.T) {
 	t.Run("fifo", func(t *testing.T) {
 		fifo := filepath.Join(rp, "fifo")
 		must(t, unix.Mkfifo(fifo, 0o644))
+		if n := countOpens(t, fifo, func() { fsys.Stat(ctx, "/fifo") }); n != 0 {
+			t.Fatalf("Stat a ouvert la FIFO %d fois : pas de Reopen avant le contrôle", n)
+		}
 		if n := countOpens(t, fifo, func() { openWithTimeout(t, fsys, "/fifo") }); n != 0 {
 			t.Fatalf("FIFO ouverte %d fois : le refus doit précéder Reopen", n)
 		}
 	})
 	t.Run("device", func(t *testing.T) {
 		dev := filepath.Join(rp, "dev")
-		if err := unix.Mknod(dev, unix.S_IFCHR|0o666, int(unix.Mkdev(1, 3))); err != nil {
+		if err := unix.Mknod(dev, unix.S_IFCHR|0o666, int(unix.Mkdev(1, 3))); errors.Is(err, unix.EPERM) {
 			t.Skipf("mknod refusé (%v) : ce test demande CAP_MKNOD (scripts/test-linux.sh, job CI privilégié)", err)
+		} else if err != nil {
+			t.Fatalf("mknod : %v", err)
 		}
 		if n := countOpens(t, dev, func() { openWithTimeout(t, fsys, "/dev") }); n != 0 {
 			t.Fatalf("périphérique ouvert %d fois : le refus doit précéder Reopen", n)
@@ -469,16 +488,20 @@ func TestMagicLinksNeverFollowed(t *testing.T) {
 	}
 	for _, p := range []string{"/proc/1/root/etc/passwd", "/proc/self/root/etc/passwd",
 		dir + "/m/etc/passwd", dir + "/s/etc/passwd"} {
-		if b, err := readAll(host, p); err == nil {
-			t.Errorf("%s lu (%d octets) : un lien magique ne doit jamais être suivi", p, len(b))
+		if rc, err := host.Open(ctx, p); err == nil {
+			rc.Close()
+			t.Errorf("%s ouvert : un lien magique ne doit jamais être suivi", p)
 		}
 	}
 	for _, l := range []string{"/m", "/s"} {
-		if entries, _, err := host.List(ctx, dir+l); err == nil {
-			t.Errorf("List par le lien magique %s : %d entrées", l, len(entries))
+		if entries, _, err := host.List(ctx, dir+l); len(entries) > 0 || err == nil {
+			t.Errorf("List par le lien magique %s : %d entrées, err=%v", l, len(entries), err)
 		}
 		if _, err := host.StatNoLinks(ctx, dir+l+"/etc"); !errors.Is(err, ErrLinkInPath) {
 			t.Errorf("StatNoLinks par le lien magique %s : %v", l, err)
 		}
+	}
+	if _, err := host.StatNoLinks(ctx, "/proc/self/root/etc"); !errors.Is(err, ErrLinkInPath) && !errors.Is(err, ErrForbiddenPath) {
+		t.Errorf("StatNoLinks /proc/self/root/etc : %v, attendu ErrLinkInPath ou ErrForbiddenPath", err)
 	}
 }
