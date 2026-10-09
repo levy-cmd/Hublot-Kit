@@ -85,6 +85,13 @@ export const en: Record<Key, string> = {
 	'error.link_in_path': 'The path contains a symbolic link.',
 	'error.docker_unavailable': 'Docker is not responding. Check the daemon and the agent’s socket access.',
 	'error.internal': 'Agent internal error.',
+	'changes.hint': 'Differences from the image, computed by Docker (volumes excluded).',
+	'changes.empty': 'No change from the image.',
+	'changes.added': 'added',
+	'changes.modified': 'modified',
+	'changes.deleted': 'deleted',
+	'changes.more': 'more changes, not shown',
+	'changes.deletedHere': 'deleted in this folder since the image:',
 	'error.network': 'The agent is not responding.',
 	'error.unknown': 'Unexpected error.'
 };

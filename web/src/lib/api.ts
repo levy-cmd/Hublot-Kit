@@ -102,3 +102,6 @@ export async function previewFile(id: string, path: string): Promise<Preview> {
 export async function checkDownload(url: string): Promise<void> {
 	await get(`${url}&check=1`);
 }
+
+export type Change = { path: string; kind: 'added' | 'modified' | 'deleted' };
+export const listChanges = (id: string) => api<Change[]>(`/containers/${encodeURIComponent(id)}/changes`);

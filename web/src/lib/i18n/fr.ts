@@ -84,6 +84,13 @@ export const fr = {
 	'error.link_in_path': 'Le chemin contient un lien symbolique.',
 	'error.docker_unavailable': "Docker ne répond pas. Vérifiez que le démon tourne et que l'agent accède au socket.",
 	'error.internal': "Erreur interne de l'agent.",
+	'changes.hint': "Différences avec l'image, calculées par Docker (hors volumes).",
+	'changes.empty': "Aucun changement par rapport à l'image.",
+	'changes.added': 'ajouté',
+	'changes.modified': 'modifié',
+	'changes.deleted': 'supprimé',
+	'changes.more': 'changements de plus, non affichés',
+	'changes.deletedHere': "supprimé(s) dans ce dossier depuis l'image :",
 	'error.network': "L'agent ne répond pas.",
 	'error.unknown': 'Erreur inattendue.'
 } as const;

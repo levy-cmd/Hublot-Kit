@@ -1,7 +1,17 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
-	import { ApiError, checkDownload, downloadUrl, listDir, type Entry, type Listing } from '#lib/api.ts';
+	import {
+		ApiError,
+		checkDownload,
+		downloadUrl,
+		listChanges,
+		listDir,
+		type Change,
+		type Entry,
+		type Listing
+	} from '#lib/api.ts';
+	import { changeMarks, deletedIn, kindLabel, kindLetter } from '#lib/changes.ts';
 	import {
 		breadcrumbs,
 		downloadErrorMessage,
@@ -29,6 +39,9 @@
 	let downloadError = $state('');
 	let reloads = $state(0); // bumped by the Reload button: same URL, new request
 	let entries = $derived(listing ? sortEntries(listing.entries) : []);
+	let changes = $state<Change[]>([]);
+	let marks = $derived(changeMarks(changes));
+	let deleted = $derived(deletedIn(changes, dir));
 	let selected = $derived(file ? entries.find((e) => joinPath(dir, e.name) === file) : undefined);
 
 	const href = (path: string, selectedFile?: string) =>
@@ -75,6 +88,22 @@
 		return () => {
 			current = false;
 			clearTimeout(retry);
+		};
+	});
+
+	// Depends on id only: the indexing retry (every second) must not re-ask the diff.
+	// If it fails, no marks and no message (plan decision).
+	$effect(() => {
+		const wanted = id;
+		let current = true;
+		changes = [];
+		listChanges(wanted)
+			.then((l) => {
+				if (current) changes = l ?? [];
+			})
+			.catch(() => {});
+		return () => {
+			current = false;
 		};
 	});
 
@@ -140,11 +169,13 @@
 							</tr>
 						{/if}
 						{#each entries as e, i (i)}
+							{@const k = marks.get(joinPath(dir, e.name))}
 							<tr class:selected={selected === e}>
 								<td>
 									<button type="button" class="name" onclick={() => open(e)}>
 										{e.name}{e.type === 'dir' ? '/' : ''}
 									</button>
+									{#if k}<abbr class="mark {k}" title={kindLabel(k)}>{kindLetter(k)}</abbr>{/if}
 									{#if e.type === 'symlink'}<span class="target">→ {e.linkTarget}</span>{/if}
 								</td>
 								<td>{e.type === 'dir' ? '' : formatSize(e.size)}</td>
@@ -157,6 +188,11 @@
 				</table>
 			</div>
 			{#if entries.length === 0}<p>{t('files.empty')}</p>{/if}
+			{#if deleted.length}
+				<p class="note">
+					{deleted.length} {t('changes.deletedHere')} {deleted.join(', ')} — <a href="?tab=changes">{t('container.tab.changes')}</a>
+				</p>
+			{/if}
 		{/if}
 	</section>
 
@@ -183,5 +219,8 @@
 	.target { opacity: 0.7; margin-left: 0.4rem; }
 	tr.selected { background: #eef4ff; }
 	.note { font-style: italic; }
+	.mark { font-weight: 700; text-decoration: none; margin-left: 0.4rem; }
+	.added { color: #1b7f3b; }
+	.modified { color: #8a5a00; }
 	[role='alert'] { color: #b00020; }
 </style>
