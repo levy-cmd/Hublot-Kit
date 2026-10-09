@@ -8,3 +8,5 @@
 /internal/web/dist/*
 !/internal/web/dist/.gitkeep
 /.superpowers/
+/web/test-results/
+/web/playwright-report/

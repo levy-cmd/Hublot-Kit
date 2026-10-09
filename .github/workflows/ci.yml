@@ -44,13 +44,49 @@ jobs:
   # Privileged job (spec §10): real Docker, run as root.
   integration:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        storage: [overlay2, containerd]
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: false
+      - name: Stockage Docker (${{ matrix.storage }})
+        run: |
+          want=${{ matrix.storage == 'containerd' && 'true' || 'false' }}
+          sudo mkdir -p /etc/docker
+          [ -f /etc/docker/daemon.json ] || echo '{}' | sudo tee /etc/docker/daemon.json >/dev/null
+          sudo jq --argjson v "$want" '.features["containerd-snapshotter"] = $v' /etc/docker/daemon.json | sudo tee /etc/docker/daemon.json.new >/dev/null
+          sudo mv /etc/docker/daemon.json.new /etc/docker/daemon.json
+          sudo systemctl restart docker
+          status=$(docker info -f '{{json .DriverStatus}}')
+          echo "$(docker info -f '{{.Driver}}') $status"
+          if [ "$want" = true ]; then echo "$status" | grep -q io.containerd.snapshotter
+          else ! echo "$status" | grep -q io.containerd.snapshotter; fi
       - run: sudo -E env "PATH=$PATH" go test -tags integration ./...
+
+  # Spec §10: the single Playwright journey, real agent and real Docker.
+  e2e:
+    runs-on: ubuntu-latest
+    needs: [go, web]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+        working-directory: web
+      - run: npx playwright install --with-deps chromium
+        working-directory: web
+      - run: scripts/e2e.sh
 
   binary:
     runs-on: ubuntu-latest
