@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -13,10 +14,14 @@ import (
 	"github.com/levy-cmd/hublot-kit/internal/audit"
 	"github.com/levy-cmd/hublot-kit/internal/auth"
 	"github.com/levy-cmd/hublot-kit/internal/dockerx"
+	"github.com/levy-cmd/hublot-kit/internal/fsview"
 )
 
 type Deps struct {
-	Docker       dockerx.Client
+	Docker dockerx.Client
+	// OpenFS opens the file view of a container by full ID; nil means
+	// fsview.For on Docker. API tests give an in-memory view.
+	OpenFS       func(ctx context.Context, id string) (fsview.FS, error)
 	Verifier     *auth.Verifier
 	Sessions     *auth.Sessions
 	Limiter      *auth.Limiter
@@ -65,10 +70,26 @@ func (t *throttleLog) shouldLog(ip string) bool {
 type server struct {
 	d        Deps
 	throttle *throttleLog
+	guard    *fsGuard
 }
 
+// Spec §13 (FUSE): at most 4 file operations at once per container, each one
+// given up after 10 s.
+const (
+	fsMaxPerContainer = 4
+	fsTimeout         = 10 * time.Second
+)
+
 func New(d Deps) http.Handler {
-	s := &server{d: d, throttle: &throttleLog{last: map[string]time.Time{}, now: logClock}}
+	if d.OpenFS == nil {
+		docker := d.Docker
+		d.OpenFS = func(ctx context.Context, id string) (fsview.FS, error) { return fsview.For(ctx, docker, id) }
+	}
+	s := &server{
+		d:        d,
+		throttle: &throttleLog{last: map[string]time.Time{}, now: logClock},
+		guard:    newFSGuard(fsMaxPerContainer, fsTimeout),
+	}
 	session := func(h http.HandlerFunc) http.Handler { return requireSession(d.Sessions, h) }
 
 	mux := http.NewServeMux()
@@ -76,6 +97,7 @@ func New(d Deps) http.Handler {
 	mux.HandleFunc("POST /api/logout", s.logout)
 	mux.Handle("GET /api/meta", session(s.meta))
 	mux.Handle("GET /api/containers", session(s.containers))
+	mux.Handle("GET /api/containers/{id}/fs", session(s.fsList))
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "not_found", "")
 	})

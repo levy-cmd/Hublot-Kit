@@ -2,6 +2,7 @@ package api
 
 import (
 	"bufio"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -10,22 +11,61 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/levy-cmd/hublot-kit/internal/audit"
 	"github.com/levy-cmd/hublot-kit/internal/auth"
 	"github.com/levy-cmd/hublot-kit/internal/dockerx"
+	"github.com/levy-cmd/hublot-kit/internal/fsview"
 )
 
 type fixture struct {
 	h      http.Handler
 	token  string
 	auditP string
-	docker *dockerx.Fake
+	docker *dockerx.Fake // nil when the fixture talks to a real Docker
+	// File routes: OpenFS returns fs (or openErr) and records the ID it got.
+	fs       *fsview.MemFS
+	openErr  error
+	mu       sync.Mutex // OpenFS runs in the guard's goroutines
+	openedID string
 }
 
+// opened returns the ID the last OpenFS call received ("" if none).
+func (f *fixture) opened() string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.openedID
+}
+
+// webID is the full ID of the fake "web" container of newFixture.
+const webID = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+
 func newFixture(t *testing.T, readOnly bool) *fixture {
+	t.Helper()
+	web := dockerx.ContainerInfo{ID: webID, Name: "web", Running: true, Pid: 42}
+	fake := &dockerx.Fake{
+		Containers: []dockerx.Container{{ID: "abc", Name: "web", Image: "nginx", State: "running", Ports: []dockerx.Port{}}},
+		Infos:      map[string]dockerx.ContainerInfo{"web": web, webID: web},
+		Archives:   map[string][]byte{},
+	}
+	f := &fixture{docker: fake, fs: fsview.NewMemFS()}
+	f.init(t, readOnly, fake, func(_ context.Context, id string) (fsview.FS, error) {
+		f.mu.Lock()
+		f.openedID = id
+		f.mu.Unlock()
+		if f.openErr != nil {
+			return nil, f.openErr
+		}
+		return f.fs, nil
+	})
+	return f
+}
+
+// init builds the handler; openFS nil means the real fsview.For.
+func (f *fixture) init(t *testing.T, readOnly bool, docker dockerx.Client, openFS func(context.Context, string) (fsview.FS, error)) {
 	t.Helper()
 	dir := t.TempDir()
 	tok, _, err := auth.EnsureToken(dir)
@@ -42,13 +82,12 @@ func newFixture(t *testing.T, readOnly bool) *fixture {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { al.Close() })
-	fake := &dockerx.Fake{Containers: []dockerx.Container{{ID: "abc", Name: "web", Image: "nginx", State: "running", Ports: []dockerx.Port{}}}}
-	h := New(Deps{
-		Docker: fake, Verifier: v, Audit: al, Version: "test", ReadOnly: readOnly,
+	f.h = New(Deps{
+		Docker: docker, OpenFS: openFS, Verifier: v, Audit: al, Version: "test", ReadOnly: readOnly,
 		Sessions: auth.NewSessions(auth.SessionTTL, time.Now),
 		Limiter:  auth.NewLimiter(5, time.Minute, time.Now),
 	})
-	return &fixture{h: h, token: tok, auditP: ap, docker: fake}
+	f.token, f.auditP = tok, ap
 }
 
 func (f *fixture) do(method, path, body string, cookie *http.Cookie) *httptest.ResponseRecorder {
