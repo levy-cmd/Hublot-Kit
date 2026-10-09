@@ -98,6 +98,13 @@ func TestIntegrationTarIndexStopped(t *testing.T) {
 	if entries, _, err := fsys.List(ctx, "/proc"); err != nil || len(entries) != 0 {
 		t.Errorf("/proc : %v %v", entries, err)
 	}
+	// The hard link is the same file: same type, size and mode as the original.
+	orig, err1 := fsys.Stat(ctx, "/root/note.txt")
+	hard, err2 := fsys.Stat(ctx, "/root/hard")
+	if err1 != nil || err2 != nil || orig.Type != TypeFile || hard.Type != TypeFile ||
+		orig.Size != hard.Size || orig.Mode != hard.Mode {
+		t.Errorf("lien physique : %+v %v / %+v %v", orig, err1, hard, err2)
+	}
 	if _, err := fsys.StatNoLinks(ctx, "/etc/rel"); !errors.Is(err, ErrLinkInPath) {
 		t.Errorf("StatNoLinks : %v", err)
 	}
@@ -116,7 +123,18 @@ func TestIntegrationTarIndexCreated(t *testing.T) {
 		t.Fatal(err)
 	}
 	fsys := indexed(t, NewViews(dc, Options{}), name)
-	if _, _, err := fsys.List(context.Background(), "/etc"); err != nil {
+	entries, _, err := fsys.List(context.Background(), "/etc")
+	if err != nil {
 		t.Fatal(err)
+	}
+	hasPasswd := false
+	for _, e := range entries {
+		hasPasswd = hasPasswd || (e.Name == "passwd" && e.Type == TypeFile)
+	}
+	if !hasPasswd {
+		t.Errorf("passwd absent du listing de /etc : %v", entries)
+	}
+	if got := readFS(t, fsys, "/etc/passwd"); !strings.Contains(got, "root:") {
+		t.Errorf("/etc/passwd : %q", got)
 	}
 }
