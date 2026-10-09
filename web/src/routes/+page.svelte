@@ -59,7 +59,7 @@
 				<tbody>
 					{#each shown as c (c.id)}
 						<tr>
-							<td>{c.name}</td>
+							<td><a href={`/c/${c.id}`}>{c.name}</a></td>
 							<td>{c.image}</td>
 							<td><span class="state {c.state}">{stateLabel(c.state)}</span></td>
 							<td>{c.status}</td>
