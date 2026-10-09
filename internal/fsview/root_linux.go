@@ -22,6 +22,38 @@ var (
 	afterRootOpen = func() {}
 )
 
+// pidfdExited polls pidfd without waiting: readable once the process has
+// exited, zombie included. A seam for the tests of alive.
+var pidfdExited = func(pidfd int) (bool, error) {
+	fds := []unix.PollFd{{Fd: int32(pidfd), Events: unix.POLLIN}}
+	for {
+		n, err := unix.Poll(fds, 0)
+		if err == unix.EINTR {
+			continue
+		}
+		if err != nil {
+			return false, err
+		}
+		if fds[0].Revents&unix.POLLNVAL != 0 {
+			return false, unix.EBADF
+		}
+		return n > 0 && fds[0].Revents&(unix.POLLIN|unix.POLLHUP) != 0, nil
+	}
+}
+
+// alive is spec §5.1 step 5 on the process pidfd pins: exited ->
+// container_changed; poll failed -> an error of its own (500 internal).
+func alive(pidfd, pid int) error {
+	exited, err := pidfdExited(pidfd)
+	if err != nil {
+		return fmt.Errorf("poll du pidfd du process %d : %w", pid, err)
+	}
+	if exited {
+		return changed("le process %d s'est terminé", pid)
+	}
+	return nil
+}
+
 // openRoot runs spec §5.1 steps 2 to 5 and returns an O_PATH descriptor on the
 // root directory of the container whose main process is pid, and the pidfd
 // that pins this process. The caller closes both.
@@ -58,9 +90,9 @@ func openRoot(pid int, containerID string, read func(int) ([]byte, error)) (*os.
 	afterRootOpen()
 	// Still alive: the PID was not reused between pidfd_open and the open above,
 	// so fd is the root of the process checked at step 3.
-	if err := unix.PidfdSendSignal(pidfd, 0, nil, 0); err != nil {
+	if err := alive(pidfd, pid); err != nil {
 		unix.Close(fd)
-		return fail(changed("le process %d a disparu : %v", pid, err))
+		return fail(err)
 	}
 	return os.NewFile(uintptr(fd), "container-root"), pidfd, nil
 }

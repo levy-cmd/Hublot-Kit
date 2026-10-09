@@ -7,8 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-
-	"golang.org/x/sys/unix"
 )
 
 // readMountinfo reads a host file: /proc/<pid>/mountinfo of the process pinned
@@ -33,8 +31,8 @@ func (p *procFS) CheckArchive(ctx context.Context, dir string) error {
 	if err != nil {
 		return changed("lecture de /proc/%d/mountinfo : %v", p.pid, err)
 	}
-	if err := unix.PidfdSendSignal(p.pidfd, 0, nil, 0); err != nil {
-		return changed("le process %d a disparu : %v", p.pid, err)
+	if err := alive(p.pidfd, p.pid); err != nil {
+		return err
 	}
 	if err := CheckVisibleMounts(string(mi), p.mounts); err != nil {
 		return err

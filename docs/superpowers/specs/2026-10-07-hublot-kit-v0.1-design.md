@@ -120,7 +120,7 @@ Comparer deux `Inspect` ne suffit pas à prouver que la racine ouverte est celle
 
    Ce contrôle prouve que le process épinglé par `pidfd` appartient au conteneur.
 4. Ouvrir `/proc/<pid>/root` en `O_PATH | O_DIRECTORY` → `rootfd`.
-5. `pidfd_send_signal(pidfd, 0)` doit réussir : le process est toujours vivant, donc le PID n'a pas été réattribué entre les étapes 2 et 4, et `rootfd` est bien sa racine. Sinon → fermer, `container_changed`.
+5. Le `pidfd` ne doit pas être lisible (`poll` sans attente ; il le devient quand le process se termine, zombie compris) : le process est toujours vivant, donc le PID n'a pas été réattribué entre les étapes 2 et 4, et `rootfd` est bien sa racine. Lisible → fermer, `container_changed` ; échec de `poll` → fermer, `internal`. `pidfd_send_signal(pidfd, 0)` n'est pas utilisé : il répond `EPERM` sans droit de signaler (ou sous un profil seccomp).
 6. Ouvrir le chemin demandé par `pathrs.OpenatInRoot(rootfd, chemin)` (`github.com/cyphar/filepath-securejoin/pathrs-lite` v0.7.0, paquet `pathrs` ; le paquet racine n'exporte plus ces fonctions), qui renvoie un descripteur `O_PATH`. Puis, dans cet ordre :
    - **Pseudo-système** : `fstatfs` du descripteur `O_PATH`, **avant tout `Reopen`**, pour un dossier comme pour un fichier, et aussi pour `Stat` → `forbidden_path` (étape 9).
    - **Dossier** : `pathrs.Reopen(handle, O_RDONLY|O_DIRECTORY)`, pour lister uniquement.
