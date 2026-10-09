@@ -16,6 +16,7 @@ import (
 	"io"
 	"io/fs"
 	"path"
+	"runtime"
 	"slices"
 	"strings"
 	"sync/atomic"
@@ -555,5 +556,34 @@ func TestProgress(t *testing.T) {
 		if got := progress(c.read, c.total); got != c.want {
 			t.Errorf("progress(%d, %d) = %v, attendu %v", c.read, c.total, got, c.want)
 		}
+	}
+}
+
+// Review I5: bytes per index entry, against the 50 MB goal of spec §5.2 step 4.
+func TestMeasureIndexMemory(t *testing.T) {
+	const n = 50_000
+	hs := []hdr{tdir("/")}
+	for i := range n {
+		hs = append(hs, tfile(fmt.Sprintf("/usr/share/doc/pkg%03d/file-%06d.txt", i%1000, i), ""))
+	}
+	b := mkTar(t, hs...)
+	var before, after runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&before)
+	idx, err := buildIndex(tctx, bytes.NewReader(b), DefaultIndexLimits, new(atomic.Int64))
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime.GC()
+	runtime.ReadMemStats(&after)
+	// idx stays alive until after the second measure, or the GC frees it; the
+	// input (hs, b) too, counted in "before", or its release skews the delta.
+	runtime.KeepAlive(idx)
+	runtime.KeepAlive(b)
+	runtime.KeepAlive(hs)
+	per := float64(int64(after.HeapAlloc)-int64(before.HeapAlloc)) / float64(len(idx.entries))
+	t.Logf("MESURE : %.0f octets par entrée, soit %.0f Mo pour 1 000 000 d'entrées", per, per)
+	if per < 50 || per > 2000 {
+		t.Fatalf("mesure implausible : %.0f octets par entrée", per)
 	}
 }
