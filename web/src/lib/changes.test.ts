@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Change } from './api';
-import { changeMarks, countChanges, deletedIn, kindLetter } from './changes';
+import { changeMarks, countChanges, deletedIn, kindLetter, truncateNames } from './changes';
 
 const cs: Change[] = [
 	{ path: '/etc', kind: 'modified' },
@@ -28,5 +28,12 @@ describe('changes', () => {
 	});
 	it('gives a letter per kind', () => {
 		expect(['added', 'modified', 'deleted'].map((k) => kindLetter(k as Change['kind']))).toEqual(['A', 'M', 'D']);
+	});
+	it('truncates a long list of names', () => {
+		const names = Array.from({ length: 50 }, (_, i) => `f${i}`);
+		const r = truncateNames(names);
+		expect(r.shown).toHaveLength(20);
+		expect(r.more).toBe(30);
+		expect(truncateNames(['a'])).toEqual({ shown: ['a'], more: 0 });
 	});
 });

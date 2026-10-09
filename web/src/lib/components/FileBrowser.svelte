@@ -11,7 +11,7 @@
 		type Entry,
 		type Listing
 	} from '#lib/api.ts';
-	import { changeMarks, deletedIn, kindLabel, kindLetter } from '#lib/changes.ts';
+	import { changeMarks, deletedIn, kindLabel, kindLetter, truncateNames } from '#lib/changes.ts';
 	import {
 		breadcrumbs,
 		downloadErrorMessage,
@@ -190,7 +190,7 @@
 			{#if entries.length === 0}<p>{t('files.empty')}</p>{/if}
 			{#if deleted.length}
 				<p class="note">
-					{deleted.length} {t('changes.deletedHere')} {deleted.join(', ')} — <a href="?tab=changes">{t('container.tab.changes')}</a>
+					{deleted.length} {t('changes.deletedHere')} {truncateNames(deleted).shown.join(', ')}{#if truncateNames(deleted).more}, {t('changes.andMore').replace('{n}', String(truncateNames(deleted).more))}{/if} — <a href="?tab=changes">{t('container.tab.changes')}</a>
 				</p>
 			{/if}
 		{/if}
@@ -218,7 +218,7 @@
 	button.name { background: none; border: none; padding: 0; color: inherit; text-decoration: underline; cursor: pointer; font: inherit; }
 	.target { opacity: 0.7; margin-left: 0.4rem; }
 	tr.selected { background: #eef4ff; }
-	.note { font-style: italic; }
+	.note { font-style: italic; overflow-wrap: anywhere; }
 	.mark { font-weight: 700; text-decoration: none; margin-left: 0.4rem; }
 	.added { color: #1b7f3b; }
 	.modified { color: #8a5a00; }

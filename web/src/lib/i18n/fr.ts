@@ -91,6 +91,7 @@ export const fr = {
 	'changes.deleted': 'supprimé',
 	'changes.more': 'changements de plus, non affichés',
 	'changes.deletedHere': "supprimé(s) dans ce dossier depuis l'image :",
+	'changes.andMore': '…et {n} autres',
 	'error.network': "L'agent ne répond pas.",
 	'error.unknown': 'Erreur inattendue.'
 } as const;

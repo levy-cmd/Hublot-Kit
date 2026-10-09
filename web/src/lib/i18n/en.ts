@@ -92,6 +92,7 @@ export const en: Record<Key, string> = {
 	'changes.deleted': 'deleted',
 	'changes.more': 'more changes, not shown',
 	'changes.deletedHere': 'deleted in this folder since the image:',
+	'changes.andMore': '…and {n} more',
 	'error.network': 'The agent is not responding.',
 	'error.unknown': 'Unexpected error.'
 };

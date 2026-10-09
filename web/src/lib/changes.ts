@@ -32,3 +32,11 @@ export const kindLetter = (kind: ChangeKind): 'A' | 'M' | 'D' =>
 	kind === 'added' ? 'A' : kind === 'modified' ? 'M' : 'D';
 
 export const kindLabel = (kind: ChangeKind): string => t(`changes.${kind}`);
+
+/** Names shown in the "deleted here" line. */
+export const DELETED_NAMES_SHOWN = 20;
+
+/** At most DELETED_NAMES_SHOWN names, and how many more are left out. */
+export function truncateNames(names: string[], max = DELETED_NAMES_SHOWN): { shown: string[]; more: number } {
+	return { shown: names.slice(0, max), more: Math.max(0, names.length - max) };
+}
