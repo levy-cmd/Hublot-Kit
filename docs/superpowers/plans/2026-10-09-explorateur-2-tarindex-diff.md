@@ -81,13 +81,13 @@ Second tour (re-relecture « Prêt » avec cinq points) :
 Le plan suit la recommandation de chaque question ; une réponse différente change la tâche indiquée.
 
 - **Q10 — Indexation automatique ou à la demande ?** Ouvrir l'onglet Fichiers d'un conteneur arrêté lance la lecture de tout son tar (jusqu'à 4 Gio, volumes compris : ils sont dans l'archive).
-  - *Recommandation :* automatique, comme le dit §5.2 étape 2. Les plafonds bornent le coût, le cache évite de recommencer, et un bouton « Indexer » ajouterait un clic au cas d'usage principal (« pourquoi mon app plante »). → Tâches 4, 10.
+  - *Recommandation (retenue, confirmée par l'utilisateur le 2026-10-09) :* automatique, comme le dit §5.2 étape 2. Les plafonds bornent le coût, le cache évite de recommencer, et un bouton « Indexer » ajouterait un clic au cas d'usage principal (« pourquoi mon app plante »). → Tâches 4, 10.
 - **Q11 — `too_large` définitif ?** Une fois un plafond atteint, faut-il refuser le conteneur jusqu'à son prochain arrêt ?
-  - *Recommandation (revue, R14) :* oui pour les plafonds d'octets et d'entrées : le résultat serait le même. Le plafond de durée, lui, peut tenir à un moment de lenteur de Docker : il expire après 5 min. Pas de bouton « Réessayer ». Le message dit que les volumes comptent dans les 4 Gio et propose de démarrer le conteneur pour l'explorer (procfs, sans tar). → Tâches 4, 10.
+  - *Recommandation (retenue, confirmée par l'utilisateur le 2026-10-09) :* oui pour les plafonds d'octets et d'entrées : le résultat serait le même. Le plafond de durée, lui, peut tenir à un moment de lenteur de Docker : il expire après 5 min. Pas de bouton « Réessayer ». Le message dit que les volumes comptent dans les 4 Gio et propose de démarrer le conteneur pour l'explorer (procfs, sans tar). → Tâches 4, 10.
 - **Q12 — Très gros diff.** Un `npm install` dans un conteneur peut produire 100 000 changements.
-  - *Recommandation :* l'API renvoie tout (forme de la spec). L'onglet affiche les 1 000 premiers, triés, avec le décompte par type et « N changements de plus ». Pas de filtre en v0.1. → Tâches 9, 11.
+  - *Recommandation (retenue, confirmée par l'utilisateur le 2026-10-09) :* l'API renvoie tout (forme de la spec). L'onglet affiche les 1 000 premiers, triés, avec le décompte par type et « N changements de plus ». Pas de filtre en v0.1. → Tâches 9, 11.
 - **Q13 — Fichiers supprimés dans l'explorateur.** Ils n'existent plus, donc le listing ne les montre pas.
-  - *Recommandation :* une ligne « N supprimé(s) dans ce dossier » avec un lien vers l'onglet Changements, plutôt que des lignes fantômes dans le tableau (les lignes fantômes n'ont ni taille, ni droits, ni aperçu). → Tâche 11.
+  - *Recommandation (retenue, confirmée par l'utilisateur le 2026-10-09) :* une ligne « N supprimé(s) dans ce dossier » avec un lien vers l'onglet Changements, plutôt que des lignes fantômes dans le tableau (les lignes fantômes n'ont ni taille, ni droits, ni aperçu). → Tâche 11.
 
 ## Global Constraints
 
