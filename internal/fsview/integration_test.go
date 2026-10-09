@@ -263,19 +263,17 @@ func TestIntegrationDockerSocketUnderVarRun(t *testing.T) {
 	needRoot(t)
 	name := "hublot-it-sock"
 	id := runTarget(t, name, "-v", "/var/run/docker.sock:/var/run/docker.sock", "alpine:3", "sleep", "300")
-	// Not docker(): a readlink on a path that is no link exits 1, which is the
-	// exact precondition we skip on; anything else fails.
-	out, err := exec.Command("docker", "exec", name, "readlink", "/var/run").Output()
-	var ee *exec.ExitError
-	if err != nil && !errors.As(err, &ee) {
-		t.Fatalf("docker exec readlink /var/run : %v", err)
+	// "|| true": an empty output means "not a link" (the exact precondition
+	// we skip on); any other failure (stopped container, daemon error) fails.
+	l := docker(t, "exec", name, "sh", "-c", "readlink /var/run || true")
+	if l == "" {
+		t.Skip("précondition absente : /var/run n'est pas un lien dans alpine:3 (readlink vide)")
 	}
-	l := strings.TrimSpace(string(out))
-	if err == nil && !path.IsAbs(l) {
+	if !path.IsAbs(l) {
 		l = path.Join("/var", l)
 	}
-	if err != nil || path.Clean(l) != "/run" {
-		t.Skipf("précondition absente : /var/run n'est pas un lien vers /run dans alpine:3 (%q, %v)", l, err)
+	if path.Clean(l) != "/run" {
+		t.Skipf("précondition absente : /var/run n'est pas un lien vers /run dans alpine:3 (%q)", l)
 	}
 	// Docker Desktop shows a proxy socket whose mount root (mountinfo field 4)
 	// does not end the Source: spec §5.4 (b) refuses it on purpose. Skip on
@@ -291,6 +289,9 @@ func TestIntegrationDockerSocketUnderVarRun(t *testing.T) {
 		t.Fatal("/run/docker.sock absent de mountinfo dans le conteneur")
 	}
 	if root == "/" || !strings.HasSuffix(source, root) {
+		if !strings.HasPrefix(root, "/host-services/") {
+			t.Fatalf("racine du montage %q : ne termine pas la Source %q et n'est pas un socket mandataire de Docker Desktop (/host-services/)", root, source)
+		}
 		t.Skipf("précondition absente : la racine du montage (%q) ne termine pas la Source (%q), socket mandataire de Docker Desktop (spec §5.4 b : refus voulu)", root, source)
 	}
 	if err := openFor(t, id).CheckArchive(context.Background(), "/etc"); err != nil {

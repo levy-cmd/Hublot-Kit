@@ -279,3 +279,24 @@ func TestLocateMounts(t *testing.T) {
 		t.Errorf("ID illisible : %v", got)
 	}
 }
+
+// Review I1: PID 1 chrooted into a bind (/srv/data mounted at /app), a link
+// app -> / leads the destination to the root mount, whose root ends the
+// bind's Source. Only the "P is not /" guard refuses it.
+func TestLocateMountsChrootToRootMountEndingSource(t *testing.T) {
+	mi := "20 1 8:1 /srv/data / rw - ext4 /dev/sda1 rw"
+	ident := func(p string) (MountIdent, error) {
+		if p == "/data" || p == "/" {
+			return MountIdent{20, 30, 2}, nil
+		}
+		return MountIdent{}, fs.ErrNotExist
+	}
+	ms := []dockerx.Mount{{Type: "bind", Source: "/srv/data", Destination: "/data"}}
+	got := LocateMounts(mi, ms, ident)
+	if got[0].Destination != "/data" {
+		t.Errorf("ÉVASION : destination remplacée par la racine : %v", got)
+	}
+	if err := CheckVisibleMounts(mi, got); !errors.Is(err, ErrForbiddenPath) {
+		t.Errorf("ÉVASION : accepté (%v)", err)
+	}
+}
