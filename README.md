@@ -15,11 +15,15 @@ Prérequis : Go 1.27+, Node 24 (≥ 22.17), Docker.
     make test        # tests Go + interface (installe lui-même les dépendances web)
     make build       # interface compilée, puis bin/hublot
 
-Lancer l'agent sur macOS (Docker Desktop) :
+Lancer l'agent sur macOS (Docker Desktop) : l'explorateur lit `/proc/<pid>/root`, qui n'existe que dans la VM de Docker Desktop ; l'agent tourne donc dans un conteneur, avec les droits recommandés :
 
-    DOCKER_HOST=unix://$HOME/.docker/run/docker.sock go run ./cmd/hublot --data-dir ./.data
+    make web && scripts/dev-agent.sh
 
-Le jeton d'accès s'affiche une seule fois au premier lancement ; `go run ./cmd/hublot reset-token --data-dir ./.data` en crée un nouveau.
+Tests Go sous Linux, en root (évasion, `procfs`, intégration avec Docker) :
+
+    make test-linux
+
+Le jeton d'accès s'affiche une seule fois au premier lancement ; la commande `reset-token` est rappelée en tête de `scripts/dev-agent.sh`.
 
 Interface en mode développement (proxy vers l'agent sur 127.0.0.1:7878) :
 

@@ -271,7 +271,7 @@ Pas de `--privileged`. L'agent est déjà root sur l'hôte de fait (§7) : lever
 
 **Prérequis hôte** : Linux amd64 ou arm64, noyau 5.6+, Docker Engine avec API 1.44+, stockage overlay2 ou containerd.
 
-**Développement sur macOS** : Docker Desktop fait tourner Docker dans une machine virtuelle Linux ; `/proc/<pid>/root` n'existe que dans cette machine. L'agent se lance donc dans un conteneur pendant le développement (`docker compose` avec `pid: host`, `cgroup: host`, `cap_add: [SYS_PTRACE]` et le code monté ; `cgroup: host` est indispensable sur Docker Desktop, pilote cgroupfs), l'interface en `vite dev` sur le Mac avec un proxy vers l'agent.
+**Développement sur macOS** : Docker Desktop fait tourner Docker dans une machine virtuelle Linux ; `/proc/<pid>/root` n'existe que dans cette machine. L'agent se lance donc dans un conteneur pendant le développement. `scripts/dev-agent.sh` compile le binaire Linux sur le Mac et le lance avec les droits de la commande recommandée ; `--cgroupns=host` est indispensable sur Docker Desktop (pilote cgroupfs). Les tests Linux passent par `scripts/test-linux.sh` : conteneur `golang` en root, mêmes droits, socket Docker monté. L'interface tourne en `vite dev` sur le Mac, avec un proxy vers l'agent.
 
 ## 9. Interface
 
