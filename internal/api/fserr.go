@@ -11,7 +11,19 @@ import (
 	"github.com/levy-cmd/hublot-kit/internal/fsview"
 )
 
+// indexingJSON is the 202 of spec §6: the error body plus the progress.
+type indexingJSON struct {
+	Error    string  `json:"error"`
+	Detail   string  `json:"detail,omitempty"`
+	Progress float64 `json:"progress"`
+}
+
 func writeFSError(w http.ResponseWriter, err error) {
+	var ie *fsview.IndexingError
+	if errors.As(err, &ie) {
+		writeJSON(w, http.StatusAccepted, indexingJSON{Error: "indexing", Detail: err.Error(), Progress: ie.Progress})
+		return
+	}
 	status, code := fsErrorStatus(err)
 	if status >= 500 {
 		slog.Warn("file route error", "code", code, "status", status, "err", err)
@@ -35,6 +47,8 @@ func fsErrorStatus(err error) (int, string) {
 		return http.StatusServiceUnavailable, "docker_unavailable"
 	case errors.Is(err, fsview.ErrContainerChanged):
 		return http.StatusConflict, "container_changed"
+	case errors.Is(err, fsview.ErrIndexing):
+		return http.StatusAccepted, "indexing"
 	case errors.Is(err, fsview.ErrForbiddenPath):
 		return http.StatusForbidden, "forbidden_path"
 	case errors.Is(err, fsview.ErrLinkInPath):

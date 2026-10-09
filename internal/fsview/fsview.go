@@ -35,6 +35,13 @@ type Entry struct {
 // MaxEntries caps a listing (spec §5.1 step 7).
 const MaxEntries = 10_000
 
+// OpenChecker is implemented by a view that can run every check of Open
+// without reading: a view that would have to ask Docker implements it (spec
+// §5.4, &check=1).
+type OpenChecker interface {
+	CheckOpen(ctx context.Context, path string) error
+}
+
 // FS is a read view of a container's tree. Paths are container paths;
 // List, Stat and Open follow symbolic links, never out of the container root.
 type FS interface {
