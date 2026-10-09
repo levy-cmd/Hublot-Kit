@@ -44,7 +44,7 @@ export const en: Record<Key, string> = {
 	'files.parent': 'Parent folder',
 	'files.loading': 'Loading…',
 	'files.empty': 'Empty folder',
-	'files.truncated': 'Only the first 10,000 entries are shown.',
+	'files.truncated': 'This folder has more than 10,000 entries: only 10,000 are shown.',
 	'files.inaccessible': 'Inaccessible folder: pseudo filesystem (/proc, /sys…).',
 	'files.col.name': 'Name',
 	'files.col.size': 'Size',

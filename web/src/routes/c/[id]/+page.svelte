@@ -42,9 +42,9 @@
 <main>
 	<p><a href="/">← {t('nav.containers')}</a></p>
 	{#if error}
-			<p role="alert">{error}</p>
-			<button type="button" onclick={() => reloads++}>{t('files.reload')}</button>
-		{/if}
+		<p role="alert">{error}</p>
+		<button type="button" onclick={() => reloads++}>{t('files.reload')}</button>
+	{/if}
 	{#if container}
 		<h1>{container.name} <small class="state {container.state}">{stateLabel(container.state)}</small></h1>
 		<p class="image">{container.image}</p>

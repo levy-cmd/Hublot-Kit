@@ -42,7 +42,7 @@ export const fr = {
 	'files.parent': 'Dossier parent',
 	'files.loading': 'Chargement…',
 	'files.empty': 'Dossier vide',
-	'files.truncated': 'Seules les 10 000 premières entrées sont affichées.',
+	'files.truncated': 'Ce dossier compte plus de 10 000 entrées : seules 10 000 sont affichées.',
 	'files.inaccessible': 'Dossier inaccessible : pseudo-système de fichiers (/proc, /sys…).',
 	'files.col.name': 'Nom',
 	'files.col.size': 'Taille',

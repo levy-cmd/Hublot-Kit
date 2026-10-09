@@ -264,6 +264,7 @@ func TestRunBadTLSCert(t *testing.T) {
 		t.Fatalf("code %d, out %q, err %q", code, out.String(), errb.String())
 	}
 }
+
 func TestRunWarnsPrivateCgroupNamespace(t *testing.T) {
 	old := selfCgroup
 	selfCgroup = func() ([]byte, error) { return []byte("0::/\n"), nil }

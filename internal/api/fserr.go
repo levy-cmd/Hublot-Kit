@@ -3,6 +3,7 @@ package api
 import (
 	"errors"
 	"io/fs"
+	"log/slog"
 	"net/http"
 	"syscall"
 
@@ -12,6 +13,9 @@ import (
 
 func writeFSError(w http.ResponseWriter, err error) {
 	status, code := fsErrorStatus(err)
+	if status >= 500 {
+		slog.Warn("file route error", "code", code, "status", status, "err", err)
+	}
 	writeError(w, status, code, err.Error())
 }
 
