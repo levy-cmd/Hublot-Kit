@@ -9,6 +9,7 @@ package api
 import (
 	"archive/tar"
 	"bytes"
+	"io"
 	"net/http"
 	"os"
 	"os/exec"
@@ -36,8 +37,8 @@ func TestIntegrationFilesEndToEnd(t *testing.T) {
 	}
 	name := "hublot-it-api-fs"
 	exec.Command("docker", "rm", "-f", name).Run()
-	dockerCLI(t, "run", "-d", "--name", name, "alpine:3", "sleep", "300")
 	t.Cleanup(func() { exec.Command("docker", "rm", "-f", name).Run() })
+	dockerCLI(t, "run", "-d", "--name", name, "alpine:3", "sleep", "300")
 	dockerCLI(t, "exec", name, "ln", "-s", "/etc", "/linkdir")
 
 	dc, err := dockerx.New()
@@ -73,8 +74,11 @@ func TestIntegrationFilesEndToEnd(t *testing.T) {
 	hasHostname := false
 	for {
 		h, err := tr.Next()
-		if err != nil {
+		if err == io.EOF {
 			break
+		}
+		if err != nil {
+			t.Fatalf("tar de /etc illisible : %v", err)
 		}
 		hasHostname = hasHostname || h.Name == "etc/hostname"
 	}
