@@ -11,11 +11,14 @@ import (
 	"context"
 	"errors"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"strings"
 	"testing"
 	"time"
+
+	"golang.org/x/sys/unix"
 
 	"github.com/levy-cmd/hublot-kit/internal/dockerx"
 )
@@ -45,8 +48,9 @@ func docker(t *testing.T, args ...string) string {
 func runTarget(t *testing.T, name string, args ...string) string {
 	t.Helper()
 	exec.Command("docker", "rm", "-f", name).Run()
-	id := docker(t, append([]string{"run", "-d", "--name", name}, args...)...)
+	// Registered before the run: a run that creates the container then fails must not leak it.
 	t.Cleanup(func() { exec.Command("docker", "rm", "-f", name).Run() })
+	id := docker(t, append([]string{"run", "-d", "--name", name}, args...)...)
 	return id
 }
 
@@ -158,10 +162,12 @@ func TestIntegrationForStoppedContainer(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := For(context.Background(), dc, id); !errors.Is(err, ErrStopped) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if _, err := For(ctx, dc, id); !errors.Is(err, ErrStopped) {
 		t.Fatalf("conteneur arrêté : %v", err)
 	}
-	if _, err := For(context.Background(), dc, "hublot-it-absent"); !errors.Is(err, dockerx.ErrNotFound) {
+	if _, err := For(ctx, dc, "hublot-it-absent"); !errors.Is(err, dockerx.ErrNotFound) {
 		t.Fatalf("conteneur absent : %v", err)
 	}
 }
@@ -185,17 +191,32 @@ func TestIntegrationPidHostTarget(t *testing.T) {
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
+	refused := func(err error) bool {
+		return errors.Is(err, ErrLinkInPath) || errors.Is(err, ErrForbiddenPath) ||
+			errors.Is(err, fs.ErrNotExist) || errors.Is(err, unix.ELOOP)
+	}
 	for _, p := range []string{"/proc/1/root/etc/hostname", "/m/etc/hostname", "/m/etc/shadow"} {
-		if rc, err := fsys.Open(ctx, p); err == nil {
+		rc, err := fsys.Open(ctx, p)
+		if rc != nil {
 			b, _ := io.ReadAll(rc)
 			rc.Close()
-			t.Errorf("ÉVASION : %s lu (%q)", p, b)
+			t.Errorf("ÉVASION : %s lu (%q), err=%v", p, b, err)
 		}
+		if err == nil {
+			t.Errorf("ÉVASION : Open %s sans erreur", p)
+		} else if !refused(err) {
+			t.Errorf("Open %s : refus d'un genre inattendu : %v", p, err)
+		}
+		t.Logf("Open %s : %v", p, err)
 	}
 	for _, p := range []string{"/proc/1/root", "/m", "/m/etc"} {
-		if entries, _, err := fsys.List(ctx, p); err == nil {
-			t.Errorf("ÉVASION : List %s a rendu %d entrées", p, len(entries))
+		entries, _, err := fsys.List(ctx, p)
+		if len(entries) > 0 || err == nil {
+			t.Errorf("ÉVASION : List %s a rendu %d entrées, err=%v", p, len(entries), err)
+		} else if !refused(err) {
+			t.Errorf("List %s : refus d'un genre inattendu : %v", p, err)
 		}
+		t.Logf("List %s : %v", p, err)
 	}
 	if _, err := fsys.StatNoLinks(ctx, "/m/etc"); !errors.Is(err, ErrLinkInPath) {
 		t.Errorf("StatNoLinks /m/etc : %v", err)
