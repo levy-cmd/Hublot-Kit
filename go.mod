@@ -4,12 +4,14 @@ go 1.27.1
 
 require (
 	github.com/containerd/errdefs v1.0.0
+	github.com/cyphar/filepath-securejoin v0.7.0
 	github.com/moby/moby/api v1.56.1
 	github.com/moby/moby/client v0.6.1
 	golang.org/x/sys v0.48.0
 )
 
 require (
+	cyphar.com/go-pathrs v0.2.5 // indirect
 	github.com/Microsoft/go-winio v0.6.2 // indirect
 	github.com/containerd/errdefs/pkg v0.3.0 // indirect
 	github.com/distribution/reference v0.6.0 // indirect
