@@ -31,6 +31,7 @@ func HostBind(ctx context.Context, docker dockerx.Client, mounts []dockerx.Mount
 			if hostSensitive(m.Source) {
 				return fmt.Errorf("%w : bind %s -> %s", ErrForbiddenPath, m.Source, m.Destination)
 			}
+		case "tmpfs", "image":
 		case "volume":
 			if m.Driver != "local" {
 				return fmt.Errorf("%w : volume %s -> %s : pilote %q inconnu, refusé", ErrForbiddenPath, m.Name, m.Destination, m.Driver)
@@ -48,6 +49,8 @@ func HostBind(ctx context.Context, docker dockerx.Client, mounts []dockerx.Mount
 			if hasBindOption(opts["o"]) && opts["device"] != "" && hostSensitive(opts["device"]) {
 				return fmt.Errorf("%w : bind %s -> %s (volume %s)", ErrForbiddenPath, opts["device"], m.Destination, m.Name)
 			}
+		default:
+			return fmt.Errorf("%w : montage de type %q inconnu -> %s, refusé", ErrForbiddenPath, m.Type, m.Destination)
 		}
 	}
 	return nil
@@ -84,14 +87,14 @@ var pseudoFSNames = []string{
 // dangerousFSType: a pseudo filesystem, or FUSE (a server that never answers
 // would block dockerd while it builds the tar, spec §13).
 func dangerousFSType(t string) bool {
-	return slices.Contains(pseudoFSNames, t) || t == "fuse" || t == "fuseblk" || strings.HasPrefix(t, "fuse.")
+	return slices.Contains(pseudoFSNames, t) || t == "fuse" || t == "fuseblk" || strings.HasPrefix(t, "fuse.") || strings.HasPrefix(t, "fuseblk.")
 }
 
-// dangerousMount returns the first mount of /proc/<pid>/mountinfo (mount
-// points relative to the process's root) of a dangerous type whose mount point
-// matches. Every line is read, stacked mounts included. A line that cannot be
-// parsed, or with an invalid escape, counts as dangerous: fail closed.
-func dangerousMount(mountinfo string, match func(mountPoint string) bool) (mountPoint, fsType string, found bool) {
+// scanMountinfo parses /proc/<pid>/mountinfo (mount points relative to the
+// process's root) once, for every check. visit gets each unescaped mount point
+// and fs type and returns true to stop. A line that cannot be parsed, or with
+// an invalid escape, stops the scan too: fail closed.
+func scanMountinfo(mountinfo string, visit func(mountPoint, fsType string) bool) (mountPoint, fsType string, stopped bool) {
 	for _, line := range strings.Split(mountinfo, "\n") {
 		if strings.TrimSpace(line) == "" {
 			continue
@@ -99,18 +102,46 @@ func dangerousMount(mountinfo string, match func(mountPoint string) bool) (mount
 		// id parent major:minor root mount-point options [optional fields…] - type source super-options
 		f := strings.Fields(line)
 		sep := slices.Index(f, "-")
-		if len(f) < 5 || sep < 5 || sep+1 >= len(f) {
+		if len(f) < 7 || sep < 6 || sep+1 >= len(f) {
 			return line, "ligne de mountinfo illisible", true
 		}
 		mp, ok := unescapeMountinfo(f[4])
 		if !ok {
 			return f[4], "échappement de mountinfo invalide", true
 		}
-		if typ := f[sep+1]; dangerousFSType(typ) && match(mp) {
-			return mp, typ, true
+		if visit(mp, f[sep+1]) {
+			return mp, f[sep+1], true
 		}
 	}
 	return "", "", false
+}
+
+// dangerousMount returns the first mount of a dangerous type whose mount point
+// matches. Stacked mounts are all read.
+func dangerousMount(mountinfo string, match func(mountPoint string) bool) (mountPoint, fsType string, found bool) {
+	return scanMountinfo(mountinfo, func(mp, typ string) bool { return dangerousFSType(typ) && match(mp) })
+}
+
+// CheckVisibleMounts verifies that the mount table describes the container in
+// the coordinates dockerd uses: it must have a "/" mount (else the process's
+// root was moved and mounts outside it vanished), and every Docker mount
+// destination must appear verbatim as a mount point (else a symlink in the
+// path, or a moved root, hides it). Otherwise the other checks could miss a
+// dangerous mount: fail closed.
+func CheckVisibleMounts(mountinfo string, mounts []dockerx.Mount) error {
+	points := map[string]bool{}
+	if mp, typ, bad := scanMountinfo(mountinfo, func(mp, _ string) bool { points[mp] = true; return false }); bad {
+		return fmt.Errorf("%w : %s : %s", ErrForbiddenPath, typ, mp)
+	}
+	if !points["/"] {
+		return fmt.Errorf("%w : la table des montages n'a pas de racine \"/\" : tar refusé", ErrForbiddenPath)
+	}
+	for _, m := range mounts {
+		if d := CleanPath(m.Destination); !points[d] {
+			return fmt.Errorf("%w : la table des montages ne montre pas la destination %s (racine du process déplacée, ou destination sous un lien) : tar refusé", ErrForbiddenPath, d)
+		}
+	}
+	return nil
 }
 
 // PseudoMountUnder: a dangerous mount on, under or above dir (spec §5.4).

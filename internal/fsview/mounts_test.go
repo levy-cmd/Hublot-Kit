@@ -21,6 +21,7 @@ func TestHostBind(t *testing.T) {
 		"nfs-vol":   {"type": "nfs", "o": "addr=10.0.0.1", "device": ":/export"},
 		"rel-vol":   {"type": "none", "o": "bind", "device": "proc"},
 		// Readable options: only the driver rule may refuse these two.
+		"fb":   {"type": "fuseblk.ntfs", "device": "/dev/sdb1"},
 		"ceph": {},
 		"anon": {},
 	}}
@@ -48,6 +49,10 @@ func TestHostBind(t *testing.T) {
 		{vol("gone", "/g", "local"), []string{"gone", "/g", "options illisibles"}},
 		{bind("proc", "/rel"), []string{"bind proc -> /rel"}},                   // not absolute: fail closed
 		{vol("rel-vol", "/r", "local"), []string{"bind proc -> /r", "rel-vol"}}, // idem for a device
+		{vol("fb", "/fb", "local"), []string{"fb", "type=fuseblk.ntfs", "/fb"}},
+		{dockerx.Mount{Type: "cluster", Destination: "/cl"}, []string{"cluster", "/cl"}},
+		{dockerx.Mount{Type: "npipe", Destination: "/np"}, []string{"npipe", "/np"}},
+		{dockerx.Mount{Type: "", Destination: "/empty"}, []string{"/empty"}},
 	}
 	for _, c := range refused {
 		err := HostBind(ctx, docker, []dockerx.Mount{bind("/srv", "/srv"), c.m})
@@ -65,7 +70,7 @@ func TestHostBind(t *testing.T) {
 		bind("/srv/data", "/data"), bind("/dev/log", "/dev/log"), bind("/dev/null", "/x"),
 		bind("/procfs-backup", "/b"), bind("/system", "/s"),
 		vol("plain-vol", "/v", "local"), vol("srv-vol", "/w", "local"), vol("nfs-vol", "/n", "local"),
-		{Type: "tmpfs", Destination: "/tmp"},
+		{Type: "tmpfs", Destination: "/tmp"}, {Type: "image", Destination: "/img"},
 	}
 	if err := HostBind(ctx, docker, allowed); err != nil {
 		t.Fatalf("montages ordinaires refusés : %v", err)
@@ -114,6 +119,13 @@ func TestPseudoMountUnder(t *testing.T) {
 	}
 	if _, _, found := PseudoMountUnder("garbage line\n", "/etc"); !found {
 		t.Fatal("une ligne illisible doit refuser (échec fermé)")
+	}
+	// The options field is "-": the separator is one field too early.
+	if _, typ, found := PseudoMountUnder("700 600 0:70 / /mnt - ext4 /dev/sdb1 rw\n", "/etc"); !found || !strings.Contains(typ, "illisible") {
+		t.Fatalf("séparateur à la place des options accepté : %q, %v", typ, found)
+	}
+	if _, _, found := PseudoMountUnder("700 600 0:70 / /mnt rw - fuseblk.ntfs /dev/sdb1 rw\n", "/mnt"); !found {
+		t.Fatal("fuseblk.<sous-type> est FUSE")
 	}
 	if _, _, found := PseudoMountUnder("700 600 0:70 / /mnt rw - fuseblk /dev/sdb1 rw\n", "/"); !found {
 		t.Fatal("fuseblk sous / doit refuser")
@@ -171,5 +183,30 @@ func TestPseudoMountInMounts(t *testing.T) {
 		if found != c.found || mp != c.mountPoint || typ != c.fsType || d != c.d {
 			t.Errorf("%+v : (%q, %q, %q, %v)", c.mounts, mp, typ, d, found)
 		}
+	}
+}
+
+// Review fix 1: mountinfo must show "/" and every Docker destination.
+func TestCheckVisibleMounts(t *testing.T) {
+	m := func(dst string) dockerx.Mount { return dockerx.Mount{Type: "bind", Source: "/srv", Destination: dst} }
+	if err := CheckVisibleMounts(sampleMountinfo, []dockerx.Mount{m("/data"), m("/my dir/"), {Type: "tmpfs", Destination: "/dev"}}); err != nil {
+		t.Fatalf("cas normal refusé : %v", err)
+	}
+	if err := CheckVisibleMounts(sampleMountinfo, nil); err != nil {
+		t.Fatalf("sans montage Docker : %v", err)
+	}
+	// Destination missing (moved root, or under a symlink).
+	err := CheckVisibleMounts(sampleMountinfo, []dockerx.Mount{m("/link/m")})
+	if !errors.Is(err, ErrForbiddenPath) || !strings.Contains(err.Error(), "ne montre pas la destination /link/m") {
+		t.Fatalf("destination absente : %v", err)
+	}
+	// No "/" line: the process root was moved to a jail.
+	const jail = "700 600 254:1 / /jail/x rw - ext4 /dev/vda1 rw\n"
+	err = CheckVisibleMounts(jail, nil)
+	if !errors.Is(err, ErrForbiddenPath) || !strings.Contains(err.Error(), `pas de racine "/"`) {
+		t.Fatalf("pas de racine : %v", err)
+	}
+	if err := CheckVisibleMounts("garbage\n", nil); !errors.Is(err, ErrForbiddenPath) {
+		t.Fatalf("ligne illisible : %v", err)
 	}
 }

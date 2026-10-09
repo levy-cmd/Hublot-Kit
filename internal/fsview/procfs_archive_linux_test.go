@@ -121,3 +121,14 @@ func TestForWiresMountsIntoCheckArchive(t *testing.T) {
 		t.Fatalf("les montages d'Inspect doivent atteindre la vue : %v", err)
 	}
 }
+
+// Review fix 1: a Docker destination that the process's mount table does not
+// show (moved root, symlink in the path) refuses the tar.
+func TestCheckArchiveDestinationNotVisible(t *testing.T) {
+	p, _ := childView(t)
+	p.mounts = []dockerx.Mount{{Type: "tmpfs", Destination: "/link/m"}}
+	err := p.CheckArchive(ctx, "/etc")
+	if !errors.Is(err, ErrForbiddenPath) || !strings.Contains(err.Error(), "ne montre pas la destination /link/m") {
+		t.Fatalf("destination invisible : %v", err)
+	}
+}

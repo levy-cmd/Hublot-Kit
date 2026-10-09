@@ -36,6 +36,9 @@ func (p *procFS) CheckArchive(ctx context.Context, dir string) error {
 	if err := unix.PidfdSendSignal(p.pidfd, 0, nil, 0); err != nil {
 		return changed("le process %d a disparu : %v", p.pid, err)
 	}
+	if err := CheckVisibleMounts(string(mi), p.mounts); err != nil {
+		return err
+	}
 	if mp, typ, dst, bad := PseudoMountInMounts(string(mi), p.mounts); bad {
 		return fmt.Errorf("%w : %s monté sur %s, sous le montage %s du conteneur : aucun tar", ErrForbiddenPath, typ, mp, dst)
 	}
