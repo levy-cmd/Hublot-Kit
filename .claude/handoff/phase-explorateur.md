@@ -3,7 +3,7 @@ branche: phase/explorateur
 base: 58990fc
 de: Livaille An-nour (avec Claude)
 le: 2026-10-09
-repris_par:
+repris_par: Claude (Opus 5.5) 2026-10-09
 verif: export PATH=/opt/homebrew/bin:$PATH DOCKER_HOST=unix://$HOME/.docker/run/docker.sock; make test && make build
 ---
 
