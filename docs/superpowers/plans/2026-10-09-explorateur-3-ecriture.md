@@ -11,11 +11,12 @@
 > - Mesuré sur Docker Desktop : le refus d'écriture sur un rootfs `--read-only` ou un volume `:ro` est un `InvalidArgument` (`container rootfs is marked read-only`, `mounted volume is marked read-only`) ; un dossier absent est un `NotFound` ; Docker **supprime puis recrée** le fichier (inode 570993 → 320851) ; sans `copyUIDGID`, le mode et l'uid/gid du tar sont gardés (`640 1000 1001`) ; l'écriture marche sur un conteneur en pause.
 > - Interface : CodeMirror installé aux versions de la tâche 6 ; Vitest 54 tests verts ; `npm run check` 0 erreur ; `npm run lint` propre ; `vite build` : CodeMirror et ses langages ne sont atteints que par `import()` dynamique (le nœud de la page conteneur pèse 22 Ko). `scripts/e2e.sh` : le parcours unique passe, et le parcours jetable d'écriture de la tâche 7 (non commité) passe contre un vrai agent, sous la CSP.
 > - **Revérifié après la revue 1** (même méthode : copie reconstruite depuis les blocs du plan `a43755e`, corrections appliquées, puis supprimée). `go vet` (avec et sans `-tags integration`) en macOS et `GOOS=linux`, `go test -race` macOS, `scripts/test-linux.sh -race -tags integration ./cmd/... ./internal/...` : verts, aucun SKIP. Mutations nouvelles : verrou retiré → `TestWritesAreSerialized` échoue ; `fstatfs` retiré de `procFS.StatNoLinks` → `TestProcPseudoFSRefused` échoue. Vitest 55 tests, `check`, `lint`, `build` verts ; parcours jetable rejoué, avec un fichier CRLF relu octet pour octet après édition (`un 1\r\ndeux\r\n`). Mesuré en plus (Docker Desktop) : écrire dans `/dev`, `/dev/shm` ou un `--tmpfs` d'un conteneur actif réussit sans que le conteneur voie le fichier ; `/run` (pas un tmpfs) est vu ; `/etc/hosts` d'un conteneur jamais démarré s'écrit (`HostsPath` vide), Docker le masquera au démarrage ; `mime.ParseMediaType` décode `filename*=UTF-8''..%2Fx` en `../x`, `filename="a\/b"` en `a/b`, et préfère `filename*` à `filename`.
+> - **Revérifié après la revue 2** (même méthode, copie reconstruite depuis `3b20faf`). `go vet` macOS et Linux, avec et sans `integration` ; `go test -race` macOS ; `scripts/test-linux.sh -race -tags integration ./cmd/... ./internal/...` : verts, aucun SKIP. Mutations nouvelles, chacune attrapée : contrôle `ctx.Err()` de `put` retiré → `TestEndedRequestWritesNothing` (3 essais sur 3) ; attente du verrou sourde à `ctx` → `TestLockWaitAbandoned` ; `unlock` différé après `Open` → `TestLockReleasedOnPanic` ; caractères de format acceptés → `TestUploadInvalidName` ; contrôle de point de montage retiré → `TestIntegrationWriteRunning` (`/sbin/docker-init` arrive jusqu'à `If-Match`). Mesuré en plus : `PUT /archive` vers un fichier existant (`/etc/motd`) → `InvalidArgument` « extraction point is not a directory » ; `--init` monte `/sbin/docker-init` sans le montrer dans `Inspect.Mounts`. Interface inchangée par ce tour.
 > - **Non vérifié** : les VM `hk-ubuntu` et `hk-fedora` (tâche 8).
 
 **Goal:** L'utilisateur modifie un fichier texte d'un conteneur, actif ou arrêté, dans un éditeur CodeMirror, ou y envoie un fichier. Chaque écriture passe par une confirmation qui nomme le conteneur et le chemin, est journalisée avant et après, et n'écrit jamais à travers un lien.
 
-**Architecture:** Un nouveau paquet `internal/files`, seul point d'écriture (§4, §7), applique l'ordre de §5.3 dans une fonction par écriture : lecture seule, contrôle du chemin par la vue `fsview` (`StatNoLinks` : `openat2 RESOLVE_NO_SYMLINKS` et `fstatfs` pour un conteneur actif, l'index pour un conteneur arrêté), `If-Match`, audit, `dockerx.PutArchive` sur le parent du chemin vérifié, audit, `Views.Forget`. `api` gagne `PUT /fs/file` et `POST /fs/upload`, qui lisent le corps puis appellent `files` sous la garde de §13. L'interface gagne un éditeur CodeMirror 6 chargé à la demande, une boîte de confirmation et le bouton d'envoi, absents en lecture seule.
+**Architecture:** Un nouveau paquet `internal/files`, seul point d'écriture (§4, §7), applique l'ordre de §5.3 dans une fonction par écriture : lecture seule, contrôle du chemin par la vue `fsview` (`StatNoLinks` : `openat2 RESOLVE_NO_SYMLINKS` et `fstatfs` pour un conteneur actif, l'index pour un conteneur arrêté), `If-Match`, audit (intention), `dockerx.PutArchive` sur le parent du chemin vérifié, `Views.Forget`, audit (résultat). `api` gagne `PUT /fs/file` et `POST /fs/upload`, qui lisent le corps puis appellent `files` sous la garde de §13. L'interface gagne un éditeur CodeMirror 6 chargé à la demande, une boîte de confirmation et le bouton d'envoi, absents en lecture seule.
 
 **Tech Stack:** Go 1.27 (`archive/tar`, `mime/multipart`, `net/http`), `github.com/moby/moby/client` v0.6.1 (`CopyToContainer`), `github.com/cyphar/filepath-securejoin` v0.7.0 (inchangé), `golang.org/x/sys` v0.48.0 ; SvelteKit 3 / Svelte 5, Vitest, CodeMirror 6 (`codemirror` 6.0.2, `@codemirror/state` 6.7.6, `@codemirror/view` 6.43.14, `@codemirror/language` 6.13.1, `@codemirror/lang-json` 6.0.2, `@codemirror/lang-yaml` 6.1.3, `@codemirror/lang-javascript` 6.2.5, `@codemirror/lang-python` 6.2.1, `@codemirror/legacy-modes` 6.5.5).
 
@@ -34,7 +35,17 @@ Revue du plan, premier tour (relecteur Opus et Codex, « Prêt avec réserves »
 - **R7 (Opus I2) :** Docker écrit dans sa propre vue des montages. Refus avant l'intention, par l'`Inspect` : `/etc/hosts`, `/etc/hostname`, `/etc/resolv.conf`, la `Destination` d'un montage, tout chemin sous un tmpfs (`Mounts` de type `tmpfs` et `HostConfig.Tmpfs`, nouveau champ `ContainerInfo.Tmpfs`), sous `/dev`, `/proc` ou `/sys` → `forbidden_path` qui nomme la cause. Tests d'abord (`TestRefusesWhereDockerDoesNotWrite`), intégration `--tmpfs` et `/etc/hosts`. → Tâches 1, 2, 3, 5 ; Q21.
 - **R8 (Opus I3, Codex Critical 1 et 2) :** la règle `fsview.HostBind` (§5.2 étape 7 et ses extensions) s'applique à toute écriture, conteneur actif compris. Test `TestHostBindRefusesEveryWrite`, écrit d'abord. → Tâches 2, 3 ; Q22.
 - **R9 :** avec R7, `TestProcPseudoFSRefused` serait passé par la règle de préfixe, plus par `fstatfs`. Il sert désormais le `/proc` de l'hôte comme racine (`/`, `/version`) : seul `fstatfs` refuse ; mutation vérifiée. → Tâche 2.
-- **R10 (Minor) :** volume `:ro` testé (tâche 1) ; `EDIT_MAX` refuse avant la confirmation (tâche 7) ; `/api/meta` n'est plus demandé deux fois, la page lit `readOnly` dans un contexte du layout (tâche 7) ; contrôle `MARKER` décoratif retiré (tâche 2) ; userns-remap, extraction chrootée de dockerd et vue des montages écrits dans §5.3 et §13 (tâche 8) ; la taille et la lecture seule passent avant l'étape 2, noté dans « Décisions » ; « Structure des fichiers » complétée.
+- **R10 (Minor, premier tour) :** volume `:ro` testé (tâche 1) ; `EDIT_MAX` refuse avant la confirmation (tâche 7) ; `/api/meta` n'est plus demandé deux fois, la page lit `readOnly` dans un contexte du layout (tâche 7) ; contrôle `MARKER` décoratif retiré (tâche 2) ; userns-remap, extraction chrootée de dockerd et vue des montages écrits dans §5.3 et §13 (tâche 8) ; la taille et la lecture seule passent avant l'étape 2, noté dans « Décisions » ; « Structure des fichiers » complétée.
+
+Second tour (relecteur Opus et Codex, « Prêt avec réserves ») :
+
+- **R11 (Codex) :** `wrapPut` ne classe en `ErrRefused` (`read_only`) que les deux refus de lecture seule que Docker donne (« marked read-only », mesuré) ; tout autre `InvalidArgument` de `PutArchive` devient `ErrPutInvalid` → `conflict` (409) : le chemin a changé après les contrôles (mesuré : « extraction point is not a directory »). Un test par cas, unitaire et sur Docker. → Tâches 1, 4 ; Q15.
+- **R12 (Codex) :** le nom est validé avant les règles de l'`Inspect` : un nom invalide vers un dossier interdit donne `invalid_name`. Tests `TestUploadNameBeforeInspectRules` et, par la route, `a/b` vers `/proc`. → Tâches 2, 4.
+- **R13 (Codex, Opus) :** tests du verrou : requête abandonnée pendant l'attente (rien d'écrit, verrou libre ensuite), panique après la prise (verrou rendu). `TestEndedRequestWritesNothing` annule le contexte une fois le verrou pris, dans `Open` : il vise désormais le seul contrôle de `put`. Mutations ajoutées. → Tâches 2, 3.
+- **R14 (Codex) :** `writable` lit l'`Inspect` hors du verrou. Pas de second `Inspect` sous verrou : les montages d'un conteneur sont fixés à sa création (`docker update` ne les change pas) et un ID n'est jamais réutilisé ; le verrou sérialise nos écritures, pas la configuration de Docker, qu'un second `Inspect` ne figerait pas davantage. → Décisions.
+- **R15 (Opus Minor 2, Q21) :** une édition sur un conteneur actif refuse une cible qui est un point de montage : `STATX_MNT_ID` de la cible et de son parent, nouvelle interface facultative `fsview.MountPointChecker`, implémentée par `procfs`. Ferme par défaut les montages absents d'`Inspect` (configs et secrets Swarm, `--init`, CDI). Tests d'abord : `TestIsMountPoint` (Linux, sur `/proc`, sans privilège), `TestEditRefusesMountPoint` (portable), `--init` en intégration. → Tâches 2, 3, 5 ; Q21.
+- **R16 (Opus I1) :** Q22 n'est **pas tranchée** : c'est à l'utilisateur. La prose qui en disait trop est corrigée : `fsview.HostBind` ne refuse que les binds de `/`, de `/proc` et `/sys` (et dessous) et de `/dev` ; `-v /etc:/hostetc` reste inscriptible. Q22 est réécrite avec deux options ; le plan suit (a) en attendant, avec un test qui montre `/etc` accepté. → Tâches 2, 8 ; Q22.
+- **R17 (Opus Minor) :** texte périmé de `TestProcPseudoFSRefused` ; ordre réel `PutArchive` → `Forget` → audit (résultat) dans le texte ; verrou décrit « pris avant d'ouvrir la vue » ; cas « fichier monté » en intégration (bind `:ro` de `/etc/os-release`) ; lignes §13 : FUSE muet qui garde le verrou (et `504` trompeur), montages absents d'`Inspect` ; caractères de format (bidi, largeur nulle) et séparateurs de ligne et de paragraphe refusés dans un nom. → Tâches 2, 3, 5, 8.
 
 ## Ce que les plans précédents ont préparé
 
@@ -47,13 +58,13 @@ Revue du plan, premier tour (relecteur Opus et Codex, « Prêt avec réserves »
 ## Décisions de ce plan (la spec ne tranche pas)
 
 - **`files.Writer`.** `Writer{ReadOnly, Docker, Audit, Open, Forget}`, méthodes `Allowed()`, `Edit(ctx, c, p, content, ifMatch) (etag, error)`, `Upload(ctx, c, dir, name, content, ifNoneMatch) (path, error)`, où `c` est l'`Inspect` que la route a déjà fait (`dockerx.ContainerInfo`). `Open` vaut `Deps.OpenFS` (donc `Views.For`) et `Forget` vaut `Views.Forget` : `files` ne connaît ni `procfs` ni `tarindex`. `Docker` est un `dockerx.Client` complet : `HostBind` lit les options des volumes (R8). L'interface étroite `Auditor` laisse les tests ordonner l'audit et l'écriture. → Tâches 2, 3.
-- **Ordre exact.** Lecture seule ; plafond de taille (un refus sans contact avec le conteneur, avant §5.3) ; étape 2 : nom (envoi), `writable` sur l'`Inspect` (R7, R8), verrou du conteneur (R2), vue, `StatNoLinks` du parent ou de la cible ; étape 3 : `If-Match` (relecture) ou `If-None-Match` puis existence ; étapes 4 à 6 dans `put`. → Tâche 3.
+- **Ordre exact.** Lecture seule ; plafond de taille (un refus sans contact avec le conteneur, avant §5.3) ; étape 2 : nom (envoi), `writable` sur l'`Inspect` (R7, R8), verrou du conteneur (R2), vue, `StatNoLinks` du parent ou de la cible, type, point de montage (édition, R15) ; étape 3 : `If-Match` (relecture) ou `If-None-Match` puis existence ; étapes 4 à 6 dans `put` : requête encore vivante, intention, `PutArchive`, `Forget`, résultat. → Tâche 3.
 - **Lecture seule à un seul endroit (§7).** `files` refuse en premier (`ErrReadOnly`), avant même d'ouvrir la vue. La route appelle `files.Allowed()` avant de lire le corps, pour ne pas lire 32 Mio pour rien ; c'est toujours `files` qui décide. → Tâches 3, 4.
 - **Chemin d'écriture.** Édition : `fsview.CleanPath(p)`. Envoi : `fsview.CleanPath(parent + "/" + nom)`, avec un nom déjà validé ; jamais `path.Join` ni `filepath.Join`. `PutArchive` reçoit `path.Dir` de ce chemin, et rien d'autre. → Tâche 3.
 - **Existence avant un envoi.** `StatNoLinks(chemin)` : absent (`fs.ErrNotExist`) → on continue ; lien, même pendant → `link_in_path` (`openat2` refuse un lien en dernier composant sans le suivre : vérifié sous Linux) ; toute autre entrée → `conflict`. C'est la sémantique `lstat` de §5.3 étape 3, sans `fstatat` à écrire dans `fsview`. → Tâches 2, 3.
 - **Tar d'une entrée.** Nom de base, `Mode` par `fsview.UnixPerm` (setuid, setgid et sticky gardés), `Uid`, `Gid`, `ModTime` = maintenant. Nouveau fichier : `0644`, uid/gid du dossier parent. Pas de `copyUIDGID` : Docker donnerait le fichier à l'utilisateur configuré du conteneur. `noOverwriteDirNonDir` reste (défaut du client) : Docker ne remplace jamais un dossier par un fichier. → Tâches 1, 3.
 - **Audit.** `file.write` ou `file.upload`, `container` = ID complet, `path` = chemin d'écriture, `result` = `intent` puis `ok` ou `error` (avec `error`). Une intention qui ne s'écrit pas arrête tout (`internal`, rien n'est écrit). Un résultat qui ne s'écrit pas part dans les logs (`slog.Error`) : l'écriture a eu lieu, la masquer pousserait à la refaire. Les refus avant l'étape 4 ne sont pas journalisés (rien n'a été tenté). → Tâche 3.
-- **Verrou.** Un canal de capacité 1 par ID de conteneur, créé à la première écriture, jamais retiré (un par conteneur écrit, quelques octets). L'attente s'arrête avec la requête (`ctx`). → Tâche 3 ; Q23.
+- **Verrou.** Un canal de capacité 1 par ID de conteneur, créé à la première écriture, jamais retiré (un par conteneur écrit, quelques octets). Pris avant d'ouvrir la vue, rendu par `defer` après l'étape 6, panique comprise ; l'attente s'arrête avec la requête (`ctx`). `writable` lit l'`Inspect` avant le verrou : les montages sont fixés à la création du conteneur (R14). → Tâche 3 ; Q23.
 - **Corps lu avant la garde.** Un client lent ne tient pas un créneau de la garde (§13) pendant qu'il envoie. L'écriture elle-même prend un créneau : `StatNoLinks` peut buter sur un FUSE. → Tâche 4.
 - **Réponses.** `PUT /fs/file` → `200 {"etag":"\"…\""}` et en-tête `ETag` (l'interface continue d'éditer sans relire). `POST /fs/upload` → `201 {"path":"/…","etag":"\"…\""}`. → Tâche 4.
 - **Multipart.** Une seule partie utile, `file` ; les autres sont ignorées ; aucune partie `file` → nom vide → `invalid_name`. Le nom est le `filename` **brut** (Q19). → Tâche 4.
@@ -77,7 +88,7 @@ Le plan suit la recommandation de chaque question ; une réponse différente cha
 - **Q14 — Plafond de taille d'une édition et d'un envoi.** La spec n'en fixe pas.
   - *Recommandation :* édition **2 Mio**, envoi **32 Mio**, tenus en mémoire. Raisons : l'éditeur ne reçoit que ce que l'aperçu a servi, et l'aperçu s'arrête à 2 Mio (§6) ; au-delà, l'`ETag` n'existe pas. 32 Mio couvrent un fichier de configuration, un petit binaire ou un certificat, le cas « je corrige mon conteneur ». Le contenu est lu en entier avant `PutArchive` (l'en-tête tar exige la taille), puis le tar en double la place : 64 Mio au pire, un instant, pour un seul utilisateur. Plus gros : `docker cp`, que le message d'erreur nomme. Le hachage du fichier actuel est lu au plus jusqu'à 2 Mio + 1 octet (`too_large` au-delà). → Tâches 3, 4, 6.
 - **Q15 — Refus de Docker (rootfs `--read-only`, volume `:ro`).** Docker répond `InvalidArgument` (mesuré sur les deux) ; `wrap` le classait en `docker_unavailable` (503), ce qui accuse le démon à tort.
-  - *Recommandation :* pour `PutArchive` seulement (`wrapPut`, R5), `InvalidArgument` → `dockerx.ErrRefused` → `read_only` (403), avec le message de Docker en détail. Les routes de lecture gardent `docker_unavailable`. L'interface dit « Écriture refusée : la cible est en lecture seule (container rootfs is marked read-only) ». Aucun code nouveau dans §6. → Tâches 1, 4, 6.
+  - *Recommandation :* pour `PutArchive` seulement (`wrapPut`, R5), un `InvalidArgument` dont le message dit « marked read-only » → `dockerx.ErrRefused` → `read_only` (403), avec le message de Docker en détail ; tout autre `InvalidArgument` → `dockerx.ErrPutInvalid` → `conflict` (409), car le chemin a changé après nos contrôles (R11). Le classement par message plutôt que par un second `Inspect` (`ReadonlyRootfs`, `RW` du montage) : les deux messages sont ceux du code de Docker depuis des années, et un `Inspect` ne dirait pas quel montage la cible traverse. Les routes de lecture gardent `docker_unavailable`. L'interface dit « Écriture refusée : la cible est en lecture seule (container rootfs is marked read-only) ». Aucun code nouveau dans §6. → Tâches 1, 4, 6.
 - **Q16 — Fichier non UTF-8, BOM, fins de ligne CRLF.** `res.text()` remplace les octets invalides par U+FFFD et retire le BOM ; CodeMirror réécrit toutes les fins de ligne en `\n` par défaut. Enregistrer changerait donc des octets que l'utilisateur n'a pas touchés.
   - *Recommandation :* décodage strict (`TextDecoder` `fatal`, `ignoreBOM`) ; non UTF-8 → aperçu seul, avec un message ; CRLF ou LF uniformes → éditables, avec le même séparateur, relu par `state.sliceDoc()` (jamais `doc.toString()`, qui rend du LF : R1) ; mélange → aperçu seul. Pas de choix d'encodage en v0.1. → Tâches 6, 7.
 - **Q17 — Écriture coupée.** Docker supprime le fichier puis le recrée (mesuré : l'inode change). Si la requête HTTP vers Docker s'arrête au milieu (onglet fermé, délai de 10 s de la garde), le fichier peut disparaître ou rester tronqué.
@@ -89,20 +100,22 @@ Le plan suit la recommandation de chaque question ; une réponse différente cha
 - **Q20 — Index retiré même après un échec.** §5.3 étape 6 dit « en cas de succès ».
   - *Recommandation :* `Forget` après **tout** `PutArchive`. Un échec peut avoir supprimé le fichier (Q17) ; un index qui le montrerait encore mentirait. Le coût est une réindexation. → Tâches 2, 3, 8.
 - **Q21 — Où Docker écrit vraiment.** `PUT /archive` extrait dans la vue de dockerd : le rootfs plus les montages configurés, pas l'espace de noms de montage du conteneur (mesuré par Opus et ici). Un fichier monté seul (`-v ./conf.yml:/app/conf.yml`) ou `/etc/hosts` → HTTP 500 « device or resource busy », traduit en `503 docker_unavailable` trompeur. Un `--tmpfs`, `/dev`, `/dev/shm` → 200, mais le conteneur ne voit jamais le fichier : faux succès, audit `ok`.
-  - *Recommandation :* refuser avant l'intention, à partir de l'`Inspect` (`files.writable`) : chemin égal à `/etc/hosts`, `/etc/hostname`, `/etc/resolv.conf` (toujours : Docker les monte à chaque démarrage, même s'ils sont encore absents d'un conteneur jamais démarré) ; égal à la `Destination` d'un montage (« modifiez sa source ») ; sous un tmpfs (`Mounts` de type `tmpfs`, `HostConfig.Tmpfs` → `ContainerInfo.Tmpfs`) ; sous `/dev`, `/proc` ou `/sys`, que le runtime monte au démarrage (couvre aussi le conteneur arrêté, Opus Minor 4). Code `forbidden_path` (403) : le chemin est interdit en écriture, et le détail nomme la cause. Un dossier monté par bind reste inscriptible : Docker y écrit, le conteneur le voit. Reste non détecté : une `Destination` sous un lien du conteneur (le chemin sans lien diffère du texte de Docker), où Docker répond encore 500 ; limite de §13. → Tâches 1, 2, 3, 5, 8.
-- **Q22 — Écrire à travers un bind de l'hôte.** Avec `-v /:/host`, un conteneur arrêté est refusé en entier (§5.2 étape 7), mais un conteneur actif laissait écrire dans `/host/etc`. Et la course que §5.3 assume (un composant remplacé par un lien entre `StatNoLinks` et `PutArchive`) laisse Docker suivre ce lien dans **sa** vue du conteneur, jusqu'à un autre montage, bind de l'hôte compris.
-  - Options : (a) appliquer `fsview.HostBind` et ses extensions (volumes `local` en `o=bind`, pilotes tiers, options illisibles, types inconnus) à toute écriture, conteneur actif compris, fermé et cohérent avec le conteneur arrêté ; (b) écrire dans §7 que l'écriture à travers un bind de l'hôte est permise, comme la lecture.
-  - *Recommandation :* (a), pour tout le conteneur (R8). Pour la course : aucun montage dangereux n'existe plus dans la vue de Docker, la redirection ne peut atteindre que le rootfs du conteneur ou ses montages ordinaires, que le conteneur peut déjà écrire lui-même (un montage `:ro` reste refusé par Docker, Q15). Le résidu (un fichier écrit par root avec le propriétaire du tar dans un bind ordinaire où le process du conteneur n'a pas le droit d'écrire) entre dans §13. La lecture garde la règle de §7 ; un conteneur de supervision qui monte `/` reste lisible, plus inscriptible. → Tâches 2, 3, 8.
+  - *Recommandation :* refuser avant l'intention, à partir de l'`Inspect` (`files.writable`) : chemin égal à `/etc/hosts`, `/etc/hostname`, `/etc/resolv.conf` (toujours : Docker les monte à chaque démarrage, même s'ils sont encore absents d'un conteneur jamais démarré) ; égal à la `Destination` d'un montage (« modifiez sa source ») ; sous un tmpfs (`Mounts` de type `tmpfs`, `HostConfig.Tmpfs` → `ContainerInfo.Tmpfs`) ; sous `/dev`, `/proc` ou `/sys`, que le runtime monte au démarrage (couvre aussi le conteneur arrêté, Opus Minor 4). Code `forbidden_path` (403) : le chemin est interdit en écriture, et le détail nomme la cause. Un dossier monté par bind reste inscriptible : Docker y écrit, le conteneur le voit.
+  - *En plus, fermé par défaut (R15) :* sur un conteneur actif, une édition dont la cible est un point de montage (son `STATX_MNT_ID` diffère de celui de son parent, par `openat2` sans lien) est refusée. Cela couvre ce qu'`Inspect` ne montre pas : configs et secrets Swarm, `/sbin/docker-init` (`--init`, mesuré), fichiers CDI ou `--gpus`, et une `Destination` sous un lien du conteneur. Coût : une paire d'`openat2` + `statx` par édition ; noyau 5.8 pour `STATX_MNT_ID` (sinon l'édition est refusée, comme le tar de §5.4 b). Hors de portée : un envoi (la cible n'existe pas encore ; un envoi dans un tmpfs absent d'`Inspect` reste un faux succès) et un conteneur arrêté (pas de process, donc pas de table des montages). Limites écrites en §13. → Tâches 1, 2, 3, 5, 8.
+- **Q22 — Écrire à travers un bind de l'hôte (à trancher par l'utilisateur).** Un conteneur arrêté dont un montage expose l'hôte est refusé en entier (§5.2 étape 7). `fsview.HostBind` ne vise que les binds dont la source est `/`, `/proc` ou `/sys` (et dessous), ou `/dev` exactement, plus les volumes `local` en `o=bind` vers ces sources, les volumes `type=` pseudo ou FUSE, les pilotes tiers et les options illisibles. Un bind d'un autre dossier de l'hôte (`-v /etc:/hostetc`, `-v /root:/r`, `-v /var/lib/docker:/d`) n'est **pas** refusé. Deux risques : l'utilisateur de l'interface écrit dans l'hôte par ce bind (il est déjà root de fait, §7) ; et, par la course que §5.3 assume, un process non root du conteneur remplace un dossier qu'il possède par un lien vers `/hostetc/cron.d`, et dockerd, qui extrait en root dans sa vue chrootée, y dépose le fichier choisi par l'utilisateur (« confused deputy » : le contenu n'est pas celui de l'attaquant, la destination si).
+  - **(a) Portée actuelle.** `HostBind` tel quel sur toute écriture (actif comme arrêté). Un bind d'un dossier de l'hôte hors `/`, `/proc`, `/sys`, `/dev` reste inscriptible, et la course peut y mener Docker : limite écrite en §13 et dans §7. Test : `/etc` → `/hostetc` accepté (fige la portée). Coût en faux refus : nul de plus.
+  - **(b) Règle étendue, propre à l'écriture.** En plus de `HostBind`, refuser pour tout le conteneur un bind (ou un volume `local` en `o=bind`) dont la source est l'une de ces racines ou en dessous : `/etc`, `/root`, `/home`, `/boot`, `/usr`, `/bin`, `/sbin`, `/lib`, `/lib32`, `/lib64`, `/opt`, `/var/lib/docker`, `/var/lib/containerd`, `/var/spool/cron`, `/run`, `/var/run`. Ce que ça change pour la course : plus aucun de ces dossiers n'est dans la vue de dockerd, la redirection ne peut atteindre que le rootfs du conteneur ou des binds de données (`/srv`, `/data`, `/mnt`…). Coût en faux refus, élevé : `-v /etc/localtime:/etc/localtime:ro` et `/etc/timezone` (très courants), `/var/run/docker.sock` (Portainer, Traefik, Watchtower), tout projet de développement monté depuis `/home/<user>/…` (Compose de dev), `/run/…` pour les sockets. Une variante ne viserait que les binds de **dossiers** (un bind de fichier ne peut pas servir de dossier parent à la course), mais `Inspect` ne dit pas si la source est un fichier : il faudrait lire la vue `procfs` du conteneur actif, et rien pour un conteneur arrêté.
+  - *Recommandation (ouverte) :* (a) pour la v0.1. L'utilisateur est root de fait (§7) ; la course exige un process malveillant dans le conteneur, un timing serré et une écriture lancée par l'utilisateur au même moment, et dockerd reste chrooté dans sa vue ; (b) rendrait l'écriture impossible sur une grande partie des conteneurs réels (fuseau horaire, socket Docker, code monté depuis `/home`). Si l'utilisateur retient (b), la tâche 2 gagne un test (`/etc` refusé, `/srv/conf` accepté) et la tâche 3 une fonction `writeSensitive(src)` appelée dans `writable` sur les binds et les volumes `local` en `o=bind`. → Tâches 2, 3, 8.
 - **Q23 — Portée du verrou.** Par conteneur, par chemin, ou global ?
-  - *Recommandation :* par conteneur. Les écritures sont rares (un utilisateur, un clic confirmé chacune) : la contention est nulle. Un verrou par chemin demanderait de raisonner sur un envoi dans un dossier pendant l'édition d'un fichier voisin, et sur deux chemins qui désignent le même inode (lien physique). Un verrou global bloquerait sans raison deux conteneurs, dont l'un peut attendre une minute (`PutTimeout`). L'attente s'arrête avec la requête : au pire, la garde répond `504` (Q17). → Tâche 3.
+  - *Recommandation :* par conteneur. Les écritures sont rares (un utilisateur, un clic confirmé chacune) : la contention est nulle. Limite : une écriture bloquée sur un FUSE muet (`StatNoLinks`, relecture) garde le verrou jusqu'au redémarrage de l'agent, et chaque écriture suivante sur ce conteneur reçoit `504` après 10 s, avec un message « l'écriture a peut-être eu lieu » trompeur (rien n'a commencé) : ligne §13. Un verrou par chemin demanderait de raisonner sur un envoi dans un dossier pendant l'édition d'un fichier voisin, et sur deux chemins qui désignent le même inode (lien physique). Un verrou global bloquerait sans raison deux conteneurs, dont l'un peut attendre une minute (`PutTimeout`). L'attente s'arrête avec la requête : au pire, la garde répond `504` (Q17). → Tâche 3.
 
 ## Global Constraints
 
 - **Module et dépendances Go** : module `github.com/levy-cmd/hublot-kit` ; dépendances autorisées (§3) : SDK Docker `github.com/moby/moby/client`, `github.com/cyphar/filepath-securejoin` **v0.7.0** (`pathrs-lite`), `golang.org/x/sys` **v0.48.0**. Aucune autre. Interface : CodeMirror 6 seulement (§3 : « langages chargés à la demande : JSON, YAML, JavaScript, Python, shell, texte brut »), pas de bibliothèque de composants.
 - **Accès aux fichiers d'un conteneur (CLAUDE.md, §5).** `files` n'ouvre aucun chemin : tous ses contrôles passent par `fsview.FS` (`StatNoLinks`, `Open`), toutes ses écritures par `dockerx.PutArchive`. **Jamais** `filepath.Join`, `path.Join` ni `os.Open` sur un chemin du conteneur. `PutArchive` reçoit exactement le parent du chemin vérifié (§5.3 étape 5).
-- **Ordre de §5.3, dans une seule fonction** : lecture seule → contrôle du chemin (nom, `Inspect`, verrou, vue) → `If-Match` / `If-None-Match` → audit (intention) → `PutArchive` → audit (résultat) → `Forget` → verrou rendu.
+- **Ordre de §5.3, dans une seule fonction** : lecture seule → contrôle du chemin (nom, `Inspect`, verrou, vue, point de montage) → `If-Match` / `If-None-Match` → audit (intention) → `PutArchive` → `Forget` → audit (résultat) → verrou rendu.
 - **Tests d'évasion avant le code qu'ils protègent** (CLAUDE.md), voir « Ordre ». Chaque refus est prouvé par l'absence de tout appel à `PutArchive` et de toute ligne d'audit, **même quand une erreur est renvoyée**. Un piège a son contrôle (le lien mène bien hors de la racine). Un test ne se saute que sur une condition exacte, nommée dans le message.
-- **Code Linux** testé sous Linux (`scripts/test-linux.sh`, VM) : `files_linux_test.go` (`//go:build linux`) ; `go test ./cmd/... ./internal/...` reste vert sur macOS. **Jamais** de test qui monte le `/proc`, le `/sys` ou le `/` de l'hôte dans un conteneur puis demande un tar ; `TestProcPseudoFSRefused` sert la racine `/` du conteneur de test par `NewProcFS`, sans Docker.
+- **Code Linux** testé sous Linux (`scripts/test-linux.sh`, VM) : `files_linux_test.go` (`//go:build linux`) ; `go test ./cmd/... ./internal/...` reste vert sur macOS. **Jamais** de test qui monte le `/proc`, le `/sys` ou le `/` de l'hôte dans un conteneur puis demande un tar ; `TestProcPseudoFSRefused` sert le `/proc` de l'hôte de test comme racine par `NewProcFS`, sans Docker ni tar.
 - **Erreurs API** : `{"error": "<code>", "detail": "<texte>"}`, codes de §6 uniquement ; `202` porte en plus `progress`.
 - **Interface** : `{@html}` interdit ; contenu du conteneur toujours échappé par Svelte (noms, détails d'erreur) ; bouton « Recharger » sur les états d'erreur existants ; garde contre les réponses périmées ; grilles en `minmax(0,1fr)` ; textes dans `fr.ts` et `en.ts` (mêmes clés) ; imports `#lib/….ts` dans les `.svelte`.
 - **Node ≥ 22.17** : sur le Mac, `export PATH=/opt/homebrew/bin:$PATH` avant `npm`/`npx`. **Docker Desktop** : `DOCKER_HOST=unix://$HOME/.docker/run/docker.sock`.
@@ -115,7 +128,7 @@ Le plan suit la recommandation de chaque question ; une réponse différente cha
 2. **La requête s'arrête pendant l'écriture** (onglet fermé, délai de 10 s de la garde, réseau coupé) : l'écriture commencée va au bout et son résultat est journalisé, sans fichier tronqué par une coupure de notre côté. → Tâche 2 `TestPutSurvivesRequestEnd`.
 3. **Fichier non UTF-8, avec BOM, en CRLF ou à fins de ligne mélangées** : jamais réécrit en silence. → Tâche 6 `decodeUtf8`, `lineSeparatorOf`, `docText`, `previews text` (`utf8: false`) ; tâche 7 (bouton absent, message, aller-retour CRLF du parcours jetable).
 4. **Nom d'envoi inhabituel** (`a/b` brut ou encodé RFC 2231, `..`, vide, octet nul, saut de ligne, `\`, non UTF-8, 256 octets, nom d'un lien pendant, nom existant, deux envois simultanés) : refus, rien n'est écrit, rien n'est remplacé. → Tâche 2 `TestUploadInvalidName`, `TestUploadNeverReplaces`, `TestWritesAreSerialized`, `TestProcLinksRefused` ; tâche 4 `TestWriteRoutesErrors`, `TestUploadNameIsTheDecodedValue`.
-5. **Cible que Docker n'écrit pas comme le conteneur la voit** (`--read-only`, volume `:ro`, fichier monté, `/etc/hosts`, tmpfs, `/dev`) : un refus clair qui nomme la cause, jamais `docker_unavailable` ni un faux succès. → Tâche 1 `TestPutArchiveRealDocker` ; tâche 2 `TestRefusesWhereDockerDoesNotWrite` ; tâche 4 `TestWriteDockerRefused` ; tâche 5 `TestIntegrationWriteStopped`, `TestIntegrationWriteRunning`.
+5. **Cible que Docker n'écrit pas comme le conteneur la voit** (`--read-only`, volume `:ro`, fichier monté, `/etc/hosts`, tmpfs, `/dev`, `/sbin/docker-init` d'un `--init`) : un refus clair qui nomme la cause, jamais `docker_unavailable` ni un faux succès. → Tâche 1 `TestPutArchiveRealDocker` ; tâche 2 `TestRefusesWhereDockerDoesNotWrite`, `TestEditRefusesMountPoint`, `TestIsMountPoint` ; tâche 4 `TestWriteDockerRefused` ; tâche 5 `TestIntegrationWriteStopped`, `TestIntegrationWriteRunning`.
 
 ## Ordre : chaque test d'évasion précède le code qu'il protège
 
@@ -125,9 +138,9 @@ Le plan suit la recommandation de chaque question ; une réponse différente cha
 | Non régulier refusé sans bloquer (FIFO), pseudo-système refusé (`fstatfs`) (§5.3 ét. 2) | Tâche 2 (`TestProcNotRegular`, `TestProcPseudoFSRefused`) | Tâche 3 |
 | Lecture seule d'abord, `If-Match`, `If-None-Match`, noms d'envoi (§5.3 ét. 1 à 3) | Tâche 2 | Tâche 3 |
 | Ordre audit → écriture → audit, chemin exact envoyé à `PutArchive`, index retiré (§5.3 ét. 4 à 6) | Tâche 2 (`TestEditOrderAndTar`, `TestProcWriteSendsExactPath`, `TestStoppedContainerIndexDropped`) | Tâche 3 |
-| Écriture refusée pour un conteneur dont un montage expose l'hôte, actif compris (§5.2 ét. 7, Q22) | Tâche 2 (`TestHostBindRefusesEveryWrite`) | Tâche 3 |
-| Pas d'écriture là où Docker n'écrit pas comme le conteneur voit (Q21) | Tâche 2 (`TestRefusesWhereDockerDoesNotWrite`) | Tâche 3 |
-| Écritures d'un conteneur sérialisées (Q23) ; chemin et nom avant la précondition | Tâche 2 (`TestWritesAreSerialized`, `TestUploadChecksPathBeforePrecondition`) | Tâche 3 |
+| Écriture refusée pour un conteneur dont un montage tombe sous la règle de §5.2 ét. 7 (bind de `/`, `/proc`, `/sys`, `/dev`…), actif compris ; bind de `/etc` accepté (Q22 a) | Tâche 2 (`TestHostBindRefusesEveryWrite`) | Tâche 3 |
+| Pas d'écriture là où Docker n'écrit pas comme le conteneur voit (Q21), point de montage hors `Inspect` compris | Tâche 2 (`TestRefusesWhereDockerDoesNotWrite`, `TestEditRefusesMountPoint`, `TestIsMountPoint`) | Tâche 3 |
+| Écritures d'un conteneur sérialisées, verrou rendu en cas d'abandon ou de panique (Q23) ; nom avant l'`Inspect`, chemin avant la précondition | Tâche 2 (`TestWritesAreSerialized`, `TestLockWaitAbandoned`, `TestLockReleasedOnPanic`, `TestUploadNameBeforeInspectRules`, `TestUploadChecksPathBeforePrecondition`) | Tâche 3 |
 | Câblage par les routes : session, `Origin`, codes, nom décodé validé | Tâche 4, étape 1 | Tâche 4, étape 3 |
 
 **Ne pas pousser la branche entre les tâches 2 et 3** : le paquet `files` n'y compile pas.
@@ -145,14 +158,16 @@ Le plan suit la recommandation de chaque question ; une réponse différente cha
 ## Structure des fichiers
 
 ```
-internal/dockerx/dockerx.go                  + PutArchive (interface et moteur), ErrRefused, wrapPut, ContainerInfo.Tmpfs
+internal/dockerx/dockerx.go                  + PutArchive (interface et moteur), ErrRefused, ErrPutInvalid, wrapPut, ContainerInfo.Tmpfs
+internal/fsview/fsview.go                    + MountPointChecker (interface facultative)
+internal/fsview/mountpoint_linux.go (+ test) procFS.IsMountPoint (STATX_MNT_ID de la cible et du parent)
 internal/dockerx/fake.go                     + PutErr, Put, PutCalls()
 internal/files/files.go                      Writer : Allowed, Edit, Upload, ETag ; ordre de §5.3, writable, verrou
 internal/files/files_test.go                 tests portables (MemFS, faux Docker, vraie Views)
 internal/files/files_linux_test.go           tests d'évasion sur un vrai procfs (racine temporaire)
 internal/api/fs_write.go                     PUT /fs/file, POST /fs/upload, lecture du multipart
 internal/api/server.go                       + server.files, routes
-internal/api/fserr.go                        + read_only, conflict, invalid_name, MaxBytesError
+internal/api/fserr.go                        + read_only, conflict (ErrPutInvalid compris), invalid_name, MaxBytesError
 internal/api/fs.go                           fsRequest(w, r, param)
 internal/api/fs_download.go                  appel de fsRequest(w, r, "path")
 internal/api/fs_preview.go                   ETag par files.ETag
@@ -184,9 +199,9 @@ web/src/routes/c/[id]/+page.svelte           readOnly lu dans le contexte
 
 **Interfaces:**
 - Consumes: `wrap`, `client.CopyToContainer` (`client.CopyToContainerOptions{DestinationPath, Content}`, SDK v0.6.1).
-- Produces: `Client.PutArchive(ctx context.Context, id, dir string, content io.Reader) error` ; `dockerx.ErrRefused` (produit par `PutArchive` seulement, via `wrapPut`) ; `ContainerInfo.Tmpfs []string` (destinations de `--tmpfs`, triées) ; `Fake.PutErr error`, `type Put struct{ ID, Dir string; Tar []byte }`, `(*Fake).PutCalls() []Put` (copie sous verrou ; un appel en échec est enregistré aussi).
+- Produces: `Client.PutArchive(ctx context.Context, id, dir string, content io.Reader) error` ; `dockerx.ErrRefused` (lecture seule) et `dockerx.ErrPutInvalid` (tout autre refus d'extraction), produits par `PutArchive` seulement, via `wrapPut` ; `ContainerInfo.Tmpfs []string` (destinations de `--tmpfs`, triées) ; `Fake.PutErr error`, `type Put struct{ ID, Dir string; Tar []byte }`, `(*Fake).PutCalls() []Put` (copie sous verrou ; un appel en échec est enregistré aussi).
 
-> **À comprendre :** `PUT /containers/{id}/archive` (`docker cp` vers le conteneur) extrait un tar dans un dossier. Il marche sur un conteneur actif, arrêté ou en pause. Docker refuse lui-même d'écrire sur un rootfs `--read-only` ou un volume `:ro`, avec une erreur `InvalidArgument` (mesuré) : `wrapPut` la classe à part (`ErrRefused`), sinon l'API répondrait « Docker indisponible ». Seul `PutArchive` l'utilise : sur une route de lecture, un `InvalidArgument` reste `docker_unavailable` (Q15). `copyUIDGID` n'est pas demandé : il donnerait le fichier à l'utilisateur du conteneur au lieu de garder l'uid/gid du tar. `ContainerInfo.Tmpfs` lit `HostConfig.Tmpfs` : un `--tmpfs` n'apparaît pas dans `Mounts`, et Docker n'y écrit pas (Q21).
+> **À comprendre :** `PUT /containers/{id}/archive` (`docker cp` vers le conteneur) extrait un tar dans un dossier. Il marche sur un conteneur actif, arrêté ou en pause. Docker refuse lui-même d'écrire sur un rootfs `--read-only` ou un volume `:ro`, avec une erreur `InvalidArgument` dont le message dit « marked read-only » (mesuré) : `wrapPut` la classe à part (`ErrRefused`), sinon l'API répondrait « Docker indisponible ». Un autre `InvalidArgument`, comme « extraction point is not a directory » quand le dossier vérifié est devenu un fichier, devient `ErrPutInvalid` (`conflict`). Seul `PutArchive` utilise `wrapPut` : sur une route de lecture, un `InvalidArgument` reste `docker_unavailable` (Q15). `copyUIDGID` n'est pas demandé : il donnerait le fichier à l'utilisateur du conteneur au lieu de garder l'uid/gid du tar. `ContainerInfo.Tmpfs` lit `HostConfig.Tmpfs` : un `--tmpfs` n'apparaît pas dans `Mounts`, et Docker n'y écrit pas (Q21).
 
 - [ ] **Step 1: Tests unitaires qui échouent** — ajouter à `internal/dockerx/dockerx_test.go` (et `"strings"` aux imports) :
 
@@ -201,23 +216,32 @@ web/src/routes/c/[id]/+page.svelte           readOnly lu dans le contexte
  	"testing"
  	"time"
  
-@@ -181,3 +182,47 @@ func TestFakeSizesDiffsCalls(t *testing.T) {
+@@ -181,3 +182,56 @@ func TestFakeSizesDiffsCalls(t *testing.T) {
  		t.Fatalf("appels : %v", c)
  	}
  }
 +
-+// Q15: an InvalidArgument is a refusal of PutArchive only; on the read
-+// routes it stays docker_unavailable.
-+func TestWrapPutRefused(t *testing.T) {
-+	invalid := fmt.Errorf("put: %w", cerrdefs.ErrInvalidArgument)
-+	if err := wrapPut(invalid); !errors.Is(err, ErrRefused) || errors.Is(err, ErrUnavailable) || errors.Is(err, ErrNotFound) {
-+		t.Fatalf("refusé : %v", err)
++// Q15: read_only only for the two read-only refusals Docker gives (measured
++// messages); any other InvalidArgument of PutArchive is ErrPutInvalid
++// (conflict: the path changed under us). On the read routes an
++// InvalidArgument stays docker_unavailable.
++func TestWrapPut(t *testing.T) {
++	invalid := func(msg string) error {
++		return fmt.Errorf("Error response from daemon: %s: %w", msg, cerrdefs.ErrInvalidArgument)
++	}
++	for _, msg := range []string{"container rootfs is marked read-only", "mounted volume is marked read-only"} {
++		if err := wrapPut(invalid(msg)); !errors.Is(err, ErrRefused) || errors.Is(err, ErrPutInvalid) || errors.Is(err, ErrUnavailable) {
++			t.Errorf("%s : %v, attendu ErrRefused", msg, err)
++		}
++	}
++	if err := wrapPut(invalid("extraction point is not a directory")); !errors.Is(err, ErrPutInvalid) || errors.Is(err, ErrRefused) {
++		t.Errorf("point d'extraction : %v, attendu ErrPutInvalid", err)
 +	}
 +	if err := wrapPut(fmt.Errorf("put: %w", cerrdefs.ErrNotFound)); !errors.Is(err, ErrNotFound) {
-+		t.Fatalf("introuvable : %v", err)
++		t.Errorf("introuvable : %v", err)
 +	}
-+	if err := wrap(invalid); errors.Is(err, ErrRefused) || !errors.Is(err, ErrUnavailable) {
-+		t.Fatalf("hors PutArchive, InvalidArgument reste ErrUnavailable : %v", err)
++	if err := wrap(invalid("container rootfs is marked read-only")); errors.Is(err, ErrRefused) || !errors.Is(err, ErrUnavailable) {
++		t.Errorf("hors PutArchive, InvalidArgument reste ErrUnavailable : %v", err)
 +	}
 +}
 +
@@ -251,7 +275,7 @@ web/src/routes/c/[id]/+page.svelte           readOnly lu dans le contexte
 +}
 ```
 
-Run: `go vet ./internal/dockerx/ 2>&1 | tail -n 3` — Expected: `undefined: wrapPut`.
+Run: `go vet ./internal/dockerx/ 2>&1 | tail -n 3` — Expected: échec de compilation (`undefined: wrapPut`, puis `ErrRefused`, `ErrPutInvalid`…).
 
 - [ ] **Step 2: Implémenter** — dans `internal/dockerx/dockerx.go` et `internal/dockerx/fake.go` :
 
@@ -268,22 +292,24 @@ Run: `go vet ./internal/dockerx/ 2>&1 | tail -n 3` — Expected: `undefined: wra
  }
  
  // Change is one entry of GET /containers/{id}/changes (F5).
-@@ -60,9 +63,14 @@ type Mount struct {
+@@ -60,9 +63,16 @@ type Mount struct {
  }
  
  // ErrNotFound: no such container (or no such path, for an archive).
-+// ErrRefused: Docker refused the request itself (invalid parameter), e.g. a
-+// write on a read-only root filesystem or a read-only volume (measured on
-+// Docker 29.7: "container rootfs is marked read-only", "mounted volume is
-+// marked read-only").
++// ErrRefused: Docker refused a write because its target is read-only
++// (measured on Docker 29.7: "container rootfs is marked read-only",
++// "mounted volume is marked read-only").
++// ErrPutInvalid: any other InvalidArgument of PutArchive, e.g. "extraction
++// point is not a directory": the path changed after the agent's checks.
  // ErrUnavailable: any other failure of the daemon or of the connection to it.
  var (
  	ErrNotFound    = errors.New("introuvable dans Docker")
 +	ErrRefused     = errors.New("refusé par Docker")
++	ErrPutInvalid  = errors.New("extraction refusée par Docker")
  	ErrUnavailable = errors.New("Docker indisponible")
  )
  
-@@ -83,6 +91,12 @@ type Client interface {
+@@ -83,6 +93,12 @@ type Client interface {
  	SizeRootFs(ctx context.Context, id string) (int64, error)
  	// Changes is GET /containers/{id}/changes (F5): never nil.
  	Changes(ctx context.Context, id string) ([]Change, error)
@@ -296,7 +322,7 @@ Run: `go vet ./internal/dockerx/ 2>&1 | tail -n 3` — Expected: `undefined: wra
  }
  
  type engine struct{ c *client.Client }
-@@ -181,6 +195,12 @@ func fromInspect(c container.InspectResponse) ContainerInfo {
+@@ -181,6 +197,12 @@ func fromInspect(c container.InspectResponse) ContainerInfo {
  			Type: string(m.Type), Name: m.Name, Source: m.Source, Destination: m.Destination, Driver: m.Driver,
  		})
  	}
@@ -309,7 +335,7 @@ Run: `go vet ./internal/dockerx/ 2>&1 | tail -n 3` — Expected: `undefined: wra
  	return info
  }
  
-@@ -238,6 +258,24 @@ func fromChanges(cs []container.FilesystemChange) ([]Change, error) {
+@@ -238,6 +260,28 @@ func fromChanges(cs []container.FilesystemChange) ([]Change, error) {
  	return out, nil
  }
  
@@ -321,12 +347,16 @@ Run: `go vet ./internal/dockerx/ 2>&1 | tail -n 3` — Expected: `undefined: wra
 +	return nil
 +}
 +
-+// wrapPut: wrap, plus Docker's own refusal of a write (InvalidArgument:
-+// read-only rootfs or volume). Only for PutArchive: on a read route an
-+// InvalidArgument stays docker_unavailable (plan Explorateur 3, Q15).
++// wrapPut: wrap, plus Docker's own refusals of a write, InvalidArgument:
++// the target is read-only (both measured messages say "marked read-only") →
++// ErrRefused; anything else → ErrPutInvalid. Only for PutArchive: on a read
++// route an InvalidArgument stays docker_unavailable (plan Explorateur 3, Q15).
 +func wrapPut(err error) error {
 +	if cerrdefs.IsInvalidArgument(err) {
-+		return fmt.Errorf("%w : %v", ErrRefused, err)
++		if strings.Contains(err.Error(), "marked read-only") {
++			return fmt.Errorf("%w : %v", ErrRefused, err)
++		}
++		return fmt.Errorf("%w : %v", ErrPutInvalid, err)
 +	}
 +	return wrap(err)
 +}
@@ -418,7 +448,7 @@ Run: `go test ./internal/dockerx/ 2>&1 | tail -n 3 && go vet ./... 2>&1 | tail -
  	"testing"
  	"time"
  )
-@@ -136,3 +140,91 @@ func TestMeasureSizeRootFs(t *testing.T) {
+@@ -136,3 +140,95 @@ func TestMeasureSizeRootFs(t *testing.T) {
  	}
  	t.Logf("MESURE : SizeRootFs = %d octets", size) // 0: the progress stays at 0 % (not an error)
  }
@@ -506,6 +536,10 @@ Run: `go test ./internal/dockerx/ 2>&1 | tail -n 3 && go vet ./... 2>&1 | tail -
 +	if info, err := c.Inspect(ctx, run); err != nil || !slices.Equal(info.Tmpfs, []string{"/scratch"}) {
 +		t.Fatalf("Tmpfs : %v %v", info.Tmpfs, err)
 +	}
++	// A file where a directory was checked (the path changed under us).
++	if err := c.PutArchive(ctx, run, "/etc/motd", oneFileTar(t, "x", "x", 0o644, 0, 0)); !errors.Is(err, ErrPutInvalid) {
++		t.Fatalf("point d'extraction qui n'est pas un dossier : %v, attendu ErrPutInvalid", err)
++	}
 +	if err := c.PutArchive(ctx, run, "/absent", oneFileTar(t, "x", "x", 0o644, 0, 0)); !errors.Is(err, ErrNotFound) {
 +		t.Fatalf("dossier absent : %v, attendu ErrNotFound", err)
 +	}
@@ -513,7 +547,7 @@ Run: `go test ./internal/dockerx/ 2>&1 | tail -n 3 && go vet ./... 2>&1 | tail -
 ```
 
 Run: `DOCKER_HOST=unix://$HOME/.docker/run/docker.sock go test -tags integration ./internal/dockerx/ -run PutArchive -v 2>&1 | grep -E '^(---|ok|FAIL)|MESURE' | tail -n 5`
-Expected: `--- PASS: TestPutArchiveRealDocker` (rootfs `--read-only` et volume `:ro` → `ErrRefused`, `Tmpfs` = `[/scratch]`) ; la ligne `MESURE` montre deux inodes différents (Docker supprime puis recrée le fichier : base de Q17).
+Expected: `--- PASS: TestPutArchiveRealDocker` (rootfs `--read-only` et volume `:ro` → `ErrRefused`, extraction sur le fichier `/etc/motd` → `ErrPutInvalid`, `Tmpfs` = `[/scratch]`) ; la ligne `MESURE` montre deux inodes différents (Docker supprime puis recrée le fichier : base de Q17).
 
 - [ ] **Step 4: Commit**
 
@@ -533,17 +567,17 @@ EOF
 **Où tester :** macOS (compilation) et Linux (`GOOS=linux go vet`) ; ils passeront à la tâche 3, sous macOS et sous `scripts/test-linux.sh`.
 
 **Files:**
-- Create: `internal/files/files_test.go`, `internal/files/files_linux_test.go`
+- Create: `internal/files/files_test.go`, `internal/files/files_linux_test.go`, `internal/fsview/mountpoint_linux_test.go`
 
 **Interfaces:**
 - Consumes: `fsview.MemFS` (`NewMemFS`, `AddDir`, `AddFile`, `AddLink`, `Entries`, `Err`), `fsview.NewProcFS`, `fsview.NewViews`, `fsview.Options{}`, `dockerx.Fake` (`PutErr`, `PutCalls`, `Calls`), `dockerx.ContainerInfo` (`Mounts`, `Tmpfs`), `audit.Event`.
-- Produces (attendu par les tests, écrit à la tâche 3) : `files.Writer{ReadOnly bool; Docker dockerx.Client; Audit Auditor; Open func(context.Context, string) (fsview.FS, error); Forget func(string)}`, `(*Writer).Allowed() error`, `(*Writer).Edit(ctx context.Context, c dockerx.ContainerInfo, p string, content []byte, ifMatch string) (string, error)`, `(*Writer).Upload(ctx context.Context, c dockerx.ContainerInfo, dir, name string, content []byte, ifNoneMatch string) (string, error)`, `files.ETag([]byte) string`, `MaxEditBytes`, `MaxUploadBytes`, `ErrReadOnly`, `ErrConflict`, `ErrInvalidName`.
+- Produces (attendu par les tests, écrit à la tâche 3) : `files.Writer{ReadOnly bool; Docker dockerx.Client; Audit Auditor; Open func(context.Context, string) (fsview.FS, error); Forget func(string)}`, `(*Writer).Allowed() error`, `(*Writer).Edit(ctx context.Context, c dockerx.ContainerInfo, p string, content []byte, ifMatch string) (string, error)`, `(*Writer).Upload(ctx context.Context, c dockerx.ContainerInfo, dir, name string, content []byte, ifNoneMatch string) (string, error)`, `files.ETag([]byte) string`, `MaxEditBytes`, `MaxUploadBytes`, `ErrReadOnly`, `ErrConflict`, `ErrInvalidName` ; dans `fsview` : `type MountPointChecker interface{ IsMountPoint(ctx context.Context, path string) (bool, error) }`, implémentée par `procFS`.
 
 > **À comprendre :** deux familles de tests. Les tests portables (`files_test.go`) jouent le conteneur avec `MemFS`, qui refuse les liens comme `procfs`, et un faux Docker qui enregistre les tars reçus. Un `journal` unique note, dans l'ordre, les lignes d'audit et les appels à `PutArchive` : l'ordre de §5.3 se lit d'un coup d'œil (`audit:intent`, `put:/etc`, `audit:ok`). `TestStoppedContainerIndexDropped` passe par une vraie `Views` : pendant l'indexation, l'écriture reçoit `indexing` ; après, l'index est retiré et l'accès suivant relance `GetArchive("/")`.
 >
-> Les refus tirés de l'`Inspect` (Q21, Q22) se jouent aussi sur `MemFS` : ils doivent tomber **avant** d'ouvrir la vue (`r.opens == 0`). Le fichier de test est `/etc/app.conf`, puisque `/etc/hosts` est désormais refusé. `TestWritesAreSerialized` bloque le premier `PutArchive` (`gatedPutter`), lance la seconde écriture, et vérifie qu'elle n'atteint pas `PutArchive` pendant 200 ms ; puis la première applique son écriture à la vue, et la seconde doit finir en `conflict`.
+> Les refus tirés de l'`Inspect` (Q21, Q22) se jouent aussi sur `MemFS` : ils doivent tomber **avant** d'ouvrir la vue (`r.opens == 0`). Le fichier de test est `/etc/app.conf`, puisque `/etc/hosts` est désormais refusé. `TestWritesAreSerialized` bloque le premier `PutArchive` (`gatedPutter`), lance la seconde écriture, et vérifie qu'elle n'atteint pas `PutArchive` pendant 200 ms ; puis la première applique son écriture à la vue, et la seconde doit finir en `conflict`. `TestLockWaitAbandoned` annule une requête qui attend le verrou : elle rend `context.Canceled` sans rien écrire, et une écriture suivante passe. `TestLockReleasedOnPanic` fait paniquer `Open` une fois le verrou pris. `TestEndedRequestWritesNothing` annule le contexte **dans** `Open`, donc verrou pris : seul le contrôle de `put` peut l'arrêter (`MemFS` ignore le contexte). `TestEditRefusesMountPoint` enveloppe `MemFS` dans une vue qui déclare `/etc/app.conf` point de montage, avec son contrôle (la même vue sans point de montage écrit).
 >
-> Les tests Linux (`files_linux_test.go`) servent une racine temporaire par un vrai `procfs` : `openat2 RESOLVE_NO_SYMLINKS` et `fstatfs` décident, pas une imitation. `/evil` mène à un dossier de l'hôte : le contrôle vérifie que le piège marche ; l'assertion vérifie que `PutArchive` n'est **jamais** appelé, même quand une erreur est renvoyée. Un appel au faux Docker n'écrit rien, mais il prouve que le vrai aurait écrit. `TestProcPseudoFSRefused` sert le `/proc` de l'hôte comme racine : `/` et `/version` ne commencent pas par `/proc`, la règle de préfixe de Q21 les laisse passer, et seul `fstatfs` les refuse (R9).
+> Les tests Linux (`files_linux_test.go`) servent une racine temporaire par un vrai `procfs` : `openat2 RESOLVE_NO_SYMLINKS` et `fstatfs` décident, pas une imitation. `/evil` mène à un dossier de l'hôte : le contrôle vérifie que le piège marche ; l'assertion vérifie que `PutArchive` n'est **jamais** appelé, même quand une erreur est renvoyée. Un appel au faux Docker n'écrit rien, mais il prouve que le vrai aurait écrit. `TestProcPseudoFSRefused` sert le `/proc` de l'hôte comme racine : `/` et `/version` ne commencent pas par `/proc`, la règle de préfixe de Q21 les laisse passer, et seul `fstatfs` les refuse (R9). `TestIsMountPoint` (dans `fsview`) prend `/proc`, point de montage sur tout Linux, hôte ou conteneur, et `/etc/passwd`, qui n'en est pas un : aucun privilège, aucun montage à créer.
 
 - [ ] **Step 1: Tests portables** — créer `internal/files/files_test.go` :
 
@@ -785,7 +819,8 @@ func TestUploadOrderAndTar(t *testing.T) {
 
 func TestUploadInvalidName(t *testing.T) {
 	for _, n := range []string{"", ".", "..", "a/b", "/x", "x/", "a\x00b", strings.Repeat("n", 256),
-		`a\b`, "a\nb", "a\x7fb", "a\u0085b", "\xffx"} { // backslash, C0, DEL, C1, not UTF-8
+		`a\b`, "a\nb", "a\x7fb", "a\u0085b", "\xffx", // backslash, C0, DEL, C1, not UTF-8
+		"txt.\u202eexe", "a\u2028b", "a\u2029b", "a\u200bb"} { // bidi override, line and paragraph separators, zero width
 		r := newRig(t, false)
 		if _, err := r.w.Upload(ctx, ctr, "/etc", n, []byte("x"), "*"); !errors.Is(err, ErrInvalidName) {
 			t.Errorf("nom %q : %v, attendu ErrInvalidName", n, err)
@@ -1027,7 +1062,8 @@ func TestUploadChecksPathBeforePrecondition(t *testing.T) {
 	r.nothingWritten(t)
 }
 
-// Q22: a container whose mounts expose the host (spec §5.2 step 7) gets no
+// Q22: a container whose mounts fall under the host-bind rule (spec §5.2
+// step 7: a bind of /, /proc, /sys, /dev…) gets no
 // write at all, running or not: no view opened, nothing written.
 func TestHostBindRefusesEveryWrite(t *testing.T) {
 	r := newRig(t, false)
@@ -1043,6 +1079,16 @@ func TestHostBindRefusesEveryWrite(t *testing.T) {
 		t.Error("refusé sur Inspect, avant d'ouvrir la vue")
 	}
 	r.nothingWritten(t)
+	// Control, and the scope of HostBind (Q22, option a, open): without the
+	// bind of /, or with a bind of the host's /etc, the write goes through.
+	for _, m := range [][]dockerx.Mount{nil, {{Type: "bind", Source: "/etc", Destination: "/hostetc"}}} {
+		r := newRig(t, false)
+		c := ctr
+		c.Mounts = m
+		if _, err := r.w.Edit(ctx, c, "/etc/app.conf", []byte("x"), confTag); err != nil {
+			t.Errorf("montages %v : %v", m, err)
+		}
+	}
 }
 
 // Q21: Docker writes in its own view of the mounts, not in the container's.
@@ -1090,14 +1136,101 @@ func TestRefusesWhereDockerDoesNotWrite(t *testing.T) {
 	}
 }
 
-// A request that has already ended (the guard answered 504) never starts a
-// write.
+// A request that ends once the lock is held (the guard answered 504 while
+// the checks ran) never starts a write: only the check of put stops it,
+// MemFS ignores the context.
 func TestEndedRequestWritesNothing(t *testing.T) {
 	r := newRig(t, false)
 	c, cancel := context.WithCancel(ctx)
-	cancel()
+	r.w.Open = func(context.Context, string) (fsview.FS, error) {
+		cancel() // the lock is held: the request ends now
+		return r.mem, nil
+	}
 	if _, err := r.w.Edit(c, ctr, "/etc/app.conf", []byte("x"), confTag); !errors.Is(err, context.Canceled) {
 		t.Fatalf("requête terminée : %v", err)
+	}
+	r.nothingWritten(t)
+}
+
+// A request abandoned while it waits for the lock writes nothing and does
+// not keep the lock.
+func TestLockWaitAbandoned(t *testing.T) {
+	r := newRig(t, false)
+	g := &gatedPutter{Fake: r.fake, entered: make(chan struct{}, 2), gate: make(chan struct{}), apply: func(string, []byte) {}}
+	r.w.Docker = g
+	first := make(chan error, 1)
+	go func() {
+		_, err := r.w.Edit(ctx, ctr, "/etc/app.conf", []byte("v2\n"), confTag)
+		first <- err
+	}()
+	<-g.entered // the first write holds the lock, inside PutArchive
+	c, cancel := context.WithCancel(ctx)
+	waiting := make(chan error, 1)
+	go func() {
+		_, err := r.w.Upload(c, ctr, "/etc", "n", []byte("x"), "*")
+		waiting <- err
+	}()
+	cancel() // the lock is taken: whenever the upload reaches it, only ctx.Done is ready
+	select {
+	case err := <-waiting:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("attente abandonnée : %v, attendu context.Canceled", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("l'attente du verrou ne s'arrête pas avec la requête")
+	}
+	close(g.gate)
+	if err := <-first; err != nil {
+		t.Fatal(err)
+	}
+	if n := len(r.fake.PutCalls()); n != 1 {
+		t.Fatalf("%d appels à PutArchive, attendu 1 (l'envoi abandonné n'écrit rien)", n)
+	}
+	r.w.Docker = r.put
+	if _, err := r.w.Upload(ctx, ctr, "/etc", "n2", []byte("x"), "*"); err != nil {
+		t.Fatalf("le verrou est resté pris : %v", err)
+	}
+}
+
+// A panic once the lock is held (the guard recovers it) releases the lock.
+func TestLockReleasedOnPanic(t *testing.T) {
+	r := newRig(t, false)
+	open := r.w.Open
+	r.w.Open = func(context.Context, string) (fsview.FS, error) { panic("vue cassée") }
+	func() {
+		defer func() {
+			if recover() == nil {
+				t.Error("la panique devait remonter")
+			}
+		}()
+		r.w.Edit(ctx, ctr, "/etc/app.conf", []byte("x"), confTag)
+	}()
+	r.w.Open = open
+	done := make(chan error, 1)
+	go func() {
+		_, err := r.w.Edit(ctx, ctr, "/etc/app.conf", []byte("x"), confTag)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("verrou gardé après une panique")
+	}
+}
+
+// The name is checked before the rules of the Inspect: a bad name toward a
+// forbidden place is invalid_name.
+func TestUploadNameBeforeInspectRules(t *testing.T) {
+	r := newRig(t, false)
+	c := ctr
+	c.Mounts = []dockerx.Mount{{Type: "bind", Source: "/", Destination: "/host"}}
+	for _, dir := range []string{"/proc", "/host"} {
+		if _, err := r.w.Upload(ctx, c, dir, "../x", []byte("x"), ""); !errors.Is(err, ErrInvalidName) {
+			t.Errorf("../x dans %s : %v, attendu ErrInvalidName", dir, err)
+		}
 	}
 	r.nothingWritten(t)
 }
@@ -1159,6 +1292,32 @@ func TestWritesAreSerialized(t *testing.T) {
 		if n := len(r.fake.PutCalls()); n != 1 {
 			t.Errorf("%s : %d appels à PutArchive, attendu 1", k.name, n)
 		}
+	}
+}
+
+// mountView is MemFS plus the mount points of a running container
+// (fsview.MountPointChecker, implemented by procfs).
+type mountView struct {
+	*fsview.MemFS
+	points map[string]bool
+}
+
+func (m mountView) IsMountPoint(_ context.Context, p string) (bool, error) { return m.points[p], nil }
+
+// Q21: a mount point Inspect does not show (a Swarm config, docker-init, a
+// CDI file) is refused for an edit, through the view, before the intent.
+func TestEditRefusesMountPoint(t *testing.T) {
+	r := newRig(t, false)
+	view := mountView{MemFS: r.mem, points: map[string]bool{"/etc/app.conf": true}}
+	r.w.Open = func(context.Context, string) (fsview.FS, error) { return view, nil }
+	if _, err := r.w.Edit(ctx, ctr, "/etc/app.conf", []byte("x"), confTag); !errors.Is(err, fsview.ErrForbiddenPath) {
+		t.Fatalf("point de montage : %v, attendu ErrForbiddenPath", err)
+	}
+	r.nothingWritten(t)
+	view.points = map[string]bool{}
+	r.w.Open = func(context.Context, string) (fsview.FS, error) { return view, nil }
+	if _, err := r.w.Edit(ctx, ctr, "/etc/app.conf", []byte("x"), confTag); err != nil {
+		t.Fatalf("contrôle, fichier ordinaire : %v", err)
 	}
 }
 ```
@@ -1342,15 +1501,51 @@ func TestProcWriteSendsExactPath(t *testing.T) {
 }
 ```
 
-- [ ] **Step 3: Vérifier qu'ils échouent**
+- [ ] **Step 3: Test du point de montage dans `fsview`** — créer `internal/fsview/mountpoint_linux_test.go` :
 
-Run: `go vet ./internal/files/ 2>&1 | tail -n 3 ; GOOS=linux go vet ./internal/files/ 2>&1 | tail -n 3`
-Expected (les deux) : `undefined: Writer`.
+```go
+//go:build linux
 
-- [ ] **Step 4: Commit des tests rouges** (ne pas pousser avant la tâche 3)
+package fsview
+
+import (
+	"errors"
+	"os"
+	"path/filepath"
+	"testing"
+)
+
+// IsMountPoint (plan Explorateur 3, Q21): the STATX_MNT_ID of a path and of
+// its parent differ. /proc is a mount point on any Linux host or container;
+// /etc/passwd is not. No root needed.
+func TestIsMountPoint(t *testing.T) {
+	host, ok := openTestRoot(t, "/").(MountPointChecker)
+	if !ok {
+		t.Fatal("procfs doit implémenter MountPointChecker")
+	}
+	for p, want := range map[string]bool{"/proc": true, "/": true, "/etc/passwd": false, "/etc": false} {
+		if got, err := host.IsMountPoint(ctx, p); err != nil || got != want {
+			t.Errorf("%s : %v %v, attendu %v", p, got, err, want)
+		}
+	}
+	// A link anywhere is refused, as by StatNoLinks: never followed.
+	dir := t.TempDir()
+	must(t, os.Symlink("/proc", filepath.Join(dir, "p")))
+	if _, err := host.IsMountPoint(ctx, dir+"/p"); !errors.Is(err, ErrLinkInPath) {
+		t.Errorf("lien : %v, attendu ErrLinkInPath", err)
+	}
+}
+```
+
+- [ ] **Step 4: Vérifier qu'ils échouent**
+
+Run: `go vet ./internal/files/ 2>&1 | tail -n 3 ; GOOS=linux go vet ./internal/files/ 2>&1 | tail -n 3 ; GOOS=linux go vet ./internal/fsview/ 2>&1 | tail -n 3`
+Expected : `undefined: Writer` (les deux premiers) ; `undefined: MountPointChecker` (le troisième).
+
+- [ ] **Step 5: Commit des tests rouges** (ne pas pousser avant la tâche 3)
 
 ```bash
-git add internal/files
+git add internal/files internal/fsview/mountpoint_linux_test.go
 git commit -F - <<'EOF'
 files: tests d'évasion et d'ordre de l'écriture, écrits avant le code (rouges)
 
@@ -1365,15 +1560,96 @@ EOF
 **Où tester :** macOS, puis Linux root (`scripts/test-linux.sh`).
 
 **Files:**
-- Create: `internal/files/files.go`
+- Create: `internal/files/files.go`, `internal/fsview/mountpoint_linux.go`
+- Modify: `internal/fsview/fsview.go`
 
 **Interfaces:**
 - Consumes: `fsview.FS` (`StatNoLinks`, `Open`, `Close`), `fsview.HostBind(ctx, dockerx.Client, []dockerx.Mount) error`, `fsview.CleanPath`, `fsview.UnixPerm`, `fsview.ErrNotRegular`, `fsview.ErrNotDir`, `fsview.ErrTooLarge`, `fsview.ErrForbiddenPath`, `audit.Event`, `dockerx.ContainerInfo`, `Auditor` (satisfait par `*audit.Log`).
-- Produces: voir tâche 2, plus `PutTimeout = time.Minute`, `type Auditor interface{ Write(audit.Event) error }`.
+- Produces: voir tâche 2, plus `PutTimeout = time.Minute`, `type Auditor interface{ Write(audit.Event) error }`, `fsview.MountPointChecker` et `(*procFS).IsMountPoint`.
 
-> **À comprendre :** `Edit` et `Upload` suivent la spec ligne à ligne, les numéros d'étape sont en commentaire. Rien n'ouvre de chemin : la vue fait tous les contrôles (`StatNoLinks` refuse un lien n'importe où, dernier composant compris, et `procfs` y fait `fstatfs`), Docker fait l'écriture. Le chemin d'écriture est une **chaîne** : celle qui a été contrôlée est celle dont `path.Dir` part vers Docker. `writable` refuse, sur l'`Inspect` seul, ce que Docker n'écrirait pas comme le conteneur le voit (Q21) et tout conteneur dont un montage expose l'hôte (Q22). `lock` tient le verrou du conteneur de l'étape 2 à l'étape 6 (Q23). `put` regroupe les étapes 4 à 6 : rien si la requête est déjà finie, intention, `PutArchive` avec un contexte détaché de la requête (Q17), `Forget` (Q20), résultat.
+> **À comprendre :** `Edit` et `Upload` suivent la spec ligne à ligne, les numéros d'étape sont en commentaire. Rien n'ouvre de chemin : la vue fait tous les contrôles (`StatNoLinks` refuse un lien n'importe où, dernier composant compris, et `procfs` y fait `fstatfs`), Docker fait l'écriture. Le chemin d'écriture est une **chaîne** : celle qui a été contrôlée est celle dont `path.Dir` part vers Docker. `writable` refuse, sur l'`Inspect` seul, ce que Docker n'écrirait pas comme le conteneur le voit (Q21) et tout conteneur dont un montage tombe sous la règle de §5.2 étape 7, bind de `/`, `/proc`, `/sys` ou `/dev` (Q22, portée (a)). `lock` prend le verrou du conteneur avant d'ouvrir la vue, `defer` le rend après l'étape 6, panique comprise (Q23). Une édition refuse une cible qui est un point de montage, si la vue sait le dire (`MountPointChecker`, `procfs` seulement : R15). `put` regroupe les étapes 4 à 6 : rien si la requête est déjà finie, intention, `PutArchive` avec un contexte détaché de la requête (Q17), `Forget` (Q20), résultat.
 
-- [ ] **Step 1: Implémenter** — créer `internal/files/files.go` :
+- [ ] **Step 1: Implémenter** — dans `fsview`, l'interface facultative et sa version `procfs` :
+
+```diff
+--- a/internal/fsview/fsview.go
++++ b/internal/fsview/fsview.go
+@@ -42,6 +42,14 @@ type OpenChecker interface {
+ 	CheckOpen(ctx context.Context, path string) error
+ }
+ 
++// MountPointChecker is implemented by a view that can tell whether a path
++// is a mount point of the running container (procfs: STATX_MNT_ID of the
++// path and of its parent, no link followed). Package files refuses to edit
++// one: Docker writes in its own view of the mounts (plan Explorateur 3, Q21).
++type MountPointChecker interface {
++	IsMountPoint(ctx context.Context, path string) (bool, error)
++}
++
+ // FS is a read view of a container's tree. Paths are container paths;
+ // List, Stat and Open follow symbolic links, never out of the container root.
+ type FS interface {
+```
+
+```go
+//go:build linux
+
+package fsview
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io/fs"
+	"path"
+
+	"golang.org/x/sys/unix"
+)
+
+// IsMountPoint: the mount ID of CleanPath(name) differs from its parent's.
+// Both are opened like StatNoLinks (openat2, no link anywhere). Without
+// STATX_MNT_ID (kernel before 5.8) the answer is unknown: an error, so the
+// edit is refused (fail closed).
+func (p *procFS) IsMountPoint(_ context.Context, name string) (bool, error) {
+	clean := CleanPath(name)
+	if clean == "/" {
+		return true, nil
+	}
+	id, err := p.mountIDNoLinks(clean)
+	if err != nil {
+		return false, err
+	}
+	parent, err := p.mountIDNoLinks(path.Dir(clean))
+	if err != nil {
+		return false, err
+	}
+	return id != parent, nil
+}
+
+func (p *procFS) mountIDNoLinks(clean string) (uint64, error) {
+	fd, err := unix.Openat2(int(p.root.Fd()), clean, &unix.OpenHow{
+		Flags:   unix.O_PATH | unix.O_CLOEXEC,
+		Resolve: unix.RESOLVE_IN_ROOT | unix.RESOLVE_NO_SYMLINKS | unix.RESOLVE_NO_MAGICLINKS,
+	})
+	if errors.Is(err, unix.ELOOP) {
+		return 0, fmt.Errorf("%w : %s", ErrLinkInPath, clean)
+	}
+	if err != nil {
+		return 0, &fs.PathError{Op: "openat2", Path: clean, Err: err}
+	}
+	defer unix.Close(fd)
+	var st unix.Statx_t
+	if err := unix.Statx(fd, "", unix.AT_EMPTY_PATH, unix.STATX_MNT_ID, &st); err != nil {
+		return 0, &fs.PathError{Op: "statx", Path: clean, Err: err}
+	}
+	if st.Mask&unix.STATX_MNT_ID == 0 {
+		return 0, errors.New("statx sans STATX_MNT_ID (noyau antérieur à 5.8) : point de montage indécidable")
+	}
+	return st.Mnt_id, nil
+}
+```
+
+Puis créer `internal/files/files.go` :
 
 ```go
 // Package files is the agent's only writer (spec §4, §5.3, §7): read-only
@@ -1493,6 +1769,18 @@ func (w *Writer) Edit(ctx context.Context, c dockerx.ContainerInfo, p string, co
 	}
 	if e.Type != fsview.TypeFile {
 		return "", fmt.Errorf("%w : %s", fsview.ErrNotRegular, target)
+	}
+	// A mount point of the running container that Inspect may not show (a
+	// file bind, a Swarm config, docker-init, a CDI file): Docker cannot
+	// replace it, or writes in its own view (Q21). Fail closed.
+	if mp, ok := fsys.(fsview.MountPointChecker); ok {
+		point, err := mp.IsMountPoint(ctx, target)
+		if err != nil {
+			return "", err
+		}
+		if point {
+			return "", fmt.Errorf("%w : %s est un point de montage du conteneur : modifiez sa source", fsview.ErrForbiddenPath, target)
+		}
 	}
 	// 3. Read the file again, compare its SHA-256 to If-Match.
 	current, err := readCapped(ctx, fsys, target)
@@ -1643,7 +1931,8 @@ func (w *Writer) lock(ctx context.Context, id string) (func(), error) {
 
 // writable refuses, from the Inspect alone and before any intent, a write
 // Docker would not make where the container sees it (Q21), and any write to
-// a container whose mounts expose the host (Q22, spec §5.2 step 7). Docker
+// a container whose mounts fall under the host-bind rule of spec §5.2 step 7
+// (a bind of /, /proc, /sys, /dev…; Q22: a bind of /etc stays writable). Docker
 // extracts in its own view: the root filesystem plus the configured mounts.
 func (w *Writer) writable(ctx context.Context, c dockerx.ContainerInfo, target string) error {
 	if err := fsview.HostBind(ctx, w.Docker, c.Mounts); err != nil {
@@ -1682,13 +1971,15 @@ func under(p, dir string) bool {
 
 // validName: a single path component Linux accepts (NAME_MAX 255 bytes),
 // valid UTF-8 (the UI could not open it otherwise, spec §13), without
-// control characters (C0, DEL, C1: a misleading confirmation) nor backslash.
+// control characters (C0, DEL, C1), format characters (bidi overrides, zero
+// width) or line and paragraph separators: a misleading confirmation; nor
+// backslash.
 func validName(n string) bool {
 	if n == "" || n == "." || n == ".." || len(n) > 255 || !utf8.ValidString(n) || strings.ContainsAny(n, `/\`) {
 		return false
 	}
 	for _, r := range n {
-		if unicode.IsControl(r) {
+		if unicode.IsControl(r) || unicode.In(r, unicode.Cf, unicode.Zl, unicode.Zp) {
 			return false
 		}
 	}
@@ -1722,20 +2013,24 @@ Expected: `ok`, aucune sortie de `vet` ni de `gofmt`.
 - [ ] **Step 3: Vérifier sous Linux root**
 
 Run: `scripts/test-linux.sh -race ./internal/files/ -v 2>&1 | grep -E '^(---|ok|FAIL)' | tail -n 25`
-Expected: tous `PASS` (24 tests), dont `TestProcLinksRefused`, `TestProcNotRegular` (la FIFO ne bloque pas : `StatNoLinks` ne l'ouvre jamais en lecture), `TestProcPseudoFSRefused`, `TestProcWriteSendsExactPath`, `TestWritesAreSerialized`, `TestRefusesWhereDockerDoesNotWrite`, `TestHostBindRefusesEveryWrite` ; aucun SKIP.
+Expected: tous `PASS` (28 tests) ; `scripts/test-linux.sh ./internal/fsview/ -run IsMountPoint 2>&1 | tail -n 2` → `ok`. Passent notamment `TestProcLinksRefused`, `TestProcNotRegular` (la FIFO ne bloque pas : `StatNoLinks` ne l'ouvre jamais en lecture), `TestProcPseudoFSRefused`, `TestProcWriteSendsExactPath`, `TestWritesAreSerialized`, `TestRefusesWhereDockerDoesNotWrite`, `TestHostBindRefusesEveryWrite` ; aucun SKIP.
 
 - [ ] **Step 4: Contrôles de mutation** (une fois chacun, puis annuler avec `git checkout internal/files/files.go`)
   - Remplacer `fsys.StatNoLinks(` par `fsys.Stat(` (une vue qui suit les liens) : `scripts/test-linux.sh ./internal/files/ -run 'Links|Proc' 2>&1 | grep -E '^(---|FAIL)' | tail -n 8` doit montrer `FAIL: TestProcLinksRefused` (« ÉVASION : PutArchive appelé malgré un lien ») et `FAIL: TestLinksRefused`.
   - Remplacer `context.WithoutCancel(ctx)` par `ctx` : `go test ./internal/files/ -run Survives 2>&1 | tail -n 3` doit échouer.
   - Faire rendre à `lock` un `func() {}` sans rien attendre : `go test ./internal/files/ -run Serialized 2>&1 | tail -n 3` doit échouer (« la seconde écriture a passé ses contrôles pendant la première »).
+  - Retirer le contrôle `ctx.Err()` du début de `put` : `go test -count=3 ./internal/files/ -run Ended 2>&1 | tail -n 3` doit échouer à chaque fois.
+  - Retirer le cas `case <-ctx.Done():` de `lock` : `-run LockWait` doit échouer (après 5 s).
+  - Déplacer `defer unlock()` après l'ouverture de la vue : `-run Panic` doit échouer.
+  - Retirer `unicode.In(r, unicode.Cf, unicode.Zl, unicode.Zp)` de `validName` : `-run InvalidName` doit échouer.
   - Dans `internal/fsview/procfs_linux.go`, neutraliser `checkNotPseudo` de `StatNoLinks` : `scripts/test-linux.sh ./internal/files/ -run Pseudo 2>&1 | tail -n 3` doit échouer ; puis `git checkout internal/fsview`.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add internal/files
+git add internal/files internal/fsview
 git commit -F - <<'EOF'
-files: seul point d'écriture, lecture seule, chemin sans lien, montages, verrou, If-Match, audit, PutArchive
+files: seul point d'écriture, lecture seule, chemin sans lien, montages, verrou, If-Match, audit, PutArchive ; fsview: IsMountPoint
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 EOF
@@ -1752,7 +2047,7 @@ EOF
 - Modify: `internal/api/server.go`, `internal/api/fserr.go`, `internal/api/fs.go`, `internal/api/fs_preview.go`, `internal/api/fs_download.go`
 
 **Interfaces:**
-- Consumes: `files.Writer` et ses erreurs (tâche 3 ; `Edit` et `Upload` reçoivent l'`info` de `fsRequest`), `files.ETag`, `files.MaxEditBytes`, `files.MaxUploadBytes`, `guarded`, `writeFSError`, `fsRequest`, `Deps.OpenFS`, `Deps.Views.Forget`, `dockerx.ErrRefused`.
+- Consumes: `files.Writer` et ses erreurs (tâche 3 ; `Edit` et `Upload` reçoivent l'`info` de `fsRequest`), `files.ETag`, `files.MaxEditBytes`, `files.MaxUploadBytes`, `guarded`, `writeFSError`, `fsRequest`, `Deps.OpenFS`, `Deps.Views.Forget`, `dockerx.ErrRefused` (→ `read_only`), `dockerx.ErrPutInvalid` (→ `conflict`).
 - Produces: `server.files *files.Writer` ; `fsRequest(w, r, param string)` (`"path"` ou `"dir"`) ; `PUT /api/containers/{id}/fs/file?path=` → `200 {"etag"}` + en-tête `ETag` ; `POST /api/containers/{id}/fs/upload?dir=` → `201 {"path","etag"}` ; helpers de test `(*fixture).send(method, path string, body []byte, cookie *http.Cookie, headers map[string]string)`, `(*fixture).upload(t, c, ctr, dir, filename string, content []byte, inm string)`, `multipartBody(t, field, filename string, content []byte) ([]byte, string)`, `multipartRaw(t, disposition string, content []byte) ([]byte, string)`, `tarEntry(t, b []byte) (string, string)`.
 
 > **À comprendre :** la route ne décide de rien : elle lit le corps (borné), puis appelle `files` sous la garde de §13. Elle demande d'abord `files.Allowed()` pour répondre `read_only` sans lire le corps ni interroger Docker. Le nom d'un envoi est le `filename` de la partie `file` tel que `mime.ParseMediaType` le décode, et c'est cette valeur que `files` valide puis écrit (Q19) : `Part.FileName()` aurait changé `a/b` en `b`. Les tests envoient des en-têtes bruts (`multipartRaw`) : `filename*=UTF-8''..%2Fx` se décode en `../x` et doit être refusé ; `filename*=UTF-8''%C3%A9t%C3%A9.txt` doit arriver dans le tar sous `été.txt`.
@@ -1887,6 +2182,7 @@ func TestWriteRoutesErrors(t *testing.T) {
 		{"nom ../x sans If-None-Match", f.upload(t, c, "web", "/etc", "../x", []byte("x"), ""), 400, "invalid_name"},
 		{"nom avec \\", f.upload(t, c, "web", "/etc", `a\b`, []byte("x"), "*"), 400, "invalid_name"},
 		{"/etc/hosts (Q21)", f.upload(t, c, "web", "/etc", "hosts", []byte("x"), "*"), 403, "forbidden_path"},
+		{"nom a/b vers /proc : le nom d'abord", f.upload(t, c, "web", "/proc", "a/b", []byte("x"), "*"), 400, "invalid_name"},
 		{"envoi sur un lien", f.upload(t, c, "web", "/etc", "alias", []byte("x"), "*"), 422, "link_in_path"},
 		{"envoi trop gros", f.upload(t, c, "web", "/etc", "big", make([]byte, files.MaxUploadBytes+1), "*"), 413, "too_large"},
 	}
@@ -1944,14 +2240,20 @@ func TestWriteRoutesNeedSessionAndOrigin(t *testing.T) {
 	}
 }
 
-// Docker's own refusal (read-only rootfs, :ro volume) → read_only, with
-// Docker's message as detail.
+// Docker's own refusals: read-only rootfs or :ro volume → read_only, with
+// Docker's message as detail; any other invalid extraction (the path
+// changed after the checks) → conflict.
 func TestWriteDockerRefused(t *testing.T) {
 	f, c := writeFixture(t, false)
 	f.docker.PutErr = fmt.Errorf("%w : container rootfs is marked read-only", dockerx.ErrRefused)
 	rec := f.upload(t, c, "web", "/etc", "n", []byte("x"), "*")
 	if rec.Code != http.StatusForbidden || errCode(t, rec) != "read_only" || !strings.Contains(rec.Body.String(), "rootfs") {
 		t.Fatalf("refus de Docker : %d %s", rec.Code, rec.Body)
+	}
+	f.docker.PutErr = fmt.Errorf("%w : extraction point is not a directory", dockerx.ErrPutInvalid)
+	rec = f.upload(t, c, "web", "/etc", "n2", []byte("x"), "*")
+	if rec.Code != http.StatusConflict || errCode(t, rec) != "conflict" {
+		t.Fatalf("extraction refusée : %d %s", rec.Code, rec.Body)
 	}
 }
 
@@ -2194,7 +2496,7 @@ Puis câbler `files` et les routes (`server.go`), classer les erreurs (`fserr.go
  		return http.StatusNotFound, "not_found"
 +	case errors.Is(err, files.ErrReadOnly), errors.Is(err, dockerx.ErrRefused): // Q15: Docker's read-only rootfs or volume
 +		return http.StatusForbidden, "read_only"
-+	case errors.Is(err, files.ErrConflict):
++	case errors.Is(err, files.ErrConflict), errors.Is(err, dockerx.ErrPutInvalid): // the path changed after the checks
 +		return http.StatusConflict, "conflict"
 +	case errors.Is(err, files.ErrInvalidName):
 +		return http.StatusBadRequest, "invalid_name"
@@ -2327,7 +2629,7 @@ EOF
 - Consumes: `(*fixture).init`, `session`, `send`, `upload` (tâche 4), `errCode`, `dockerCLI` (`integration_test.go`, même build tag Linux), `dockerx.New`.
 - Produces: `whileIndexing(t, do func() *httptest.ResponseRecorder) *httptest.ResponseRecorder`.
 
-> **À comprendre :** ces tests prouvent ce que le faux ne peut pas : que l'index est bien reconstruit après une écriture (l'aperçu relit `v2`), que Docker garde le mode et le propriétaire du tar (`640 1000 1001`), qu'un lien pendant reste intact après un envoi refusé, que `/etc/hosts` et un `--tmpfs` sont refusés avant Docker (Q21), et que le refus d'un rootfs `--read-only` arrive en `read_only` avec le message de Docker. Une écriture sur un conteneur arrêté retire l'index : la requête suivante peut recevoir `202`, d'où `whileIndexing`.
+> **À comprendre :** ces tests prouvent ce que le faux ne peut pas : que l'index est bien reconstruit après une écriture (l'aperçu relit `v2`), que Docker garde le mode et le propriétaire du tar (`640 1000 1001`), qu'un lien pendant reste intact après un envoi refusé, que `/etc/hosts`, un `--tmpfs` et un fichier monté (bind `:ro` de `/etc/os-release`, présent sur tout hôte de démon ; en lecture seule, une régression ne pourrait rien écrire dans l'hôte) sont refusés avant Docker, que `/sbin/docker-init` d'un `--init`, absent d'`Inspect.Mounts`, est refusé par le point de montage (Q21, R15), et que le refus d'un rootfs `--read-only` arrive en `read_only` avec le message de Docker. Une écriture sur un conteneur arrêté retire l'index : la requête suivante peut recevoir `202`, d'où `whileIndexing`.
 
 - [ ] **Step 1: Conteneur arrêté** — créer `internal/api/integration_write_test.go` :
 
@@ -2429,6 +2731,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"strings"
 	"testing"
 
 	"github.com/levy-cmd/hublot-kit/internal/dockerx"
@@ -2441,7 +2744,10 @@ func TestIntegrationWriteRunning(t *testing.T) {
 	name := "hublot-it-write-run"
 	exec.Command("docker", "rm", "-f", name).Run()
 	t.Cleanup(func() { exec.Command("docker", "rm", "-f", name).Run() })
-	dockerCLI(t, "run", "-d", "--name", name, "--tmpfs", "/scratch", "alpine:3", "sleep", "300")
+	// /etc/os-release exists on every daemon host (Docker Desktop, Ubuntu,
+	// Fedora); :ro, so a regression could never write into the host.
+	dockerCLI(t, "run", "-d", "--name", name, "--tmpfs", "/scratch", "--init",
+		"-v", "/etc/os-release:/app/conf.yml:ro", "alpine:3", "sleep", "300")
 	dockerCLI(t, "exec", name, "sh", "-c", "echo v1 > /etc/app.conf && chown 1000:1001 /etc/app.conf && chmod 640 /etc/app.conf && ln -s /etc /linkdir && ln -s /nope /tmp/dangling")
 	dc, err := dockerx.New()
 	if err != nil {
@@ -2490,6 +2796,19 @@ func TestIntegrationWriteRunning(t *testing.T) {
 			r := f.upload(t, c, name, "/scratch", "x", []byte("x"), "*")
 			return r.Code, errCode(t, r)
 		}, 403, "forbidden_path"},
+		{"fichier monté (Destination d'Inspect)", func() (int, string) {
+			r := f.send("PUT", base+"/fs/file?path=/app/conf.yml", []byte("x"), c, map[string]string{"If-Match": tag})
+			return r.Code, errCode(t, r)
+		}, 403, "forbidden_path"},
+		// --init mounts /sbin/docker-init without showing it in Inspect.Mounts:
+		// only the STATX_MNT_ID check sees it (Q21).
+		{"montage absent d'Inspect (--init)", func() (int, string) {
+			r := f.send("PUT", base+"/fs/file?path=/sbin/docker-init", []byte("x"), c, map[string]string{"If-Match": tag})
+			if !strings.Contains(r.Body.String(), "point de montage") {
+				t.Errorf("docker-init : refus attendu par le point de montage : %s", r.Body)
+			}
+			return r.Code, errCode(t, r)
+		}, 403, "forbidden_path"},
 	} {
 		if status, code := k.rec(); status != k.status || code != k.code {
 			t.Errorf("%s : %d %s, attendu %d %s", k.label, status, code, k.status, k.code)
@@ -2510,7 +2829,7 @@ Run: `DOCKER_HOST=unix://$HOME/.docker/run/docker.sock go test -tags integration
 Expected: `PASS`, et la ligne `MESURE refus de Docker : {"error":"read_only","detail":"refusé par Docker : … container rootfs is marked read-only"}`.
 
 Run: `scripts/test-linux.sh -race -tags integration ./cmd/... ./internal/... 2>&1 | tail -n 12`
-Expected: `ok` pour chaque paquet ; `TestIntegrationWriteRunning` passe (vérifier avec `-run IntegrationWrite -v` qu'il n'est pas sauté).
+Expected: `ok` pour chaque paquet ; `TestIntegrationWriteRunning` passe (vérifier avec `-run IntegrationWrite -v` qu'il n'est pas sauté). Contrôle une fois : sans le contrôle de point de montage de `files.Edit`, le cas `docker-init` échoue (la requête arrive jusqu'à `If-Match`).
 
 - [ ] **Step 4: Commit**
 
@@ -3589,7 +3908,7 @@ EOF
 **Files:**
 - Modify: `docs/superpowers/specs/2026-10-07-hublot-kit-v0.1-design.md` (§5.2 étape 1, §5.3, §6, §7, §13), `docs/superpowers/plans/2026-10-09-explorateur-3-ecriture.md` (cases cochées, constats)
 
-- [ ] **Step 1: Reporter les décisions dans la spec** — remplacer chaque passage par le suivant (chacun est unique dans la spec) :
+- [ ] **Step 1: Reporter les décisions dans la spec** — remplacer chaque passage par le suivant (chacun est unique dans la spec). Les textes ci-dessous suivent Q22 (a). Si l'utilisateur retient (b), les items 2, 8, 10 et 15 nomment en plus la liste de (b) et ses faux refus.
 
 1. §5.2 étape 1 — remplacer :
 
@@ -3612,9 +3931,9 @@ EOF
    par :
 
    ```text
-   Le nom du fichier envoyé doit être un composant unique : ni `/`, ni `.`, ni `..`, ni vide, ni `\`, ni caractère de contrôle (octet nul compris), ni plus de 255 octets, et en UTF-8 valide, sinon `400 invalid_name`. C'est le `filename` de la partie `file` du multipart tel que le décode `mime.ParseMediaType` (`filename*` prioritaire), jamais réduit à son nom de base : la valeur validée est celle qui part dans le tar.
+   Le nom du fichier envoyé doit être un composant unique : ni `/`, ni `.`, ni `..`, ni vide, ni `\`, ni caractère de contrôle (octet nul compris), de format (bidi, largeur nulle) ou séparateur de ligne ou de paragraphe, ni plus de 255 octets, et en UTF-8 valide, sinon `400 invalid_name`. C'est le `filename` de la partie `file` du multipart tel que le décode `mime.ParseMediaType` (`filename*` prioritaire), jamais réduit à son nom de base : la valeur validée est celle qui part dans le tar.
 
-      Avant d'ouvrir la vue, à partir de l'`Inspect` (refus `forbidden_path`, détail qui nomme la cause) : tout le conteneur si un de ses montages expose l'hôte (règle et extensions de §5.2 étape 7, conteneur actif compris) ; tout chemin où Docker n'écrit pas comme le conteneur le voit, car Docker extrait dans sa propre vue (rootfs et montages configurés), pas dans l'espace de noms de montage du conteneur : `/etc/hosts`, `/etc/hostname`, `/etc/resolv.conf`, la `Destination` d'un montage, un chemin sous un tmpfs (`Mounts`, `HostConfig.Tmpfs`), sous `/dev`, `/proc` ou `/sys`. Les étapes 2 à 6 tiennent le verrou du conteneur : deux écritures sur un même conteneur ne s'entrelacent jamais.
+      Avant d'ouvrir la vue, à partir de l'`Inspect` (refus `forbidden_path`, détail qui nomme la cause) : tout le conteneur si un de ses montages tombe sous la règle de §5.2 étape 7 et ses extensions (bind de `/`, `/proc`, `/sys` ou dessous, `/dev` ; conteneur actif compris) ; un bind d'un autre dossier de l'hôte reste inscriptible ; tout chemin où Docker n'écrit pas comme le conteneur le voit, car Docker extrait dans sa propre vue (rootfs et montages configurés), pas dans l'espace de noms de montage du conteneur : `/etc/hosts`, `/etc/hostname`, `/etc/resolv.conf`, la `Destination` d'un montage, un chemin sous un tmpfs (`Mounts`, `HostConfig.Tmpfs`), sous `/dev`, `/proc` ou `/sys`. Pour une édition sur un conteneur actif, une cible qui est un point de montage (son `STATX_MNT_ID` diffère de celui de son parent) est refusée de même : elle couvre les montages qu'`Inspect` ne montre pas (configs Swarm, `--init`, CDI). Le verrou du conteneur est pris avant d'ouvrir la vue et rendu après l'étape 6 : deux écritures sur un même conteneur ne s'entrelacent jamais.
    ```
 
 3. §5.3 étape 3, `If-Match` (Q14, Q18) — remplacer :
@@ -3688,7 +4007,7 @@ EOF
    par :
 
    ```text
-   Docker résout alors le chemin lui-même, dans la racine du conteneur : c'est le filet de sécurité. Il repose sur l'extraction chrootée de dockerd dans la racine du conteneur (correctif de CVE-2018-15664, présent dans toute API ≥ 1.44, §8). Un lien posé pendant la course peut mener Docker vers un autre montage du conteneur : aucun n'expose l'hôte (étape 2).
+   Docker résout alors le chemin lui-même, dans la racine du conteneur : c'est le filet de sécurité. Il repose sur l'extraction chrootée de dockerd dans la racine du conteneur (correctif de CVE-2018-15664, présent dans toute API ≥ 1.44, §8). Un lien posé pendant la course peut mener Docker vers un autre montage du conteneur : aucun bind de `/`, `/proc`, `/sys` ni `/dev` n'y est accepté (étape 2), mais un bind d'un autre dossier de l'hôte reste atteignable (§13).
    ```
 
 9. §6, définition de `forbidden_path` (Q21, Q22) — remplacer :
@@ -3712,7 +4031,7 @@ EOF
    par :
 
    ```text
-   La lecture et le listing ne sont pas refusés : l'utilisateur de l'interface est de fait root sur l'hôte (début de §7), et les pseudo-systèmes et les périphériques restent refusés. L'écriture, elle, est refusée pour tout le conteneur, comme l'explorateur d'un conteneur arrêté (§5.3 étape 2) : avec la course de §5.3, Docker pourrait sinon être mené vers ce bind.
+   La lecture et le listing ne sont pas refusés : l'utilisateur de l'interface est de fait root sur l'hôte (début de §7), et les pseudo-systèmes et les périphériques restent refusés. L'écriture, elle, est refusée pour tout le conteneur quand un montage tombe sous la règle de §5.2 étape 7 (bind de `/`, `/proc`, `/sys`, `/dev`…), comme l'explorateur d'un conteneur arrêté (§5.3 étape 2). Un bind d'un autre dossier de l'hôte (`/etc`, `/root`…) reste inscriptible, comme il est lisible : l'utilisateur est root de fait, et la course de §5.3 peut y mener Docker (§13).
    ```
 
 11. §6, statuts (Q15, Q18) — remplacer :
@@ -3724,7 +4043,7 @@ EOF
    par :
 
    ```text
-   Statuts HTTP : `not_found` 404 (`ELOOP` compris : boucle de liens, lien magique refusé), `read_only` 403 (agent `--read-only`, ou refus de Docker : rootfs `--read-only`, volume `:ro`, avec son message en détail), `conflict` 409, `forbidden_path` 403,
+   Statuts HTTP : `not_found` 404 (`ELOOP` compris : boucle de liens, lien magique refusé), `read_only` 403 (agent `--read-only`, ou refus de Docker : rootfs `--read-only`, volume `:ro`, avec son message en détail), `conflict` 409 (précondition, ou extraction refusée par Docker parce que le chemin a changé après les contrôles), `forbidden_path` 403,
    ```
 
 12. §6, route `PUT /fs/file` — remplacer :
@@ -3775,8 +4094,9 @@ EOF
    | Noms de fichiers non UTF-8 : JSON les transporte avec U+FFFD, le fichier ne s'ouvre plus depuis l'interface (`not_found`) | limite v0.1 ; le listing ne casse pas |
    | Écriture non atomique : Docker supprime le fichier puis le recrée ; une écriture coupée le perdrait | `PutArchive` détaché de la requête une fois l'intention journalisée ; journal avant et après. Au-delà du délai d'une minute, l'écriture est coupée : fichier perdu ou tronqué, limite assumée pour la v0.1 (§5.3) |
    | La garde répond `504` pendant qu'une écriture continue | l'interface dit que l'écriture a peut-être eu lieu et demande de recharger avant de réessayer ; une requête déjà terminée ne commence rien (§5.3) |
-   | Montage dont la `Destination` passe par un lien du conteneur (ex. `/var/run/…` quand `/var/run` → `/run`) : le chemin sans lien ne correspond pas au texte de Docker, qui répond `device or resource busy` (500 → `docker_unavailable`) | limite assumée pour la v0.1 ; les fichiers que Docker monte lui-même (`/etc/hosts`…) et les tmpfs sont refusés avant (§5.3 étape 2) |
-   | Course de §5.3 : un lien posé entre les contrôles et `PutArchive` mène Docker vers un montage ordinaire du conteneur, où root écrit avec le propriétaire du tar | aucun montage qui expose l'hôte n'est accepté pour une écriture (§5.3 étape 2) ; un montage `:ro` reste refusé par Docker ; limite assumée pour la v0.1 |
+   | Montages qu'`Inspect` ne montre pas (configs et secrets Swarm, `--init`, CDI ou `--gpus`), ou dont la `Destination` passe par un lien du conteneur : Docker répond `device or resource busy` (500 → `docker_unavailable`) ou écrit où le conteneur ne voit rien | édition sur un conteneur actif : refusée par le point de montage (`STATX_MNT_ID`, §5.3 étape 2) ; envoi (la cible n'existe pas encore) et conteneur arrêté : limite assumée pour la v0.1 |
+   | Course de §5.3 : un lien posé entre les contrôles et `PutArchive` mène Docker vers un autre montage du conteneur, où root écrit avec le propriétaire du tar ; un bind d'un dossier de l'hôte autre que `/`, `/proc`, `/sys`, `/dev` (ex. `-v /etc:/hostetc`) est atteignable | binds de `/`, `/proc`, `/sys`, `/dev` refusés pour toute écriture (§5.3 étape 2) ; un montage `:ro` reste refusé par Docker ; le contenu écrit est celui de l'utilisateur ; limite assumée pour la v0.1 (Q22 du plan Explorateur 3) |
+   | Écriture bloquée sur un FUSE muet (contrôles ou relecture) : elle garde le verrou du conteneur jusqu'au redémarrage de l'agent ; chaque écriture suivante reçoit `504` après 10 s, et l'interface dit à tort « l'écriture a peut-être eu lieu » | limite assumée pour la v0.1 ; les lectures ne prennent pas ce verrou |
    | userns-remap (hors v0.1, §2) : `procfs` donne les uid/gid de l'hôte, le tar attend ceux du conteneur | non pris en charge en v0.1 |
    ```
 
@@ -3806,6 +4126,7 @@ EOF
 - `docker cp` vers un conteneur en pause réussit ; l'interface traite déjà un conteneur en pause comme actif (`procfs`).
 - `openat2 RESOLVE_NO_SYMLINKS` refuse un lien pendant en dernier composant (`ELOOP` → `link_in_path`) : `TestProcLinksRefused`, envoi sur `/d/dangling`.
 - Revue 1 : sur un conteneur actif, `docker cp` vers `/dev`, `/dev/shm` ou un `--tmpfs` réussit et le conteneur ne voit pas le fichier ; vers `/run` (pas un tmpfs), il le voit. Un conteneur jamais démarré a `HostsPath` vide et accepte `/etc/hosts`, que Docker masquera au démarrage. `HostConfig.Tmpfs` porte les `--tmpfs`, absents de `Mounts`.
+- Revue 2 : `PUT /archive` vers un fichier existant → `InvalidArgument` « extraction point is not a directory » (désormais `ErrPutInvalid`, `conflict`). `--init` monte `/sbin/docker-init` (601 296 octets sur Docker Desktop) sans entrée dans `Inspect.Mounts`. `/etc/os-release` existe sur l'hôte du démon de Docker Desktop.
 - Build de l'interface : CodeMirror et ses langages vivent dans des morceaux atteints par `import()` seulement ; le nœud de la page conteneur pèse 22 Ko, le plus gros morceau CodeMirror 263 Ko (non compressé).
 
 #### Constats de la tâche 8
