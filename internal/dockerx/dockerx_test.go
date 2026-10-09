@@ -1,10 +1,16 @@
 package dockerx
 
 import (
+	"context"
+	"errors"
+	"fmt"
+	"io"
 	"net/netip"
+	"reflect"
 	"testing"
 	"time"
 
+	cerrdefs "github.com/containerd/errdefs"
 	"github.com/moby/moby/api/types/container"
 )
 
@@ -71,5 +77,65 @@ func TestFromSummaryNameSkipsLinkAlias(t *testing.T) {
 	c := fromSummary(container.Summary{ID: "x", Names: []string{"/other/alias", "/web"}})
 	if c.Name != "web" {
 		t.Fatalf("name = %q", c.Name)
+	}
+}
+
+func TestFromInspect(t *testing.T) {
+	got := fromInspect(container.InspectResponse{
+		ID: "abc", Name: "/web", State: &container.State{Running: true, Pid: 42},
+		Mounts: []container.MountPoint{
+			{Type: "bind", Source: "/proc", Destination: "/host/proc"},
+			{Type: "volume", Name: "data", Source: "/var/lib/docker/volumes/data/_data", Destination: "/data", Driver: "local"},
+		},
+	})
+	want := ContainerInfo{ID: "abc", Name: "web", Running: true, Pid: 42, Mounts: []Mount{
+		{Type: "bind", Source: "/proc", Destination: "/host/proc"},
+		{Type: "volume", Name: "data", Source: "/var/lib/docker/volumes/data/_data", Destination: "/data", Driver: "local"},
+	}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %+v", got)
+	}
+	if got := fromInspect(container.InspectResponse{ID: "x"}); got.Running || got.Pid != 0 || got.Mounts != nil {
+		t.Fatalf("a nil State must read as stopped: %+v", got)
+	}
+}
+
+func TestWrapClassifiesErrors(t *testing.T) {
+	if err := wrap(fmt.Errorf("inspect: %w", cerrdefs.ErrNotFound)); !errors.Is(err, ErrNotFound) || errors.Is(err, ErrUnavailable) {
+		t.Fatalf("not found: %v", err)
+	}
+	if err := wrap(errors.New("dial unix /var/run/docker.sock: connect: no such file or directory")); !errors.Is(err, ErrUnavailable) || errors.Is(err, ErrNotFound) {
+		t.Fatalf("unavailable: %v", err)
+	}
+}
+
+func TestFakeInspectAndArchive(t *testing.T) {
+	f := &Fake{
+		Infos:    map[string]ContainerInfo{"web": {ID: "full", Name: "web", Running: true, Pid: 7}},
+		Archives: map[string][]byte{"full:/etc": []byte("TAR")},
+	}
+	if info, err := f.Inspect(context.Background(), "web"); err != nil || info.ID != "full" {
+		t.Fatalf("inspect: %+v %v", info, err)
+	}
+	if _, err := f.Inspect(context.Background(), "nope"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("unknown container: %v", err)
+	}
+	rc, err := f.GetArchive(context.Background(), "full", "/etc")
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := io.ReadAll(rc)
+	if string(b) != "TAR" || len(f.ArchiveCalls) != 1 || f.ArchiveCalls[0] != "full:/etc" {
+		t.Fatalf("archive %q, calls %v", b, f.ArchiveCalls)
+	}
+	if _, err := f.GetArchive(context.Background(), "full", "/absent"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("absent path: %v", err)
+	}
+	f.Volumes = map[string]map[string]string{"v": {"o": "bind", "device": "/srv"}}
+	if opts, err := f.VolumeOptions(context.Background(), "v"); err != nil || opts["device"] != "/srv" {
+		t.Fatalf("volume: %v %v", opts, err)
+	}
+	if _, err := f.VolumeOptions(context.Background(), "nope"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("absent volume: %v", err)
 	}
 }

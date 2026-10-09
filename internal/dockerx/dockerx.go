@@ -3,10 +3,14 @@ package dockerx
 
 import (
 	"context"
+	"errors"
+	"fmt"
+	"io"
 	"sort"
 	"strings"
 	"time"
 
+	cerrdefs "github.com/containerd/errdefs"
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/client"
 )
@@ -28,9 +32,42 @@ type Container struct {
 	Ports   []Port    `json:"ports"`
 }
 
+// ContainerInfo is the part of `docker inspect` the agent uses.
+type ContainerInfo struct {
+	ID      string // full 64-character ID
+	Name    string // without the leading "/"
+	Running bool
+	Pid     int // 0 when the container does not run
+	Mounts  []Mount
+}
+
+// Mount is one entry of Inspect.Mounts (binds and volumes).
+type Mount struct {
+	Type        string // "bind", "volume", "tmpfs"…
+	Name        string // volume name
+	Source      string // host path of a bind
+	Destination string // path in the container
+	Driver      string // volume driver ("local"…)
+}
+
+// ErrNotFound: no such container (or no such path, for an archive).
+// ErrUnavailable: any other failure of the daemon or of the connection to it.
+var (
+	ErrNotFound    = errors.New("introuvable dans Docker")
+	ErrUnavailable = errors.New("Docker indisponible")
+)
+
 type Client interface {
 	ListContainers(ctx context.Context) ([]Container, error)
 	Ping(ctx context.Context) error
+	// Inspect accepts a full ID, a short ID or a name.
+	Inspect(ctx context.Context, id string) (ContainerInfo, error)
+	// GetArchive streams the tar of path (GET /containers/{id}/archive).
+	// The caller closes it.
+	GetArchive(ctx context.Context, id, path string) (io.ReadCloser, error)
+	// VolumeOptions returns the driver options of a named volume
+	// (GET /volumes/{name}, field Options), e.g. o=bind, device=/proc.
+	VolumeOptions(ctx context.Context, name string) (map[string]string, error)
 }
 
 type engine struct{ c *client.Client }
@@ -107,4 +144,50 @@ func fromSummary(s container.Summary) Container {
 		Created: time.Unix(s.Created, 0).UTC(),
 		Ports:   ports,
 	}
+}
+
+func (e *engine) Inspect(ctx context.Context, id string) (ContainerInfo, error) {
+	res, err := e.c.ContainerInspect(ctx, id, client.ContainerInspectOptions{})
+	if err != nil {
+		return ContainerInfo{}, wrap(err)
+	}
+	return fromInspect(res.Container), nil
+}
+
+func fromInspect(c container.InspectResponse) ContainerInfo {
+	info := ContainerInfo{ID: c.ID, Name: strings.TrimPrefix(c.Name, "/")}
+	if c.State != nil {
+		info.Running = c.State.Running
+		info.Pid = c.State.Pid
+	}
+	for _, m := range c.Mounts {
+		info.Mounts = append(info.Mounts, Mount{
+			Type: string(m.Type), Name: m.Name, Source: m.Source, Destination: m.Destination, Driver: m.Driver,
+		})
+	}
+	return info
+}
+
+func (e *engine) GetArchive(ctx context.Context, id, path string) (io.ReadCloser, error) {
+	res, err := e.c.CopyFromContainer(ctx, id, client.CopyFromContainerOptions{SourcePath: path})
+	if err != nil {
+		return nil, wrap(err)
+	}
+	return res.Content, nil
+}
+
+func (e *engine) VolumeOptions(ctx context.Context, name string) (map[string]string, error) {
+	res, err := e.c.VolumeInspect(ctx, name, client.VolumeInspectOptions{})
+	if err != nil {
+		return nil, wrap(err)
+	}
+	return res.Volume.Options, nil
+}
+
+// wrap classifies a daemon error for the API (not_found / docker_unavailable).
+func wrap(err error) error {
+	if cerrdefs.IsNotFound(err) {
+		return fmt.Errorf("%w : %v", ErrNotFound, err)
+	}
+	return fmt.Errorf("%w : %v", ErrUnavailable, err)
 }
