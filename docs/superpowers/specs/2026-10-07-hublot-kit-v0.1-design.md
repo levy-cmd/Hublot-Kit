@@ -58,7 +58,7 @@ internal/
   dockerx/           interface + implémentation au-dessus du SDK Docker (version d'API négociée)
                      ListContainers, Inspect, Changes, Logs, GetArchive, PutArchive
   fsview/            lecture de l'arborescence d'un conteneur, une interface, deux implémentations
-    fsview.go          type FS interface { List, Stat, Open } + types Entry
+    fsview.go          type FS interface { List, Stat, Open, StatNoLinks, CheckArchive, Close } + types Entry
     procfs.go          conteneur actif
     tarindex.go        conteneur arrêté
   files/             seul point d'écriture : lecture seule, If-Match, audit, PutArchive
@@ -90,6 +90,12 @@ web/                 application SvelteKit
       List(ctx context.Context, dir string) (entries []Entry, truncated bool, err error)
       Stat(ctx context.Context, path string) (Entry, error)
       Open(ctx context.Context, path string) (io.ReadCloser, error)
+      // chemin nettoyé, aucun lien sur toute la chaîne (§5.3 étape 2, §5.4)
+      StatNoLinks(ctx context.Context, path string) (Entry, error)
+      // avant tout GetArchive d'un dossier : ni bind de l'hôte (§5.2 étape 7),
+      // ni pseudo-système ou FUSE sur, sous ou au-dessus du dossier (§5.4)
+      CheckArchive(ctx context.Context, dir string) error
+      Close() error // procfs : ferme les descripteurs de la racine et du pidfd
   }
   ```
 
