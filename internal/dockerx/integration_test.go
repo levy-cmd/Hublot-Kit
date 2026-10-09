@@ -116,3 +116,23 @@ func TestMountsAndVolumeOptionsRealDocker(t *testing.T) {
 		t.Fatalf("options: %v %v", opts, err)
 	}
 }
+
+func TestMeasureSizeRootFs(t *testing.T) {
+	name := "hublot-it-size"
+	exec.Command("docker", "rm", "-f", name).Run()
+	t.Cleanup(func() { exec.Command("docker", "rm", "-f", name).Run() })
+	if out, err := exec.Command("docker", "run", "--name", name, "alpine:3", "true").CombinedOutput(); err != nil {
+		t.Fatalf("docker run : %v %s", err, out)
+	}
+	c, err := New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	size, err := c.SizeRootFs(ctx, name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("MESURE : SizeRootFs = %d octets", size) // 0: the progress stays at 0 % (not an error)
+}

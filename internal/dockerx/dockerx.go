@@ -38,7 +38,16 @@ type ContainerInfo struct {
 	Name    string // without the leading "/"
 	Running bool
 	Pid     int // 0 when the container does not run
-	Mounts  []Mount
+	// FinishedAt is State.FinishedAt as Docker gives it: part of the index
+	// cache key (spec §5.2 step 1). "0001-01-01T00:00:00Z" if never started.
+	FinishedAt string
+	Mounts     []Mount
+}
+
+// Change is one entry of GET /containers/{id}/changes (F5).
+type Change struct {
+	Path string `json:"path"`
+	Kind string `json:"kind"` // "added" | "modified" | "deleted"
 }
 
 // Mount is one entry of Inspect.Mounts (binds and volumes).
@@ -68,6 +77,12 @@ type Client interface {
 	// VolumeOptions returns the driver options of a named volume
 	// (GET /volumes/{name}, field Options), e.g. o=bind, device=/proc.
 	VolumeOptions(ctx context.Context, name string) (map[string]string, error)
+	// SizeRootFs is Inspect with size=true: the size of the container's
+	// root filesystem, for the progress of an index (spec §5.2 step 3). Costly
+	// for Docker: called once per index build. 0 when Docker gives none.
+	SizeRootFs(ctx context.Context, id string) (int64, error)
+	// Changes is GET /containers/{id}/changes (F5): never nil.
+	Changes(ctx context.Context, id string) ([]Change, error)
 }
 
 type engine struct{ c *client.Client }
@@ -159,6 +174,7 @@ func fromInspect(c container.InspectResponse) ContainerInfo {
 	if c.State != nil {
 		info.Running = c.State.Running
 		info.Pid = c.State.Pid
+		info.FinishedAt = c.State.FinishedAt
 	}
 	for _, m := range c.Mounts {
 		info.Mounts = append(info.Mounts, Mount{
@@ -182,6 +198,44 @@ func (e *engine) VolumeOptions(ctx context.Context, name string) (map[string]str
 		return nil, wrap(err)
 	}
 	return res.Volume.Options, nil
+}
+
+func (e *engine) SizeRootFs(ctx context.Context, id string) (int64, error) {
+	res, err := e.c.ContainerInspect(ctx, id, client.ContainerInspectOptions{Size: true})
+	if err != nil {
+		return 0, wrap(err)
+	}
+	if res.Container.SizeRootFs == nil {
+		return 0, nil
+	}
+	return *res.Container.SizeRootFs, nil
+}
+
+func (e *engine) Changes(ctx context.Context, id string) ([]Change, error) {
+	res, err := e.c.ContainerDiff(ctx, id, client.ContainerDiffOptions{})
+	if err != nil {
+		return nil, wrap(err)
+	}
+	return fromChanges(res.Changes)
+}
+
+func fromChanges(cs []container.FilesystemChange) ([]Change, error) {
+	out := make([]Change, 0, len(cs))
+	for _, c := range cs {
+		var kind string
+		switch c.Kind {
+		case container.ChangeAdd:
+			kind = "added"
+		case container.ChangeModify:
+			kind = "modified"
+		case container.ChangeDelete:
+			kind = "deleted"
+		default:
+			return nil, fmt.Errorf("%w : type de changement inconnu %d pour %s", ErrUnavailable, c.Kind, c.Path)
+		}
+		out = append(out, Change{Path: c.Path, Kind: kind})
+	}
+	return out, nil
 }
 
 // wrap classifies a daemon error for the API (not_found / docker_unavailable).
