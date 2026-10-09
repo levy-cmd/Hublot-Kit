@@ -37,12 +37,21 @@ Revue du plan, premier tour (relecteur Opus et Codex, « Prêt avec réserves »
 - **R17 :** « décommenter » remplacé par « ajout » partout (tâche 9). **R18 :** essai manuel avec `/tmp/hk-bind` au lieu de `/srv`, que Docker Desktop ne partage pas. → Tâche 10.
 - **R19 (sobriété) :** retirés le troisième test 202 (`fs_test.go`), `TestViewsFirstWait`, la goroutine de `TestFakeSizesDiffsCalls` et Playwright dans la VM (la CI le couvre). Le test d'intégration de la tâche 1 ne garde que la ligne `MESURE`. → Tâches 1, 4, 5, 13.
 
+Second tour (re-relecture « Prêt » avec cinq points) :
+
+- **R20 :** un index fini qu'aucune requête n'a vu (sa requête est partie) devient évinçable après `Grace` (30 s) sans visite ; une construction en cours ne l'est jamais. Test `TestViewsUnseenIndexesExpire`. → Tâche 4.
+- **R21 :** pas de minuterie d'inactivité pour un `too_large` : il ne contient pas d'index et reste collant jusqu'au changement de `FinishedAt` (sauf plafond de durée, R14). → Tâche 4.
+- **R22 :** cas « chroot vers un autre montage » (P ≠ `/`, racine sans rapport) ajouté ; la phrase de mutation de `sameMount` est corrigée. → Tâche 8.
+- **R23 :** `Forget`, `drop`, `touchLocked` (minuterie réarmée) et `removeLocked` donnés en code. → Tâche 4.
+- **R24 :** `TestAliveReal` note que le pidfd d'un zombie est lisible avant la récolte (Linux ≥ 5.3, déjà exigé par §5.1). → Tâche 7.
+- Pas de changement pour `HasSuffix(Source, root)` : `root` commence par `/`, la frontière de composant est respectée (fausse alerte vérifiée).
+
 ## Décisions de ce plan (la spec ne tranche pas)
 
 - **`Views` remplace `For`.** `fsview.NewViews(docker, opt) *Views`, `(*Views).For(ctx, id) (FS, error)`, `(*Views).Forget(id)` (pour le plan 3, après une écriture, §5.2 étape 1). `api.Deps` gagne `Views *fsview.Views` (nil : `NewViews(Docker, DefaultOptions())`) ; `OpenFS` nil vaut `Views.For`. → Tâche 4.
 - **Cache (§5.2 étapes 1, 2, 4).**
   - Clé `ID + "\x00" + FinishedAt`. Une nouvelle clé pour un ID efface les anciennes (redémarré puis arrêté).
-  - Au plus 3 entrées, **constructions en cours comprises**. Une construction en cours, ou un index qu'aucune requête n'a encore vu, n'est jamais évincé ; si les 3 places sont prises ainsi, la requête reçoit `202` (progression 0) sans rien lancer (R1).
+  - Au plus 3 entrées, **constructions en cours comprises**. Une construction en cours n'est jamais évincée ; un index qu'aucune requête n'a encore vu ne l'est qu'après 30 s sans visite (`Grace`, R20). Si les 3 places sont prises ainsi, la requête reçoit `202` (progression 0) sans rien lancer (R1).
   - Un index inutilisé pendant **10 min** est retiré (R5) : l'objectif de 50 Mo « au repos » de §5.2 étape 4 vaut donc dès 10 min sans visite. `MaxHeaders` reste à 1 000 000 ; la tâche 3 mesure les octets par entrée.
   - `too_large` des plafonds d'octets et d'entrées reste en cache jusqu'au prochain arrêt du conteneur (ou au redémarrage de l'agent). Celui du plafond de durée expire après 5 min (Q11, R14). Toute autre erreur (Docker indisponible, `container_changed`) n'est pas gardée : le prochain accès relance.
   - La requête **qui lance** la construction attend au plus 1 s (`FirstWait`) : un petit conteneur (alpine : 250 ms mesurées au spike) répond sans 202. Les requêtes suivantes ne bloquent jamais : elles ne tiennent pas un créneau de la garde.
@@ -1278,10 +1287,11 @@ type Options struct {
 	MaxCached  int           // 0: 3
 	FirstWait  time.Duration // the request that starts a build waits that long; 0: no wait
 	IdleTTL    time.Duration // 0: 10 min
+	Grace      time.Duration // 0: 30 s
 	SlowRetry  time.Duration // 0: 5 min
 	ReadCgroup func(pid int) ([]byte, error) // nil: /proc/<pid>/cgroup
 }
-func DefaultOptions() Options // {DefaultIndexLimits, 3, time.Second, 10 min, 5 min, nil}
+func DefaultOptions() Options // {DefaultIndexLimits, 3, time.Second, 10 min, 30 s, 5 min, nil}
 func NewViews(docker dockerx.Client, opt Options) *Views
 func (v *Views) For(ctx context.Context, id string) (FS, error)
 func (v *Views) Forget(id string)
@@ -1588,6 +1598,39 @@ func TestViewsFourPolledAtOnce(t *testing.T) {
 	}
 }
 
+// R20: three builds finish but their requests went away. The fourth
+// container gets a slot once Grace has passed, not after IdleTTL.
+func TestViewsUnseenIndexesExpire(t *testing.T) {
+	f := stoppedDocker(t)
+	addStopped(t, f, "c2", "c3", "c4")
+	v := NewViews(f, Options{MaxCached: 3, Grace: 300 * time.Millisecond})
+	for _, n := range []string{"db", "c2", "c3"} {
+		v.For(tctx, n) // 202, then never asked again
+	}
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(time.Millisecond) {
+		v.mu.Lock()
+		done := 0
+		for _, b := range v.builds {
+			if finished(b) {
+				done++
+			}
+		}
+		v.mu.Unlock()
+		if done == 3 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("constructions jamais finies")
+		}
+	}
+	c4 := strings.Repeat("4", 64)
+	if _, err := v.For(tctx, "c4"); !errors.Is(err, ErrIndexing) || archiveCalls(f, c4, "/") != 0 {
+		t.Fatalf("pendant Grace : %v, %d construction(s) de c4 (attendu 202 et 0)", err, archiveCalls(f, c4, "/"))
+	}
+	time.Sleep(400 * time.Millisecond)
+	ready(t, v, "c4")
+}
+
 // Review I5: an index unused for IdleTTL is dropped.
 func TestViewsIdleTTL(t *testing.T) {
 	f := stoppedDocker(t)
@@ -1765,6 +1808,7 @@ type Options struct {
 	MaxCached int           // indexes kept, builds in progress included; 0: 3
 	FirstWait time.Duration // the request that starts a build waits that long before 202; 0: no wait
 	IdleTTL   time.Duration // an index unused that long is dropped (review I5); 0: 10 min
+	Grace     time.Duration // a finished index no request saw becomes evictable after that (R20); 0: 30 s
 	SlowRetry time.Duration // a too_large of the time cap expires after that (Q11); 0: 5 min
 	// ReadCgroup replaces the reading of /proc/<pid>/cgroup (spec §5.1 step 3).
 	// nil in production; tests give one to a process of their own.
@@ -1773,7 +1817,7 @@ type Options struct {
 
 // DefaultOptions and NewViews: see Interfaces. NewViews replaces every zero
 // or negative field of opt.Limits by DefaultIndexLimits', MaxCached by 3,
-// IdleTTL by 10 min, SlowRetry by 5 min, then returns
+// IdleTTL by 10 min, Grace by 30 s, SlowRetry by 5 min, then returns
 // &Views{docker, opt, builds: map[string]*build{}}.
 
 type build struct {
@@ -1785,8 +1829,9 @@ type build struct {
 	idx    *index
 	err    error
 	doneAt time.Time
-	served bool        // under v.mu: its result reached a request at least once
-	idle   *time.Timer // under v.mu: drops the finished index after IdleTTL unused
+	served  bool        // under v.mu: its result reached a request at least once
+	touched time.Time   // under v.mu: last request for it
+	idle    *time.Timer // under v.mu: drops the finished index after IdleTTL unused
 }
 
 func finished(b *build) bool {
@@ -1820,9 +1865,26 @@ func (v *Views) For(ctx context.Context, id string) (FS, error) {
 	return newTarFS(v.docker, info.ID, info.Mounts, idx, func() { v.drop(key, nil) }), nil
 }
 
-// Forget(id) removeLocked's every key whose build.id is id, under v.mu
-// (plan Explorateur 3, after a write: spec §5.2 step 1). drop(key, b)
-// removeLocked's key under v.mu, only if it still holds b (any build if b is nil).
+// Forget drops every index of container id (full ID): plan Explorateur 3
+// calls it after a write on a stopped container (spec §5.2 step 1).
+func (v *Views) Forget(id string) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	for k, b := range v.builds {
+		if b.id == id {
+			v.removeLocked(k)
+		}
+	}
+}
+
+// drop removes key if it still holds b (any build when b is nil).
+func (v *Views) drop(key string, b *build) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	if cur, ok := v.builds[key]; ok && (b == nil || cur == b) {
+		v.removeLocked(key)
+	}
+}
 
 func (v *Views) index(ctx context.Context, key string, info dockerx.ContainerInfo) (*index, error) {
 	v.mu.Lock()
@@ -1866,12 +1928,16 @@ func (v *Views) index(ctx context.Context, key string, info dockerx.ContainerInf
 }
 
 // startLocked starts the build of key, or returns nil when no slot can be
-// freed. Review I1: a build in progress is never evicted, nor an index no
-// request has seen yet; otherwise four containers polled at once would evict
-// each other forever. The victim is the least recently used of the others.
+// freed. Review I1: a build in progress is never evicted, nor, for Grace, an
+// index no request has seen yet; otherwise four containers polled at once
+// would evict each other forever. R20: past Grace, an unseen index (its
+// request went away) is evictable too. The victim is the least recently used.
 func (v *Views) startLocked(key string, info dockerx.ContainerInfo) *build {
 	for len(v.builds) >= v.opt.MaxCached {
-		i := slices.IndexFunc(v.order, func(k string) bool { b := v.builds[k]; return finished(b) && b.served })
+		i := slices.IndexFunc(v.order, func(k string) bool {
+			b := v.builds[k]
+			return finished(b) && (b.served || time.Since(b.touched) > v.opt.Grace)
+		})
 		if i < 0 {
 			return nil
 		}
@@ -1885,9 +1951,33 @@ func (v *Views) startLocked(key string, info dockerx.ContainerInfo) *build {
 	return b
 }
 
-// touchLocked moves key to the end of v.order and re-arms its idle timer.
-// removeLocked stops the idle timer, cancels the build of key, deletes it
-// from v.builds and from v.order (missing: no-op).
+// touchLocked records a request for key: last use, idle timer re-armed,
+// end of v.order (most recently used).
+func (v *Views) touchLocked(key string) {
+	b := v.builds[key]
+	b.touched = time.Now()
+	if b.idle != nil {
+		b.idle.Reset(v.opt.IdleTTL)
+	}
+	if i := slices.Index(v.order, key); i >= 0 {
+		v.order = append(slices.Delete(v.order, i, i+1), key)
+	}
+}
+
+// removeLocked stops the idle timer and cancels the build of key, then
+// forgets it (a missing key is a no-op).
+func (v *Views) removeLocked(key string) {
+	if b, ok := v.builds[key]; ok {
+		if b.idle != nil {
+			b.idle.Stop()
+		}
+		b.cancel()
+		delete(v.builds, key)
+	}
+	if i := slices.Index(v.order, key); i >= 0 {
+		v.order = slices.Delete(v.order, i, i+1)
+	}
+}
 
 func (v *Views) run(ctx context.Context, key string, b *build, info dockerx.ContainerInfo) {
 	defer b.cancel()
@@ -1910,6 +2000,9 @@ func (v *Views) run(ctx context.Context, key string, b *build, info dockerx.Cont
 	if err != nil && !errors.Is(err, ErrTooLarge) {
 		v.removeLocked(key) // not kept: the next access builds again
 		return
+	}
+	if err != nil {
+		return // a too_large holds no index: sticky until FinishedAt changes (Q11, R21)
 	}
 	// Review I5: spec §5.2 step 4 counts memory at rest; an index unused for
 	// IdleTTL goes away.
@@ -1954,7 +2047,7 @@ func (v *Views) buildFor(ctx context.Context, b *build, info dockerx.ContainerIn
   - §4 : « Un constructeur `fsview.For(ctx, docker, containerID)` renvoie `procfs` si le conteneur tourne, `tarindex` sinon. » → « Un `fsview.Views` par agent, qui garde le cache des index (§5.2) : `Views.For(ctx, containerID)` renvoie `procfs` si le conteneur tourne, `tarindex` sinon. »
   - §5.2 étape 2 : ajouter « La requête qui lance la construction attend au plus 1 s : un petit conteneur répond sans `202`. Les requêtes suivantes répondent tout de suite. »
   - §5.2 étape 3 : après « (valeurs proposées : 4 Gio, 5 minutes) », insérer « , et en nombre d'entrées (1 000 000) » ; à la fin de l'étape : « Après la fin du tar, un second `Inspect` doit montrer le conteneur arrêté avec le même `FinishedAt`, sinon l'index est jeté (`container_changed`). »
-  - §5.2 étape 4 : ajouter « Les constructions en cours comptent dans les 3, mais ne sont jamais évincées, pas plus qu'un index qu'aucune requête n'a encore vu : si aucune place ne se libère, la requête reçoit `indexing` sans rien lancer. Un index inutilisé pendant 10 min est retiré (mémoire au repos). Un `too_large` d'octets ou d'entrées reste en cache jusqu'au prochain arrêt ; celui du plafond de durée expire après 5 min ; toute autre erreur est retentée au prochain accès. »
+  - §5.2 étape 4 : ajouter « Les constructions en cours comptent dans les 3, mais ne sont jamais évincées ; un index qu'aucune requête n'a encore vu ne l'est qu'après 30 s sans visite. Si aucune place ne se libère, la requête reçoit `indexing` sans rien lancer. Un index inutilisé pendant 10 min est retiré (mémoire au repos) ; un `too_large`, qui ne contient pas d'index, n'est pas concerné. Un `too_large` d'octets ou d'entrées reste en cache jusqu'au prochain arrêt ; celui du plafond de durée expire après 5 min ; toute autre erreur est retentée au prochain accès. »
   - §5.2 étape 7 : après la phrase sur le volume `local` en `o=bind`, insérer « Comme pour le tar d'un dossier d'un conteneur actif (§5.4 a), sont refusés aussi les types de montage autres que bind, volume, tmpfs et image, les volumes `local` dont `type=` est un pseudo-système ou FUSE, les volumes d'un pilote tiers et ceux dont les options ne se lisent pas : `GET /archive` de `/` les traverse tous, et un volume qui ne répond pas bloquerait dockerd. »
   - §5.4 puce (a) : « Ces extensions ne valent pas, pour l'instant, pour l'explorateur d'un conteneur arrêté (§5.2) ; » → « Ces extensions valent aussi pour l'explorateur d'un conteneur arrêté (§5.2 étape 7) ; ».
 
@@ -2540,7 +2633,9 @@ func TestAliveReal(t *testing.T) {
 	if err := alive(cfd, cmd.Process.Pid); err != nil {
 		t.Fatalf("vivant : %v", err)
 	}
-	must(t, cmd.Process.Kill()) // not reaped: a zombie
+	// Not reaped: a zombie. A pidfd polls readable once its process exits,
+	// before the reap (Linux >= 5.3, already required by spec §5.1).
+	must(t, cmd.Process.Kill())
 	for deadline := time.Now().Add(5 * time.Second); !errors.Is(alive(cfd, cmd.Process.Pid), ErrContainerChanged); time.Sleep(time.Millisecond) {
 		if time.Now().After(deadline) {
 			t.Fatal("un zombie compte encore comme vivant")
@@ -2638,6 +2733,7 @@ func TestLocateMounts(t *testing.T) {
 		"/var/run/sock2":       {42, 5, 7}, // a second destination onto that mount
 		"/var/run/plain":       {20, 20, 99}, "/": {20, 20, 2}, // not a mount: on "/", another inode
 		"/data":                {20, 20, 2}, // links planted after a chroot lead /data to the root
+		"/data2":               {43, 30, 2}, // ... or /data2 to the root of another mount
 		"/var/run/x":           {43, 30, 2}, "/run/x": {43, 30, 2},
 		"/var/run/stale":       {77, 1, 1}, // ID absent from the table
 		"/var/run/other":       {42, 5, 8}, // same mount, another inode
@@ -2671,6 +2767,7 @@ func TestLocateMounts(t *testing.T) {
 		"autre inode":          {sock("/var/run/other")},
 		"introuvable":          {sock("/var/run/absent")},
 		"chroot vers /":        {{Type: "bind", Source: "/srv", Destination: "/data"}},
+		"chroot vers un autre montage": {{Type: "bind", Source: "/srv", Destination: "/data2"}},
 		"autre source":         {{Type: "bind", Source: "/srv/other.sock", Destination: "/var/run/docker.sock"}},
 		"autre volume":         {{Type: "volume", Name: "w", Destination: "/var/run/x"}},
 		"tmpfs":                {{Type: "tmpfs", Destination: "/var/run/docker.sock"}},
@@ -2888,7 +2985,7 @@ func (p *procFS) CheckArchive(ctx context.Context, dir string) error {
 - [ ] **Step 4: Vérifier**
 
 Run: `go test -race ./internal/fsview/ 2>&1 | tail -n 3 && scripts/test-linux.sh -race ./internal/fsview/ -run 'CheckArchive|Locate' -v 2>&1 | grep -E '^(---|ok|FAIL)' && scripts/test-linux.sh -tags integration ./internal/fsview/ -run 'DockerSocket|CheckArchive' 2>&1 | tail -n 3`
-Expected: `ok` ; sous Linux, `TestCheckArchiveDestinationUnderSymlink` **PASS** (pas SKIP). Si `TestIntegrationDockerSocketUnderVarRun` échoue sur Docker Desktop, la racine du montage ne termine pas la `Source` d'`Inspect` (socket mandataire) : relever les deux valeurs et en discuter avant tout assouplissement. Mutations : retirer `sameMount` → « chroot vers / » et « autre source » rougissent ; retirer le second `ident` → « autre inode » rougit.
+Expected: `ok` ; sous Linux, `TestCheckArchiveDestinationUnderSymlink` **PASS** (pas SKIP). Si `TestIntegrationDockerSocketUnderVarRun` échoue sur Docker Desktop, la racine du montage ne termine pas la `Source` d'`Inspect` (socket mandataire) : relever les deux valeurs et en discuter avant tout assouplissement. Mutations : retirer `sameMount` → « chroot vers un autre montage », « autre source » et « autre volume » rougissent (« chroot vers / » reste refusé par `P ≠ "/"`) ; retirer le second `ident` → « autre inode » rougit.
 
 - [ ] **Step 5: Commit**
 
