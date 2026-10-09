@@ -313,6 +313,32 @@ func TestTarHopBudget(t *testing.T) {
 	}
 }
 
+// Review I1: a path the index does not know (absent, excluded, behind a file)
+// is refused from the index, never looked up in Docker: the /proc and /sys
+// traps are armed and must not be asked for.
+func TestTarOpenAbsent(t *testing.T) {
+	cases := []struct {
+		path string
+		want error
+	}{
+		{"/proc/kallsyms", fs.ErrNotExist}, {"/sys/kernel/x", fs.ErrNotExist},
+		{"/nope", fs.ErrNotExist}, {"/dangling", fs.ErrNotExist}, {"/empty", fs.ErrNotExist},
+		{"/k", fs.ErrNotExist}, // link to an excluded path
+		{"/etc/passwd/x", ErrNotDir}, {"/etc/passwd/", ErrNotDir},
+	}
+	for _, c := range cases {
+		v := newTarView(t, nil, append(image(), tlink("/k", "/proc/kallsyms"))...)
+		b, err := readTar(v, c.path)
+		noLeak(t, v, b)
+		if !errors.Is(err, c.want) {
+			t.Errorf("Open(%s) : %v, attendu %v", c.path, err, c.want)
+		}
+		if err := v.CheckOpen(tctx, c.path); !errors.Is(err, c.want) {
+			t.Errorf("CheckOpen(%s) : %v, attendu %v", c.path, err, c.want)
+		}
+	}
+}
+
 func TestTarOpenRefusesNonRegular(t *testing.T) {
 	for _, p := range []string{"/dev/null", "/dev/sda", "/run.fifo", "/etc", "/lib", "/"} {
 		v := newTarView(t, nil, image()...)
