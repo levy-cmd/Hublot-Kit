@@ -10,6 +10,7 @@
 > - Mutations (une fois chacune, puis annulées) : `fsys.Stat` à la place de `fsys.StatNoLinks` dans `files.go` → `TestProcLinksRefused` (« ÉVASION : PutArchive appelé malgré un lien ») et `TestLinksRefused` échouent ; contexte de la requête passé tel quel à `PutArchive` → `TestPutSurvivesRequestEnd` échoue.
 > - Mesuré sur Docker Desktop : le refus d'écriture sur un rootfs `--read-only` ou un volume `:ro` est un `InvalidArgument` (`container rootfs is marked read-only`, `mounted volume is marked read-only`) ; un dossier absent est un `NotFound` ; Docker **supprime puis recrée** le fichier (inode 570993 → 320851) ; sans `copyUIDGID`, le mode et l'uid/gid du tar sont gardés (`640 1000 1001`) ; l'écriture marche sur un conteneur en pause.
 > - Interface : CodeMirror installé aux versions de la tâche 6 ; Vitest 54 tests verts ; `npm run check` 0 erreur ; `npm run lint` propre ; `vite build` : CodeMirror et ses langages ne sont atteints que par `import()` dynamique (le nœud de la page conteneur pèse 22 Ko). `scripts/e2e.sh` : le parcours unique passe, et le parcours jetable d'écriture de la tâche 7 (non commité) passe contre un vrai agent, sous la CSP.
+> - **Revérifié après la revue 1** (même méthode : copie reconstruite depuis les blocs du plan `a43755e`, corrections appliquées, puis supprimée). `go vet` (avec et sans `-tags integration`) en macOS et `GOOS=linux`, `go test -race` macOS, `scripts/test-linux.sh -race -tags integration ./cmd/... ./internal/...` : verts, aucun SKIP. Mutations nouvelles : verrou retiré → `TestWritesAreSerialized` échoue ; `fstatfs` retiré de `procFS.StatNoLinks` → `TestProcPseudoFSRefused` échoue. Vitest 55 tests, `check`, `lint`, `build` verts ; parcours jetable rejoué, avec un fichier CRLF relu octet pour octet après édition (`un 1\r\ndeux\r\n`). Mesuré en plus (Docker Desktop) : écrire dans `/dev`, `/dev/shm` ou un `--tmpfs` d'un conteneur actif réussit sans que le conteneur voie le fichier ; `/run` (pas un tmpfs) est vu ; `/etc/hosts` d'un conteneur jamais démarré s'écrit (`HostsPath` vide), Docker le masquera au démarrage ; `mime.ParseMediaType` décode `filename*=UTF-8''..%2Fx` en `../x`, `filename="a\/b"` en `a/b`, et préfère `filename*` à `filename`.
 > - **Non vérifié** : les VM `hk-ubuntu` et `hk-fedora` (tâche 8).
 
 **Goal:** L'utilisateur modifie un fichier texte d'un conteneur, actif ou arrêté, dans un éditeur CodeMirror, ou y envoie un fichier. Chaque écriture passe par une confirmation qui nomme le conteneur et le chemin, est journalisée avant et après, et n'écrit jamais à travers un lien.
@@ -19,6 +20,21 @@
 **Tech Stack:** Go 1.27 (`archive/tar`, `mime/multipart`, `net/http`), `github.com/moby/moby/client` v0.6.1 (`CopyToContainer`), `github.com/cyphar/filepath-securejoin` v0.7.0 (inchangé), `golang.org/x/sys` v0.48.0 ; SvelteKit 3 / Svelte 5, Vitest, CodeMirror 6 (`codemirror` 6.0.2, `@codemirror/state` 6.7.6, `@codemirror/view` 6.43.14, `@codemirror/language` 6.13.1, `@codemirror/lang-json` 6.0.2, `@codemirror/lang-yaml` 6.1.3, `@codemirror/lang-javascript` 6.2.5, `@codemirror/lang-python` 6.2.1, `@codemirror/legacy-modes` 6.5.5).
 
 **Spec:** `docs/superpowers/specs/2026-10-07-hublot-kit-v0.1-design.md` (§3, §4, §5.2 étape 1, §5.3, §5.4, §6, §7, §9, §10, §13). Périmètre : `docs/superpowers/plans/2026-10-08-explorateur-1-procfs.md`, « Découpage de la phase Explorateur », bloc « Plan 3 ». Plan précédent (format, décisions en vigueur, Q1 à Q13) : `docs/superpowers/plans/2026-10-09-explorateur-2-tarindex-diff.md`.
+
+## Décisions de revue
+
+Revue du plan, premier tour (relecteur Opus et Codex, « Prêt avec réserves »). Une ligne par correction, avec la tâche qui l'applique.
+
+- **R1 (Opus I1) :** l'éditeur rendait `doc.toString()`, qui joint toujours par LF : un fichier CRLF était enregistré en LF (mesuré, `@codemirror/state` 6.7.6). `editor.ts` gagne `docText(state)` = `state.sliceDoc()`, qui garde le séparateur de l'état ; test Vitest d'aller-retour (CRLF, LF, CR isolé) ; le parcours jetable édite un fichier CRLF. → Tâches 6, 7.
+- **R2 (Opus I4) :** les écritures ne se sérialisaient pas : deux onglets avec le même `If-Match`, ou deux envois du même nom, écrivaient tous deux. `Writer` prend un verrou par conteneur de l'étape 2 à l'étape 6, abandonné avec la requête. Test `TestWritesAreSerialized`, écrit d'abord. → Tâches 2, 3 ; Q23.
+- **R3 (Codex) :** `Upload` vérifiait `If-None-Match` avant le nom et le chemin. Ordre de §5.3 : étape 2 (nom, chemin, parent), puis étape 3 (précondition, existence). Tests `TestUploadChecksPathBeforePrecondition` et, par la route, `../x` sans `If-None-Match` → `invalid_name`. → Tâches 2, 3, 4.
+- **R4 (Opus Q19, Codex) :** noms refusés en plus : non UTF-8, caractères de contrôle (C0, DEL, C1), `\`. La valeur validée est celle que `mime.ParseMediaType` décode (`filename*` RFC 2231, paires entre guillemets) : c'est elle qui part dans le tar. Test `TestUploadNameIsTheDecodedValue`. → Tâches 2, 3, 4 ; Q19.
+- **R5 (Opus Minor 1) :** `InvalidArgument` → `ErrRefused` se limite à `PutArchive` (`wrapPut`) ; `wrap`, donc les routes de lecture, ne change pas. → Tâche 1 ; Q15.
+- **R6 (Opus Minor 2, Codex) :** une requête déjà terminée (la garde a répondu 504) ne commence pas d'écriture (`TestEndedRequestWritesNothing`) ; après un 504, l'interface dit que l'écriture a peut-être eu lieu ; la troncature au-delà d'une minute est une limite de §13. → Tâches 3, 6, 8 ; Q17.
+- **R7 (Opus I2) :** Docker écrit dans sa propre vue des montages. Refus avant l'intention, par l'`Inspect` : `/etc/hosts`, `/etc/hostname`, `/etc/resolv.conf`, la `Destination` d'un montage, tout chemin sous un tmpfs (`Mounts` de type `tmpfs` et `HostConfig.Tmpfs`, nouveau champ `ContainerInfo.Tmpfs`), sous `/dev`, `/proc` ou `/sys` → `forbidden_path` qui nomme la cause. Tests d'abord (`TestRefusesWhereDockerDoesNotWrite`), intégration `--tmpfs` et `/etc/hosts`. → Tâches 1, 2, 3, 5 ; Q21.
+- **R8 (Opus I3, Codex Critical 1 et 2) :** la règle `fsview.HostBind` (§5.2 étape 7 et ses extensions) s'applique à toute écriture, conteneur actif compris. Test `TestHostBindRefusesEveryWrite`, écrit d'abord. → Tâches 2, 3 ; Q22.
+- **R9 :** avec R7, `TestProcPseudoFSRefused` serait passé par la règle de préfixe, plus par `fstatfs`. Il sert désormais le `/proc` de l'hôte comme racine (`/`, `/version`) : seul `fstatfs` refuse ; mutation vérifiée. → Tâche 2.
+- **R10 (Minor) :** volume `:ro` testé (tâche 1) ; `EDIT_MAX` refuse avant la confirmation (tâche 7) ; `/api/meta` n'est plus demandé deux fois, la page lit `readOnly` dans un contexte du layout (tâche 7) ; contrôle `MARKER` décoratif retiré (tâche 2) ; userns-remap, extraction chrootée de dockerd et vue des montages écrits dans §5.3 et §13 (tâche 8) ; la taille et la lecture seule passent avant l'étape 2, noté dans « Décisions » ; « Structure des fichiers » complétée.
 
 ## Ce que les plans précédents ont préparé
 
@@ -30,20 +46,23 @@
 
 ## Décisions de ce plan (la spec ne tranche pas)
 
-- **`files.Writer`.** `Writer{ReadOnly, Docker, Audit, Open, Forget}`, méthodes `Allowed()`, `Edit(ctx, id, p, content, ifMatch) (etag, error)`, `Upload(ctx, id, dir, name, content, ifNoneMatch) (path, error)`. `Open` vaut `Deps.OpenFS` (donc `Views.For`) et `Forget` vaut `Views.Forget` : `files` ne connaît ni `procfs` ni `tarindex`. Les interfaces étroites `Putter` et `Auditor` laissent les tests compter les appels. → Tâches 2, 3.
+- **`files.Writer`.** `Writer{ReadOnly, Docker, Audit, Open, Forget}`, méthodes `Allowed()`, `Edit(ctx, c, p, content, ifMatch) (etag, error)`, `Upload(ctx, c, dir, name, content, ifNoneMatch) (path, error)`, où `c` est l'`Inspect` que la route a déjà fait (`dockerx.ContainerInfo`). `Open` vaut `Deps.OpenFS` (donc `Views.For`) et `Forget` vaut `Views.Forget` : `files` ne connaît ni `procfs` ni `tarindex`. `Docker` est un `dockerx.Client` complet : `HostBind` lit les options des volumes (R8). L'interface étroite `Auditor` laisse les tests ordonner l'audit et l'écriture. → Tâches 2, 3.
+- **Ordre exact.** Lecture seule ; plafond de taille (un refus sans contact avec le conteneur, avant §5.3) ; étape 2 : nom (envoi), `writable` sur l'`Inspect` (R7, R8), verrou du conteneur (R2), vue, `StatNoLinks` du parent ou de la cible ; étape 3 : `If-Match` (relecture) ou `If-None-Match` puis existence ; étapes 4 à 6 dans `put`. → Tâche 3.
 - **Lecture seule à un seul endroit (§7).** `files` refuse en premier (`ErrReadOnly`), avant même d'ouvrir la vue. La route appelle `files.Allowed()` avant de lire le corps, pour ne pas lire 32 Mio pour rien ; c'est toujours `files` qui décide. → Tâches 3, 4.
 - **Chemin d'écriture.** Édition : `fsview.CleanPath(p)`. Envoi : `fsview.CleanPath(parent + "/" + nom)`, avec un nom déjà validé ; jamais `path.Join` ni `filepath.Join`. `PutArchive` reçoit `path.Dir` de ce chemin, et rien d'autre. → Tâche 3.
 - **Existence avant un envoi.** `StatNoLinks(chemin)` : absent (`fs.ErrNotExist`) → on continue ; lien, même pendant → `link_in_path` (`openat2` refuse un lien en dernier composant sans le suivre : vérifié sous Linux) ; toute autre entrée → `conflict`. C'est la sémantique `lstat` de §5.3 étape 3, sans `fstatat` à écrire dans `fsview`. → Tâches 2, 3.
 - **Tar d'une entrée.** Nom de base, `Mode` par `fsview.UnixPerm` (setuid, setgid et sticky gardés), `Uid`, `Gid`, `ModTime` = maintenant. Nouveau fichier : `0644`, uid/gid du dossier parent. Pas de `copyUIDGID` : Docker donnerait le fichier à l'utilisateur configuré du conteneur. `noOverwriteDirNonDir` reste (défaut du client) : Docker ne remplace jamais un dossier par un fichier. → Tâches 1, 3.
 - **Audit.** `file.write` ou `file.upload`, `container` = ID complet, `path` = chemin d'écriture, `result` = `intent` puis `ok` ou `error` (avec `error`). Une intention qui ne s'écrit pas arrête tout (`internal`, rien n'est écrit). Un résultat qui ne s'écrit pas part dans les logs (`slog.Error`) : l'écriture a eu lieu, la masquer pousserait à la refaire. Les refus avant l'étape 4 ne sont pas journalisés (rien n'a été tenté). → Tâche 3.
+- **Verrou.** Un canal de capacité 1 par ID de conteneur, créé à la première écriture, jamais retiré (un par conteneur écrit, quelques octets). L'attente s'arrête avec la requête (`ctx`). → Tâche 3 ; Q23.
 - **Corps lu avant la garde.** Un client lent ne tient pas un créneau de la garde (§13) pendant qu'il envoie. L'écriture elle-même prend un créneau : `StatNoLinks` peut buter sur un FUSE. → Tâche 4.
 - **Réponses.** `PUT /fs/file` → `200 {"etag":"\"…\""}` et en-tête `ETag` (l'interface continue d'éditer sans relire). `POST /fs/upload` → `201 {"path":"/…","etag":"\"…\""}`. → Tâche 4.
 - **Multipart.** Une seule partie utile, `file` ; les autres sont ignorées ; aucune partie `file` → nom vide → `invalid_name`. Le nom est le `filename` **brut** (Q19). → Tâche 4.
 - **Statuts.** `read_only` 403, `conflict` 409, `invalid_name` 400, `too_large` 413 (corps au-delà de `http.MaxBytesReader` compris). → Tâche 4.
 - **Lien physique d'un conteneur arrêté.** `StatNoLinks` le montre comme un fichier ; l'éditer le remplace par un fichier ordinaire (Docker supprime puis recrée, comme sur un conteneur actif). Pas de refus : c'est le comportement de `docker cp`.
 - **Interface.**
-  - `readOnly` vaut `true` tant que `/api/meta` n'a pas répondu : les boutons d'écriture n'apparaissent jamais par erreur (§9).
-  - L'éditeur garde le séparateur de lignes du fichier (`EditorState.lineSeparator`) ; un fichier non UTF-8 ou à fins de ligne mélangées n'est pas modifiable (Q16).
+  - `readOnly` vient du `/api/meta` du layout, par un contexte (`setContext('readOnly', …)`), et vaut `true` tant qu'il n'a pas répondu : les boutons d'écriture n'apparaissent jamais par erreur (§9).
+  - Un texte de plus de 2 Mio (`EDIT_MAX`, en octets UTF-8) est refusé avant la confirmation. Après un `504`, le message dit que l'écriture a peut-être eu lieu (R6).
+  - L'éditeur garde le séparateur de lignes du fichier (`EditorState.lineSeparator`, relu par `sliceDoc`, R1) ; un fichier non UTF-8 ou à fins de ligne mélangées n'est pas modifiable (Q16).
   - CodeMirror lui-même est chargé à l'ouverture de l'éditeur, pas seulement les langages : le téléphone (§9, consultation) ne le télécharge jamais.
   - Boîte de confirmation : `<dialog>` natif, le bouton Annuler a le focus ; elle rappelle le nom du conteneur, ses 12 premiers caractères d'ID, le chemin, la taille (envoi) et, pour un conteneur arrêté, que l'index sera reconstruit.
   - Après un `conflict`, l'éditeur reste ouvert : l'utilisateur copie ses modifications avant de recharger.
@@ -57,24 +76,31 @@ Le plan suit la recommandation de chaque question ; une réponse différente cha
 
 - **Q14 — Plafond de taille d'une édition et d'un envoi.** La spec n'en fixe pas.
   - *Recommandation :* édition **2 Mio**, envoi **32 Mio**, tenus en mémoire. Raisons : l'éditeur ne reçoit que ce que l'aperçu a servi, et l'aperçu s'arrête à 2 Mio (§6) ; au-delà, l'`ETag` n'existe pas. 32 Mio couvrent un fichier de configuration, un petit binaire ou un certificat, le cas « je corrige mon conteneur ». Le contenu est lu en entier avant `PutArchive` (l'en-tête tar exige la taille), puis le tar en double la place : 64 Mio au pire, un instant, pour un seul utilisateur. Plus gros : `docker cp`, que le message d'erreur nomme. Le hachage du fichier actuel est lu au plus jusqu'à 2 Mio + 1 octet (`too_large` au-delà). → Tâches 3, 4, 6.
-- **Q15 — Refus de Docker (rootfs `--read-only`, volume `:ro`).** Docker répond `InvalidArgument` (mesuré) ; `wrap` le classait en `docker_unavailable` (503), ce qui accuse le démon à tort.
-  - *Recommandation :* `dockerx.ErrRefused` → `read_only` (403), avec le message de Docker en détail. L'interface dit « Écriture refusée : la cible est en lecture seule (container rootfs is marked read-only) ». Aucun code nouveau dans §6. → Tâches 1, 4, 6.
+- **Q15 — Refus de Docker (rootfs `--read-only`, volume `:ro`).** Docker répond `InvalidArgument` (mesuré sur les deux) ; `wrap` le classait en `docker_unavailable` (503), ce qui accuse le démon à tort.
+  - *Recommandation :* pour `PutArchive` seulement (`wrapPut`, R5), `InvalidArgument` → `dockerx.ErrRefused` → `read_only` (403), avec le message de Docker en détail. Les routes de lecture gardent `docker_unavailable`. L'interface dit « Écriture refusée : la cible est en lecture seule (container rootfs is marked read-only) ». Aucun code nouveau dans §6. → Tâches 1, 4, 6.
 - **Q16 — Fichier non UTF-8, BOM, fins de ligne CRLF.** `res.text()` remplace les octets invalides par U+FFFD et retire le BOM ; CodeMirror réécrit toutes les fins de ligne en `\n` par défaut. Enregistrer changerait donc des octets que l'utilisateur n'a pas touchés.
-  - *Recommandation :* décodage strict (`TextDecoder` `fatal`, `ignoreBOM`) ; non UTF-8 → aperçu seul, avec un message ; CRLF ou LF uniformes → éditables, avec le même séparateur ; mélange → aperçu seul. Pas de choix d'encodage en v0.1. → Tâches 6, 7.
+  - *Recommandation :* décodage strict (`TextDecoder` `fatal`, `ignoreBOM`) ; non UTF-8 → aperçu seul, avec un message ; CRLF ou LF uniformes → éditables, avec le même séparateur, relu par `state.sliceDoc()` (jamais `doc.toString()`, qui rend du LF : R1) ; mélange → aperçu seul. Pas de choix d'encodage en v0.1. → Tâches 6, 7.
 - **Q17 — Écriture coupée.** Docker supprime le fichier puis le recrée (mesuré : l'inode change). Si la requête HTTP vers Docker s'arrête au milieu (onglet fermé, délai de 10 s de la garde), le fichier peut disparaître ou rester tronqué.
-  - *Recommandation :* une fois l'intention journalisée, `PutArchive` reçoit un contexte détaché de la requête (`context.WithoutCancel`), borné à 1 min (`PutTimeout`). Le tar est construit en mémoire avant l'appel. L'écriture reste non atomique (pas d'API Docker pour écrire à côté puis renommer) : limite ajoutée à §5.3 et §13. → Tâches 3, 8.
+  - *Recommandation :* une requête déjà terminée ne commence rien (`ctx.Err()` avant l'intention, R6). Une fois l'intention journalisée, `PutArchive` reçoit un contexte détaché de la requête (`context.WithoutCancel`), borné à 1 min (`PutTimeout`). Le tar est construit en mémoire avant l'appel. La garde peut répondre `504` pendant que l'écriture continue : l'interface dit alors « l'écriture a peut-être eu lieu, rechargez avant de réessayer ». Restent des limites de §13 : l'écriture n'est pas atomique (pas d'API Docker pour écrire à côté puis renommer), et une écriture qui dépasse la minute est coupée, fichier perdu ou tronqué. → Tâches 3, 6, 8.
 - **Q18 — `If-Match` absent ou mal formé, `If-None-Match` absent.** La spec dit « obligatoire » sans code ; `428 Precondition Required` n'est pas un code de §6.
   - *Recommandation :* `conflict` (409) dans les trois cas. `If-Match` doit être exactement l'`ETag` de l'aperçu (`"<64 hex>"`) : ni `*`, ni `W/…`, ni hex sans guillemets. → Tâches 2, 3.
 - **Q19 — Nom d'un envoi.** `multipart.Part.FileName()` ne garde que le nom de base : `a/b` deviendrait `b` au lieu d'être refusé (§10 exige `invalid_name`).
-  - *Recommandation :* lire le `filename` brut de `Content-Disposition`. Refuser aussi l'octet nul et plus de 255 octets (`NAME_MAX`), que Docker refuserait de toute façon, avec un message moins clair. Limite connue : un navigateur encode `"`, CR et LF dans un nom de fichier (`%22`…), le fichier arrive sous ce nom encodé. → Tâches 2, 4.
+  - *Recommandation :* lire le `filename` de `Content-Disposition` tel que `mime.ParseMediaType` le décode (`filename*` RFC 2231 prioritaire, paires entre guillemets), et valider **cette** valeur, celle qui part dans le tar (R4). Refuser aussi l'octet nul, plus de 255 octets (`NAME_MAX`), un nom non UTF-8 (l'interface ne pourrait plus l'ouvrir, §13), les caractères de contrôle C0, DEL et C1 (un saut de ligne fausserait la boîte de confirmation) et `\`. Limite connue : un navigateur encode `"`, CR et LF dans un nom de fichier (`%22`…), le fichier arrive sous ce nom encodé. → Tâches 2, 3, 4.
 - **Q20 — Index retiré même après un échec.** §5.3 étape 6 dit « en cas de succès ».
   - *Recommandation :* `Forget` après **tout** `PutArchive`. Un échec peut avoir supprimé le fichier (Q17) ; un index qui le montrerait encore mentirait. Le coût est une réindexation. → Tâches 2, 3, 8.
+- **Q21 — Où Docker écrit vraiment.** `PUT /archive` extrait dans la vue de dockerd : le rootfs plus les montages configurés, pas l'espace de noms de montage du conteneur (mesuré par Opus et ici). Un fichier monté seul (`-v ./conf.yml:/app/conf.yml`) ou `/etc/hosts` → HTTP 500 « device or resource busy », traduit en `503 docker_unavailable` trompeur. Un `--tmpfs`, `/dev`, `/dev/shm` → 200, mais le conteneur ne voit jamais le fichier : faux succès, audit `ok`.
+  - *Recommandation :* refuser avant l'intention, à partir de l'`Inspect` (`files.writable`) : chemin égal à `/etc/hosts`, `/etc/hostname`, `/etc/resolv.conf` (toujours : Docker les monte à chaque démarrage, même s'ils sont encore absents d'un conteneur jamais démarré) ; égal à la `Destination` d'un montage (« modifiez sa source ») ; sous un tmpfs (`Mounts` de type `tmpfs`, `HostConfig.Tmpfs` → `ContainerInfo.Tmpfs`) ; sous `/dev`, `/proc` ou `/sys`, que le runtime monte au démarrage (couvre aussi le conteneur arrêté, Opus Minor 4). Code `forbidden_path` (403) : le chemin est interdit en écriture, et le détail nomme la cause. Un dossier monté par bind reste inscriptible : Docker y écrit, le conteneur le voit. Reste non détecté : une `Destination` sous un lien du conteneur (le chemin sans lien diffère du texte de Docker), où Docker répond encore 500 ; limite de §13. → Tâches 1, 2, 3, 5, 8.
+- **Q22 — Écrire à travers un bind de l'hôte.** Avec `-v /:/host`, un conteneur arrêté est refusé en entier (§5.2 étape 7), mais un conteneur actif laissait écrire dans `/host/etc`. Et la course que §5.3 assume (un composant remplacé par un lien entre `StatNoLinks` et `PutArchive`) laisse Docker suivre ce lien dans **sa** vue du conteneur, jusqu'à un autre montage, bind de l'hôte compris.
+  - Options : (a) appliquer `fsview.HostBind` et ses extensions (volumes `local` en `o=bind`, pilotes tiers, options illisibles, types inconnus) à toute écriture, conteneur actif compris, fermé et cohérent avec le conteneur arrêté ; (b) écrire dans §7 que l'écriture à travers un bind de l'hôte est permise, comme la lecture.
+  - *Recommandation :* (a), pour tout le conteneur (R8). Pour la course : aucun montage dangereux n'existe plus dans la vue de Docker, la redirection ne peut atteindre que le rootfs du conteneur ou ses montages ordinaires, que le conteneur peut déjà écrire lui-même (un montage `:ro` reste refusé par Docker, Q15). Le résidu (un fichier écrit par root avec le propriétaire du tar dans un bind ordinaire où le process du conteneur n'a pas le droit d'écrire) entre dans §13. La lecture garde la règle de §7 ; un conteneur de supervision qui monte `/` reste lisible, plus inscriptible. → Tâches 2, 3, 8.
+- **Q23 — Portée du verrou.** Par conteneur, par chemin, ou global ?
+  - *Recommandation :* par conteneur. Les écritures sont rares (un utilisateur, un clic confirmé chacune) : la contention est nulle. Un verrou par chemin demanderait de raisonner sur un envoi dans un dossier pendant l'édition d'un fichier voisin, et sur deux chemins qui désignent le même inode (lien physique). Un verrou global bloquerait sans raison deux conteneurs, dont l'un peut attendre une minute (`PutTimeout`). L'attente s'arrête avec la requête : au pire, la garde répond `504` (Q17). → Tâche 3.
 
 ## Global Constraints
 
 - **Module et dépendances Go** : module `github.com/levy-cmd/hublot-kit` ; dépendances autorisées (§3) : SDK Docker `github.com/moby/moby/client`, `github.com/cyphar/filepath-securejoin` **v0.7.0** (`pathrs-lite`), `golang.org/x/sys` **v0.48.0**. Aucune autre. Interface : CodeMirror 6 seulement (§3 : « langages chargés à la demande : JSON, YAML, JavaScript, Python, shell, texte brut »), pas de bibliothèque de composants.
 - **Accès aux fichiers d'un conteneur (CLAUDE.md, §5).** `files` n'ouvre aucun chemin : tous ses contrôles passent par `fsview.FS` (`StatNoLinks`, `Open`), toutes ses écritures par `dockerx.PutArchive`. **Jamais** `filepath.Join`, `path.Join` ni `os.Open` sur un chemin du conteneur. `PutArchive` reçoit exactement le parent du chemin vérifié (§5.3 étape 5).
-- **Ordre de §5.3, dans une seule fonction** : lecture seule → contrôle du chemin → `If-Match` / `If-None-Match` → audit (intention) → `PutArchive` → audit (résultat) → `Forget`.
+- **Ordre de §5.3, dans une seule fonction** : lecture seule → contrôle du chemin (nom, `Inspect`, verrou, vue) → `If-Match` / `If-None-Match` → audit (intention) → `PutArchive` → audit (résultat) → `Forget` → verrou rendu.
 - **Tests d'évasion avant le code qu'ils protègent** (CLAUDE.md), voir « Ordre ». Chaque refus est prouvé par l'absence de tout appel à `PutArchive` et de toute ligne d'audit, **même quand une erreur est renvoyée**. Un piège a son contrôle (le lien mène bien hors de la racine). Un test ne se saute que sur une condition exacte, nommée dans le message.
 - **Code Linux** testé sous Linux (`scripts/test-linux.sh`, VM) : `files_linux_test.go` (`//go:build linux`) ; `go test ./cmd/... ./internal/...` reste vert sur macOS. **Jamais** de test qui monte le `/proc`, le `/sys` ou le `/` de l'hôte dans un conteneur puis demande un tar ; `TestProcPseudoFSRefused` sert la racine `/` du conteneur de test par `NewProcFS`, sans Docker.
 - **Erreurs API** : `{"error": "<code>", "detail": "<texte>"}`, codes de §6 uniquement ; `202` porte en plus `progress`.
@@ -85,11 +111,11 @@ Le plan suit la recommandation de chaque question ; une réponse différente cha
 
 ## Review Focus
 
-1. **Le fichier change dans le conteneur entre l'ouverture et l'enregistrement** (un process le réécrit, ou un autre onglet l'a enregistré) : `conflict`, rien n'est écrit, et l'éditeur reste ouvert pour que l'utilisateur copie ses modifications. → Tâche 2 `TestEditIfMatch` ; tâche 5 `TestIntegrationWriteStopped` (ancien `If-Match` → 409) ; tâche 7 (éditeur gardé, parcours jetable).
+1. **Le fichier change dans le conteneur entre l'ouverture et l'enregistrement** (un process le réécrit, ou un autre onglet l'a enregistré, même au même instant) : `conflict`, rien n'est écrit, et l'éditeur reste ouvert pour que l'utilisateur copie ses modifications. → Tâche 2 `TestEditIfMatch`, `TestWritesAreSerialized` ; tâche 5 `TestIntegrationWriteStopped` (ancien `If-Match` → 409) ; tâche 7 (éditeur gardé, parcours jetable).
 2. **La requête s'arrête pendant l'écriture** (onglet fermé, délai de 10 s de la garde, réseau coupé) : l'écriture commencée va au bout et son résultat est journalisé, sans fichier tronqué par une coupure de notre côté. → Tâche 2 `TestPutSurvivesRequestEnd`.
-3. **Fichier non UTF-8, avec BOM, en CRLF ou à fins de ligne mélangées** : jamais réécrit en silence. → Tâche 6 `decodeUtf8`, `lineSeparatorOf`, `previews text` (`utf8: false`) ; tâche 7 (bouton absent, message).
-4. **Nom d'envoi inhabituel** (`a/b` brut, `..`, vide, octet nul, 256 octets, nom d'un lien pendant, nom existant) : refus, rien n'est écrit, rien n'est remplacé. → Tâche 2 `TestUploadInvalidName`, `TestUploadNeverReplaces`, `TestProcLinksRefused` ; tâche 4 `TestWriteRoutesErrors` (`a/b` brut, sans champ `file`).
-5. **Cible en lecture seule côté Docker** (`--read-only`, volume `:ro`) : `read_only` avec le message de Docker, jamais `docker_unavailable`. → Tâche 1 `TestPutArchiveRealDocker` ; tâche 4 `TestWriteDockerRefused` ; tâche 5 `TestIntegrationWriteStopped`.
+3. **Fichier non UTF-8, avec BOM, en CRLF ou à fins de ligne mélangées** : jamais réécrit en silence. → Tâche 6 `decodeUtf8`, `lineSeparatorOf`, `docText`, `previews text` (`utf8: false`) ; tâche 7 (bouton absent, message, aller-retour CRLF du parcours jetable).
+4. **Nom d'envoi inhabituel** (`a/b` brut ou encodé RFC 2231, `..`, vide, octet nul, saut de ligne, `\`, non UTF-8, 256 octets, nom d'un lien pendant, nom existant, deux envois simultanés) : refus, rien n'est écrit, rien n'est remplacé. → Tâche 2 `TestUploadInvalidName`, `TestUploadNeverReplaces`, `TestWritesAreSerialized`, `TestProcLinksRefused` ; tâche 4 `TestWriteRoutesErrors`, `TestUploadNameIsTheDecodedValue`.
+5. **Cible que Docker n'écrit pas comme le conteneur la voit** (`--read-only`, volume `:ro`, fichier monté, `/etc/hosts`, tmpfs, `/dev`) : un refus clair qui nomme la cause, jamais `docker_unavailable` ni un faux succès. → Tâche 1 `TestPutArchiveRealDocker` ; tâche 2 `TestRefusesWhereDockerDoesNotWrite` ; tâche 4 `TestWriteDockerRefused` ; tâche 5 `TestIntegrationWriteStopped`, `TestIntegrationWriteRunning`.
 
 ## Ordre : chaque test d'évasion précède le code qu'il protège
 
@@ -99,7 +125,10 @@ Le plan suit la recommandation de chaque question ; une réponse différente cha
 | Non régulier refusé sans bloquer (FIFO), pseudo-système refusé (`fstatfs`) (§5.3 ét. 2) | Tâche 2 (`TestProcNotRegular`, `TestProcPseudoFSRefused`) | Tâche 3 |
 | Lecture seule d'abord, `If-Match`, `If-None-Match`, noms d'envoi (§5.3 ét. 1 à 3) | Tâche 2 | Tâche 3 |
 | Ordre audit → écriture → audit, chemin exact envoyé à `PutArchive`, index retiré (§5.3 ét. 4 à 6) | Tâche 2 (`TestEditOrderAndTar`, `TestProcWriteSendsExactPath`, `TestStoppedContainerIndexDropped`) | Tâche 3 |
-| Câblage par les routes : session, `Origin`, codes, nom brut | Tâche 4, étape 1 | Tâche 4, étape 3 |
+| Écriture refusée pour un conteneur dont un montage expose l'hôte, actif compris (§5.2 ét. 7, Q22) | Tâche 2 (`TestHostBindRefusesEveryWrite`) | Tâche 3 |
+| Pas d'écriture là où Docker n'écrit pas comme le conteneur voit (Q21) | Tâche 2 (`TestRefusesWhereDockerDoesNotWrite`) | Tâche 3 |
+| Écritures d'un conteneur sérialisées (Q23) ; chemin et nom avant la précondition | Tâche 2 (`TestWritesAreSerialized`, `TestUploadChecksPathBeforePrecondition`) | Tâche 3 |
+| Câblage par les routes : session, `Origin`, codes, nom décodé validé | Tâche 4, étape 1 | Tâche 4, étape 3 |
 
 **Ne pas pousser la branche entre les tâches 2 et 3** : le paquet `files` n'y compile pas.
 
@@ -116,34 +145,36 @@ Le plan suit la recommandation de chaque question ; une réponse différente cha
 ## Structure des fichiers
 
 ```
-internal/dockerx/dockerx.go                  + PutArchive (interface et moteur), ErrRefused, wrap
+internal/dockerx/dockerx.go                  + PutArchive (interface et moteur), ErrRefused, wrapPut, ContainerInfo.Tmpfs
 internal/dockerx/fake.go                     + PutErr, Put, PutCalls()
-internal/files/files.go                      Writer : Allowed, Edit, Upload, ETag ; ordre de §5.3
+internal/files/files.go                      Writer : Allowed, Edit, Upload, ETag ; ordre de §5.3, writable, verrou
 internal/files/files_test.go                 tests portables (MemFS, faux Docker, vraie Views)
 internal/files/files_linux_test.go           tests d'évasion sur un vrai procfs (racine temporaire)
 internal/api/fs_write.go                     PUT /fs/file, POST /fs/upload, lecture du multipart
 internal/api/server.go                       + server.files, routes
 internal/api/fserr.go                        + read_only, conflict, invalid_name, MaxBytesError
 internal/api/fs.go                           fsRequest(w, r, param)
+internal/api/fs_download.go                  appel de fsRequest(w, r, "path")
 internal/api/fs_preview.go                   ETag par files.ETag
 internal/api/fs_write_test.go                routes, faux Docker
 internal/api/integration_write_test.go       conteneur arrêté, vrai Docker (portable)
 internal/api/integration_write_linux_test.go conteneur actif, vrai Docker (Linux root)
 web/package.json, web/package-lock.json      CodeMirror 6
 web/src/lib/write.ts (+ test)                plafonds, décodage strict, fins de ligne, langage, messages
-web/src/lib/editor.ts (+ test)               chargement des langages à la demande
+web/src/lib/editor.ts (+ test)               chargement des langages à la demande, docText
 web/src/lib/api.ts (+ test)                  saveFile, uploadFile, Preview.utf8, Content-Type
 web/src/lib/i18n/fr.ts, en.ts                clés write.* et confirm.*
 web/src/lib/components/FileEditor.svelte     CodeMirror chargé à l'ouverture
 web/src/lib/components/ConfirmDialog.svelte  confirmation : conteneur, chemin
 web/src/lib/components/FilePreview.svelte    bouton Modifier, enregistrement
 web/src/lib/components/FileBrowser.svelte    bouton d'envoi
-web/src/routes/c/[id]/+page.svelte           readOnly depuis /api/meta
+web/src/routes/+layout.svelte                contexte readOnly (un seul /api/meta)
+web/src/routes/c/[id]/+page.svelte           readOnly lu dans le contexte
 ```
 
 ---
 
-### Task 1: `dockerx.PutArchive` et refus de Docker classés
+### Task 1: `dockerx.PutArchive`, refus de Docker classés, tmpfs de l'`Inspect`
 
 **Où tester :** macOS (unitaires), Docker Desktop (intégration, portable).
 
@@ -153,9 +184,9 @@ web/src/routes/c/[id]/+page.svelte           readOnly depuis /api/meta
 
 **Interfaces:**
 - Consumes: `wrap`, `client.CopyToContainer` (`client.CopyToContainerOptions{DestinationPath, Content}`, SDK v0.6.1).
-- Produces: `Client.PutArchive(ctx context.Context, id, dir string, content io.Reader) error` ; `dockerx.ErrRefused` ; `Fake.PutErr error`, `type Put struct{ ID, Dir string; Tar []byte }`, `(*Fake).PutCalls() []Put` (copie sous verrou ; un appel en échec est enregistré aussi).
+- Produces: `Client.PutArchive(ctx context.Context, id, dir string, content io.Reader) error` ; `dockerx.ErrRefused` (produit par `PutArchive` seulement, via `wrapPut`) ; `ContainerInfo.Tmpfs []string` (destinations de `--tmpfs`, triées) ; `Fake.PutErr error`, `type Put struct{ ID, Dir string; Tar []byte }`, `(*Fake).PutCalls() []Put` (copie sous verrou ; un appel en échec est enregistré aussi).
 
-> **À comprendre :** `PUT /containers/{id}/archive` (`docker cp` vers le conteneur) extrait un tar dans un dossier. Il marche sur un conteneur actif, arrêté ou en pause. Docker refuse lui-même d'écrire sur un rootfs `--read-only` ou un volume `:ro`, avec une erreur `InvalidArgument` (mesuré) : `wrap` la classe à part (`ErrRefused`), sinon l'API répondrait « Docker indisponible ». `copyUIDGID` n'est pas demandé : il donnerait le fichier à l'utilisateur du conteneur au lieu de garder l'uid/gid du tar.
+> **À comprendre :** `PUT /containers/{id}/archive` (`docker cp` vers le conteneur) extrait un tar dans un dossier. Il marche sur un conteneur actif, arrêté ou en pause. Docker refuse lui-même d'écrire sur un rootfs `--read-only` ou un volume `:ro`, avec une erreur `InvalidArgument` (mesuré) : `wrapPut` la classe à part (`ErrRefused`), sinon l'API répondrait « Docker indisponible ». Seul `PutArchive` l'utilise : sur une route de lecture, un `InvalidArgument` reste `docker_unavailable` (Q15). `copyUIDGID` n'est pas demandé : il donnerait le fichier à l'utilisateur du conteneur au lieu de garder l'uid/gid du tar. `ContainerInfo.Tmpfs` lit `HostConfig.Tmpfs` : un `--tmpfs` n'apparaît pas dans `Mounts`, et Docker n'y écrit pas (Q21).
 
 - [ ] **Step 1: Tests unitaires qui échouent** — ajouter à `internal/dockerx/dockerx_test.go` (et `"strings"` aux imports) :
 
@@ -170,15 +201,34 @@ web/src/routes/c/[id]/+page.svelte           readOnly depuis /api/meta
  	"testing"
  	"time"
  
-@@ -181,3 +182,28 @@ func TestFakeSizesDiffsCalls(t *testing.T) {
+@@ -181,3 +182,47 @@ func TestFakeSizesDiffsCalls(t *testing.T) {
  		t.Fatalf("appels : %v", c)
  	}
  }
 +
-+func TestWrapRefused(t *testing.T) {
-+	err := wrap(fmt.Errorf("put: %w", cerrdefs.ErrInvalidArgument))
-+	if !errors.Is(err, ErrRefused) || errors.Is(err, ErrUnavailable) || errors.Is(err, ErrNotFound) {
++// Q15: an InvalidArgument is a refusal of PutArchive only; on the read
++// routes it stays docker_unavailable.
++func TestWrapPutRefused(t *testing.T) {
++	invalid := fmt.Errorf("put: %w", cerrdefs.ErrInvalidArgument)
++	if err := wrapPut(invalid); !errors.Is(err, ErrRefused) || errors.Is(err, ErrUnavailable) || errors.Is(err, ErrNotFound) {
 +		t.Fatalf("refusé : %v", err)
++	}
++	if err := wrapPut(fmt.Errorf("put: %w", cerrdefs.ErrNotFound)); !errors.Is(err, ErrNotFound) {
++		t.Fatalf("introuvable : %v", err)
++	}
++	if err := wrap(invalid); errors.Is(err, ErrRefused) || !errors.Is(err, ErrUnavailable) {
++		t.Fatalf("hors PutArchive, InvalidArgument reste ErrUnavailable : %v", err)
++	}
++}
++
++// Q21: the --tmpfs destinations (HostConfig.Tmpfs), sorted.
++func TestFromInspectTmpfs(t *testing.T) {
++	got := fromInspect(container.InspectResponse{ID: "x", HostConfig: &container.HostConfig{Tmpfs: map[string]string{"/tmp": "", "/run": "size=1m"}}})
++	if !reflect.DeepEqual(got.Tmpfs, []string{"/run", "/tmp"}) {
++		t.Fatalf("Tmpfs : %v", got.Tmpfs)
++	}
++	if got := fromInspect(container.InspectResponse{ID: "x"}); got.Tmpfs != nil {
++		t.Fatalf("sans HostConfig : %v", got.Tmpfs)
 +	}
 +}
 +
@@ -201,14 +251,24 @@ web/src/routes/c/[id]/+page.svelte           readOnly depuis /api/meta
 +}
 ```
 
-Run: `go vet ./internal/dockerx/ 2>&1 | tail -n 3` — Expected: `undefined: ErrRefused`.
+Run: `go vet ./internal/dockerx/ 2>&1 | tail -n 3` — Expected: `undefined: wrapPut`.
 
 - [ ] **Step 2: Implémenter** — dans `internal/dockerx/dockerx.go` et `internal/dockerx/fake.go` :
 
 ```diff
 --- a/internal/dockerx/dockerx.go
 +++ b/internal/dockerx/dockerx.go
-@@ -60,9 +60,14 @@ type Mount struct {
+@@ -42,6 +42,9 @@ type ContainerInfo struct {
+ 	// cache key (spec §5.2 step 1). "0001-01-01T00:00:00Z" if never started.
+ 	FinishedAt string
+ 	Mounts     []Mount
++	// Tmpfs: destinations of --tmpfs (HostConfig.Tmpfs), sorted. Absent from
++	// Mounts; Docker never writes into them (plan Explorateur 3, Q21).
++	Tmpfs []string
+ }
+ 
+ // Change is one entry of GET /containers/{id}/changes (F5).
+@@ -60,9 +63,14 @@ type Mount struct {
  }
  
  // ErrNotFound: no such container (or no such path, for an archive).
@@ -223,7 +283,7 @@ Run: `go vet ./internal/dockerx/ 2>&1 | tail -n 3` — Expected: `undefined: Err
  	ErrUnavailable = errors.New("Docker indisponible")
  )
  
-@@ -83,6 +88,12 @@ type Client interface {
+@@ -83,6 +91,12 @@ type Client interface {
  	SizeRootFs(ctx context.Context, id string) (int64, error)
  	// Changes is GET /containers/{id}/changes (F5): never nil.
  	Changes(ctx context.Context, id string) ([]Change, error)
@@ -236,30 +296,44 @@ Run: `go vet ./internal/dockerx/ 2>&1 | tail -n 3` — Expected: `undefined: Err
  }
  
  type engine struct{ c *client.Client }
-@@ -238,10 +249,22 @@ func fromChanges(cs []container.FilesystemChange) ([]Change, error) {
+@@ -181,6 +195,12 @@ func fromInspect(c container.InspectResponse) ContainerInfo {
+ 			Type: string(m.Type), Name: m.Name, Source: m.Source, Destination: m.Destination, Driver: m.Driver,
+ 		})
+ 	}
++	if c.HostConfig != nil {
++		for d := range c.HostConfig.Tmpfs {
++			info.Tmpfs = append(info.Tmpfs, d)
++		}
++		sort.Strings(info.Tmpfs)
++	}
+ 	return info
+ }
+ 
+@@ -238,6 +258,24 @@ func fromChanges(cs []container.FilesystemChange) ([]Change, error) {
  	return out, nil
  }
  
--// wrap classifies a daemon error for the API (not_found / docker_unavailable).
 +func (e *engine) PutArchive(ctx context.Context, id, dir string, content io.Reader) error {
 +	_, err := e.c.CopyToContainer(ctx, id, client.CopyToContainerOptions{DestinationPath: dir, Content: content})
 +	if err != nil {
-+		return wrap(err)
++		return wrapPut(err)
 +	}
 +	return nil
 +}
 +
-+// wrap classifies a daemon error for the API (not_found / read_only /
-+// docker_unavailable).
- func wrap(err error) error {
- 	if cerrdefs.IsNotFound(err) {
- 		return fmt.Errorf("%w : %v", ErrNotFound, err)
- 	}
++// wrapPut: wrap, plus Docker's own refusal of a write (InvalidArgument:
++// read-only rootfs or volume). Only for PutArchive: on a read route an
++// InvalidArgument stays docker_unavailable (plan Explorateur 3, Q15).
++func wrapPut(err error) error {
 +	if cerrdefs.IsInvalidArgument(err) {
 +		return fmt.Errorf("%w : %v", ErrRefused, err)
 +	}
- 	return fmt.Errorf("%w : %v", ErrUnavailable, err)
- }
++	return wrap(err)
++}
++
+ // wrap classifies a daemon error for the API (not_found / docker_unavailable).
+ func wrap(err error) error {
+ 	if cerrdefs.IsNotFound(err) {
 ```
 
 ```diff
@@ -325,12 +399,12 @@ Run: `go vet ./internal/dockerx/ 2>&1 | tail -n 3` — Expected: `undefined: Err
 
 Run: `go test ./internal/dockerx/ 2>&1 | tail -n 3 && go vet ./... 2>&1 | tail -n 3` — Expected: `ok`, aucun autre implémenteur de `Client` à compléter (les doubles de test embarquent `*Fake`).
 
-- [ ] **Step 3: Test sur un vrai Docker** — ajouter à `internal/dockerx/integration_test.go` (et `"bytes"`, `"io"`, `"strings"` aux imports) :
+- [ ] **Step 3: Test sur un vrai Docker** — ajouter à `internal/dockerx/integration_test.go` (et `"bytes"`, `"io"`, `"slices"`, `"strings"` aux imports) :
 
 ```diff
 --- a/internal/dockerx/integration_test.go
 +++ b/internal/dockerx/integration_test.go
-@@ -4,9 +4,12 @@ package dockerx
+@@ -4,9 +4,13 @@ package dockerx
  
  import (
  	"archive/tar"
@@ -339,11 +413,12 @@ Run: `go test ./internal/dockerx/ 2>&1 | tail -n 3 && go vet ./... 2>&1 | tail -
  	"errors"
 +	"io"
  	"os/exec"
++	"slices"
 +	"strings"
  	"testing"
  	"time"
  )
-@@ -136,3 +139,80 @@ func TestMeasureSizeRootFs(t *testing.T) {
+@@ -136,3 +140,91 @@ func TestMeasureSizeRootFs(t *testing.T) {
  	}
  	t.Logf("MESURE : SizeRootFs = %d octets", size) // 0: the progress stays at 0 % (not an error)
  }
@@ -368,18 +443,22 @@ Run: `go test ./internal/dockerx/ 2>&1 | tail -n 3 && go vet ./... 2>&1 | tail -
 +// owner come from the tar header; the existing file is replaced by a new
 +// inode (Docker removes, then creates); Docker's refusals are classified.
 +func TestPutArchiveRealDocker(t *testing.T) {
-+	run, stopped, ro := "hublot-it-put", "hublot-it-put-stopped", "hublot-it-put-ro"
-+	exec.Command("docker", "rm", "-f", run, stopped, ro).Run()
++	run, stopped, ro, rov := "hublot-it-put", "hublot-it-put-stopped", "hublot-it-put-ro", "hublot-it-put-rov"
++	exec.Command("docker", "rm", "-f", run, stopped, ro, rov).Run()
 +	for _, args := range [][]string{
-+		{"run", "-d", "--name", run, "alpine:3", "sleep", "300"},
++		{"run", "-d", "--name", run, "--tmpfs", "/scratch", "alpine:3", "sleep", "300"},
 +		{"create", "--name", stopped, "alpine:3", "true"},
 +		{"run", "-d", "--name", ro, "--read-only", "alpine:3", "sleep", "300"},
++		{"run", "-d", "--name", rov, "-v", "hublot-it-put-rov:/data:ro", "alpine:3", "sleep", "300"},
 +	} {
 +		if out, err := exec.Command("docker", args...).CombinedOutput(); err != nil {
 +			t.Fatalf("docker %v : %v %s", args, err, out)
 +		}
 +	}
-+	t.Cleanup(func() { exec.Command("docker", "rm", "-f", run, stopped, ro).Run() })
++	t.Cleanup(func() {
++		exec.Command("docker", "rm", "-f", run, stopped, ro, rov).Run()
++		exec.Command("docker", "volume", "rm", "hublot-it-put-rov").Run()
++	})
 +	c, err := New()
 +	if err != nil {
 +		t.Fatal(err)
@@ -420,6 +499,13 @@ Run: `go test ./internal/dockerx/ 2>&1 | tail -n 3 && go vet ./... 2>&1 | tail -
 +	if err := c.PutArchive(ctx, ro, "/etc", oneFileTar(t, "x", "x", 0o644, 0, 0)); !errors.Is(err, ErrRefused) {
 +		t.Fatalf("rootfs en lecture seule : %v, attendu ErrRefused", err)
 +	}
++	if err := c.PutArchive(ctx, rov, "/data", oneFileTar(t, "x", "x", 0o644, 0, 0)); !errors.Is(err, ErrRefused) {
++		t.Fatalf("volume :ro : %v, attendu ErrRefused", err)
++	}
++	// Q21: the --tmpfs destinations come from Inspect (they are not in Mounts).
++	if info, err := c.Inspect(ctx, run); err != nil || !slices.Equal(info.Tmpfs, []string{"/scratch"}) {
++		t.Fatalf("Tmpfs : %v %v", info.Tmpfs, err)
++	}
 +	if err := c.PutArchive(ctx, run, "/absent", oneFileTar(t, "x", "x", 0o644, 0, 0)); !errors.Is(err, ErrNotFound) {
 +		t.Fatalf("dossier absent : %v, attendu ErrNotFound", err)
 +	}
@@ -427,14 +513,14 @@ Run: `go test ./internal/dockerx/ 2>&1 | tail -n 3 && go vet ./... 2>&1 | tail -
 ```
 
 Run: `DOCKER_HOST=unix://$HOME/.docker/run/docker.sock go test -tags integration ./internal/dockerx/ -run PutArchive -v 2>&1 | grep -E '^(---|ok|FAIL)|MESURE' | tail -n 5`
-Expected: `--- PASS: TestPutArchiveRealDocker` ; la ligne `MESURE` montre deux inodes différents (Docker supprime puis recrée le fichier : base de Q17).
+Expected: `--- PASS: TestPutArchiveRealDocker` (rootfs `--read-only` et volume `:ro` → `ErrRefused`, `Tmpfs` = `[/scratch]`) ; la ligne `MESURE` montre deux inodes différents (Docker supprime puis recrée le fichier : base de Q17).
 
 - [ ] **Step 4: Commit**
 
 ```bash
 git add internal/dockerx
 git commit -F - <<'EOF'
-dockerx: PutArchive, refus de Docker classés à part (ErrRefused)
+dockerx: PutArchive, refus de Docker classés à part (ErrRefused), tmpfs de l'Inspect
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 EOF
@@ -450,12 +536,14 @@ EOF
 - Create: `internal/files/files_test.go`, `internal/files/files_linux_test.go`
 
 **Interfaces:**
-- Consumes: `fsview.MemFS` (`NewMemFS`, `AddDir`, `AddFile`, `AddLink`, `Entries`, `Err`), `fsview.NewProcFS`, `fsview.NewViews`, `fsview.Options{}`, `dockerx.Fake` (`PutErr`, `PutCalls`, `Calls`), `audit.Event`.
-- Produces (attendu par les tests, écrit à la tâche 3) : `files.Writer{ReadOnly bool; Docker Putter; Audit Auditor; Open func(context.Context, string) (fsview.FS, error); Forget func(string)}`, `(*Writer).Allowed() error`, `(*Writer).Edit(ctx, id, p string, content []byte, ifMatch string) (string, error)`, `(*Writer).Upload(ctx, id, dir, name string, content []byte, ifNoneMatch string) (string, error)`, `files.ETag([]byte) string`, `MaxEditBytes`, `MaxUploadBytes`, `ErrReadOnly`, `ErrConflict`, `ErrInvalidName`.
+- Consumes: `fsview.MemFS` (`NewMemFS`, `AddDir`, `AddFile`, `AddLink`, `Entries`, `Err`), `fsview.NewProcFS`, `fsview.NewViews`, `fsview.Options{}`, `dockerx.Fake` (`PutErr`, `PutCalls`, `Calls`), `dockerx.ContainerInfo` (`Mounts`, `Tmpfs`), `audit.Event`.
+- Produces (attendu par les tests, écrit à la tâche 3) : `files.Writer{ReadOnly bool; Docker dockerx.Client; Audit Auditor; Open func(context.Context, string) (fsview.FS, error); Forget func(string)}`, `(*Writer).Allowed() error`, `(*Writer).Edit(ctx context.Context, c dockerx.ContainerInfo, p string, content []byte, ifMatch string) (string, error)`, `(*Writer).Upload(ctx context.Context, c dockerx.ContainerInfo, dir, name string, content []byte, ifNoneMatch string) (string, error)`, `files.ETag([]byte) string`, `MaxEditBytes`, `MaxUploadBytes`, `ErrReadOnly`, `ErrConflict`, `ErrInvalidName`.
 
 > **À comprendre :** deux familles de tests. Les tests portables (`files_test.go`) jouent le conteneur avec `MemFS`, qui refuse les liens comme `procfs`, et un faux Docker qui enregistre les tars reçus. Un `journal` unique note, dans l'ordre, les lignes d'audit et les appels à `PutArchive` : l'ordre de §5.3 se lit d'un coup d'œil (`audit:intent`, `put:/etc`, `audit:ok`). `TestStoppedContainerIndexDropped` passe par une vraie `Views` : pendant l'indexation, l'écriture reçoit `indexing` ; après, l'index est retiré et l'accès suivant relance `GetArchive("/")`.
 >
-> Les tests Linux (`files_linux_test.go`) servent une racine temporaire par un vrai `procfs` : `openat2 RESOLVE_NO_SYMLINKS` et `fstatfs` décident, pas une imitation. `/evil` mène à un dossier de l'hôte : le contrôle vérifie que le piège marche ; l'assertion vérifie que `PutArchive` n'est **jamais** appelé, même quand une erreur est renvoyée. Un appel au faux Docker n'écrit rien, mais il prouve que le vrai aurait écrit.
+> Les refus tirés de l'`Inspect` (Q21, Q22) se jouent aussi sur `MemFS` : ils doivent tomber **avant** d'ouvrir la vue (`r.opens == 0`). Le fichier de test est `/etc/app.conf`, puisque `/etc/hosts` est désormais refusé. `TestWritesAreSerialized` bloque le premier `PutArchive` (`gatedPutter`), lance la seconde écriture, et vérifie qu'elle n'atteint pas `PutArchive` pendant 200 ms ; puis la première applique son écriture à la vue, et la seconde doit finir en `conflict`.
+>
+> Les tests Linux (`files_linux_test.go`) servent une racine temporaire par un vrai `procfs` : `openat2 RESOLVE_NO_SYMLINKS` et `fstatfs` décident, pas une imitation. `/evil` mène à un dossier de l'hôte : le contrôle vérifie que le piège marche ; l'assertion vérifie que `PutArchive` n'est **jamais** appelé, même quand une erreur est renvoyée. Un appel au faux Docker n'écrit rien, mais il prouve que le vrai aurait écrit. `TestProcPseudoFSRefused` sert le `/proc` de l'hôte comme racine : `/` et `/version` ne commencent pas par `/proc`, la règle de préfixe de Q21 les laisse passer, et seul `fstatfs` les refuse (R9).
 
 - [ ] **Step 1: Tests portables** — créer `internal/files/files_test.go` :
 
@@ -485,6 +573,9 @@ import (
 )
 
 const cid = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+
+// ctr is the Inspect of the test container: running, no mount.
+var ctr = dockerx.ContainerInfo{ID: cid, Name: "web", Running: true, Pid: 42}
 
 // journal records audit events and PutArchive calls in one ordered list.
 type journal struct {
@@ -549,9 +640,9 @@ func newRig(t *testing.T, readOnly bool) *rig {
 	t.Helper()
 	r := &rig{mem: fsview.NewMemFS(), fake: &dockerx.Fake{}, j: &journal{}}
 	r.put = &putter{Fake: r.fake, j: r.j}
-	r.mem.AddDir("/etc").AddFile("/etc/hosts", []byte("127.0.0.1 localhost\n"))
+	r.mem.AddDir("/etc").AddFile("/etc/app.conf", []byte("127.0.0.1 localhost\n"))
 	r.mem.Entries["/etc"] = fsview.Entry{Name: "etc", Type: fsview.TypeDir, Mode: 0o755, UID: 7, GID: 8}
-	r.mem.Entries["/etc/hosts"] = fsview.Entry{Name: "hosts", Type: fsview.TypeFile, Mode: 0o640 | fs.ModeSetgid, UID: 101, GID: 102, Size: 20}
+	r.mem.Entries["/etc/app.conf"] = fsview.Entry{Name: "app.conf", Type: fsview.TypeFile, Mode: 0o640 | fs.ModeSetgid, UID: 101, GID: 102, Size: 20}
 	r.w = &Writer{
 		ReadOnly: readOnly,
 		Docker:   r.put,
@@ -568,7 +659,7 @@ func newRig(t *testing.T, readOnly bool) *rig {
 	return r
 }
 
-var hostsTag = ETag([]byte("127.0.0.1 localhost\n"))
+var confTag = ETag([]byte("127.0.0.1 localhost\n"))
 
 // nothingWritten: no audit line, no PutArchive.
 func (r *rig) nothingWritten(t *testing.T) {
@@ -611,11 +702,11 @@ func TestReadOnlyRefusesFirst(t *testing.T) {
 	if err := r.w.Allowed(); !errors.Is(err, ErrReadOnly) {
 		t.Fatalf("Allowed : %v", err)
 	}
-	if _, err := r.w.Edit(ctx, cid, "/etc/hosts", []byte("x"), hostsTag); !errors.Is(err, ErrReadOnly) {
+	if _, err := r.w.Edit(ctx, ctr, "/etc/app.conf", []byte("x"), confTag); !errors.Is(err, ErrReadOnly) {
 		t.Fatalf("Edit : %v", err)
 	}
 	// Read-only beats every other refusal, an invalid name included.
-	if _, err := r.w.Upload(ctx, cid, "/etc", "a/b", []byte("x"), "*"); !errors.Is(err, ErrReadOnly) {
+	if _, err := r.w.Upload(ctx, ctr, "/etc", "a/b", []byte("x"), "*"); !errors.Is(err, ErrReadOnly) {
 		t.Fatalf("Upload : %v", err)
 	}
 	if r.opens != 0 {
@@ -627,9 +718,9 @@ func TestReadOnlyRefusesFirst(t *testing.T) {
 var ctx = context.Background()
 
 func TestEditIfMatch(t *testing.T) {
-	for _, tag := range []string{"", "*", `W/` + hostsTag, strings.Trim(hostsTag, `"`), ETag([]byte("autre"))} {
+	for _, tag := range []string{"", "*", `W/` + confTag, strings.Trim(confTag, `"`), ETag([]byte("autre"))} {
 		r := newRig(t, false)
-		if _, err := r.w.Edit(ctx, cid, "/etc/hosts", []byte("x"), tag); !errors.Is(err, ErrConflict) {
+		if _, err := r.w.Edit(ctx, ctr, "/etc/app.conf", []byte("x"), tag); !errors.Is(err, ErrConflict) {
 			t.Errorf("If-Match %q : %v, attendu ErrConflict", tag, err)
 		}
 		r.nothingWritten(t)
@@ -638,7 +729,7 @@ func TestEditIfMatch(t *testing.T) {
 
 func TestEditOrderAndTar(t *testing.T) {
 	r := newRig(t, false)
-	got, err := r.w.Edit(ctx, cid, "/etc/../etc//hosts", []byte("10.0.0.1 db\n"), hostsTag)
+	got, err := r.w.Edit(ctx, ctr, "/etc/../etc//app.conf", []byte("10.0.0.1 db\n"), confTag)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -649,7 +740,7 @@ func TestEditOrderAndTar(t *testing.T) {
 		t.Fatalf("ordre : %v, attendu audit → écriture → audit", s)
 	}
 	for _, e := range r.j.events {
-		if e.Action != "file.write" || e.Container != cid || e.Path != "/etc/hosts" {
+		if e.Action != "file.write" || e.Container != cid || e.Path != "/etc/app.conf" {
 			t.Errorf("événement : %+v", e)
 		}
 	}
@@ -658,7 +749,7 @@ func TestEditOrderAndTar(t *testing.T) {
 		t.Fatalf("PutArchive : %d appel(s)", len(puts))
 	}
 	h, body := entryOf(t, puts[0].Tar)
-	if h.Name != "hosts" || h.Typeflag != tar.TypeReg || body != "10.0.0.1 db\n" || h.Size != int64(len(body)) {
+	if h.Name != "app.conf" || h.Typeflag != tar.TypeReg || body != "10.0.0.1 db\n" || h.Size != int64(len(body)) {
 		t.Errorf("entrée : %+v %q", h, body)
 	}
 	if h.Mode != 0o2640 || h.Uid != 101 || h.Gid != 102 {
@@ -671,31 +762,32 @@ func TestEditOrderAndTar(t *testing.T) {
 
 func TestUploadOrderAndTar(t *testing.T) {
 	r := newRig(t, false)
-	got, err := r.w.Upload(ctx, cid, "/etc/", "app.conf", []byte("port=80\n"), "*")
-	if err != nil || got != "/etc/app.conf" {
+	got, err := r.w.Upload(ctx, ctr, "/etc/", "new.conf", []byte("port=80\n"), "*")
+	if err != nil || got != "/etc/new.conf" {
 		t.Fatalf("Upload : %q %v", got, err)
 	}
 	if s := r.j.Steps(); !slices.Equal(s, []string{"audit:intent", "put:/etc", "audit:ok"}) {
 		t.Fatalf("ordre : %v", s)
 	}
-	if e := r.j.events[0]; e.Action != "file.upload" || e.Path != "/etc/app.conf" {
+	if e := r.j.events[0]; e.Action != "file.upload" || e.Path != "/etc/new.conf" {
 		t.Errorf("événement : %+v", e)
 	}
 	h, body := entryOf(t, r.fake.PutCalls()[0].Tar)
-	if h.Name != "app.conf" || body != "port=80\n" || h.Mode != 0o644 || h.Uid != 7 || h.Gid != 8 {
+	if h.Name != "new.conf" || body != "port=80\n" || h.Mode != 0o644 || h.Uid != 7 || h.Gid != 8 {
 		t.Errorf("nouveau fichier : 0644 et uid/gid du dossier parent attendus : %+v", h)
 	}
 	// At the root, the parent sent is "/" and the path written "/x".
 	r = newRig(t, false)
-	if got, err := r.w.Upload(ctx, cid, "/", "x", nil, "*"); err != nil || got != "/x" || r.fake.PutCalls()[0].Dir != "/" {
+	if got, err := r.w.Upload(ctx, ctr, "/", "x", nil, "*"); err != nil || got != "/x" || r.fake.PutCalls()[0].Dir != "/" {
 		t.Fatalf("racine : %q %v", got, err)
 	}
 }
 
 func TestUploadInvalidName(t *testing.T) {
-	for _, n := range []string{"", ".", "..", "a/b", "/x", "x/", "a\x00b", strings.Repeat("n", 256)} {
+	for _, n := range []string{"", ".", "..", "a/b", "/x", "x/", "a\x00b", strings.Repeat("n", 256),
+		`a\b`, "a\nb", "a\x7fb", "a\u0085b", "\xffx"} { // backslash, C0, DEL, C1, not UTF-8
 		r := newRig(t, false)
-		if _, err := r.w.Upload(ctx, cid, "/etc", n, []byte("x"), "*"); !errors.Is(err, ErrInvalidName) {
+		if _, err := r.w.Upload(ctx, ctr, "/etc", n, []byte("x"), "*"); !errors.Is(err, ErrInvalidName) {
 			t.Errorf("nom %q : %v, attendu ErrInvalidName", n, err)
 		}
 		if r.opens != 0 {
@@ -703,25 +795,27 @@ func TestUploadInvalidName(t *testing.T) {
 		}
 		r.nothingWritten(t)
 	}
-	r := newRig(t, false)
-	if _, err := r.w.Upload(ctx, cid, "/etc", strings.Repeat("n", 255), nil, "*"); err != nil {
-		t.Errorf("255 octets : %v", err)
+	for _, n := range []string{strings.Repeat("n", 255), "été 2026.txt", "-x"} {
+		r := newRig(t, false)
+		if _, err := r.w.Upload(ctx, ctr, "/etc", n, nil, "*"); err != nil {
+			t.Errorf("nom %q : %v", n, err)
+		}
 	}
 }
 
 func TestUploadNeverReplaces(t *testing.T) {
 	r := newRig(t, false)
-	if _, err := r.w.Upload(ctx, cid, "/etc", "hosts", []byte("x"), "*"); !errors.Is(err, ErrConflict) {
+	if _, err := r.w.Upload(ctx, ctr, "/etc", "app.conf", []byte("x"), "*"); !errors.Is(err, ErrConflict) {
 		t.Fatalf("nom existant : %v, attendu ErrConflict", err)
 	}
 	r.nothingWritten(t)
 	r = newRig(t, false)
 	r.mem.AddDir("/etc/conf.d")
-	if _, err := r.w.Upload(ctx, cid, "/etc", "conf.d", []byte("x"), "*"); !errors.Is(err, ErrConflict) {
+	if _, err := r.w.Upload(ctx, ctr, "/etc", "conf.d", []byte("x"), "*"); !errors.Is(err, ErrConflict) {
 		t.Fatalf("dossier existant : %v, attendu ErrConflict", err)
 	}
 	r = newRig(t, false)
-	if _, err := r.w.Upload(ctx, cid, "/etc", "new", []byte("x"), ""); !errors.Is(err, ErrConflict) {
+	if _, err := r.w.Upload(ctx, ctr, "/etc", "new", []byte("x"), ""); !errors.Is(err, ErrConflict) {
 		t.Fatalf("sans If-None-Match: * : %v, attendu ErrConflict", err)
 	}
 	r.nothingWritten(t)
@@ -730,18 +824,18 @@ func TestUploadNeverReplaces(t *testing.T) {
 func TestLinksRefused(t *testing.T) {
 	setup := func(t *testing.T) *rig {
 		r := newRig(t, false)
-		r.mem.AddLink("/etc/alias", "hosts").AddLink("/conf", "etc").AddLink("/etc/dangling", "/nope")
+		r.mem.AddLink("/etc/alias", "app.conf").AddLink("/conf", "etc").AddLink("/etc/dangling", "/nope")
 		return r
 	}
 	cases := []struct {
 		name string
 		run  func(r *rig) error
 	}{
-		{"lien final", func(r *rig) error { _, err := r.w.Edit(ctx, cid, "/etc/alias", []byte("x"), hostsTag); return err }},
-		{"lien parent", func(r *rig) error { _, err := r.w.Edit(ctx, cid, "/conf/hosts", []byte("x"), hostsTag); return err }},
-		{"dossier d'envoi lié", func(r *rig) error { _, err := r.w.Upload(ctx, cid, "/conf", "new", []byte("x"), "*"); return err }},
-		{"envoi sur un lien pendant", func(r *rig) error { _, err := r.w.Upload(ctx, cid, "/etc", "dangling", []byte("x"), "*"); return err }},
-		{"envoi sur un lien", func(r *rig) error { _, err := r.w.Upload(ctx, cid, "/etc", "alias", []byte("x"), "*"); return err }},
+		{"lien final", func(r *rig) error { _, err := r.w.Edit(ctx, ctr, "/etc/alias", []byte("x"), confTag); return err }},
+		{"lien parent", func(r *rig) error { _, err := r.w.Edit(ctx, ctr, "/conf/app.conf", []byte("x"), confTag); return err }},
+		{"dossier d'envoi lié", func(r *rig) error { _, err := r.w.Upload(ctx, ctr, "/conf", "new", []byte("x"), "*"); return err }},
+		{"envoi sur un lien pendant", func(r *rig) error { _, err := r.w.Upload(ctx, ctr, "/etc", "dangling", []byte("x"), "*"); return err }},
+		{"envoi sur un lien", func(r *rig) error { _, err := r.w.Upload(ctx, ctr, "/etc", "alias", []byte("x"), "*"); return err }},
 	}
 	for _, c := range cases {
 		r := setup(t)
@@ -754,18 +848,18 @@ func TestLinksRefused(t *testing.T) {
 
 func TestEditNotRegular(t *testing.T) {
 	r := newRig(t, false)
-	r.mem.Entries["/dev"] = fsview.Entry{Name: "dev", Type: fsview.TypeDir}
-	r.mem.Entries["/dev/sda"] = fsview.Entry{Name: "sda", Type: fsview.TypeOther}
-	for _, p := range []string{"/dev/sda", "/etc", "/"} {
-		if _, err := r.w.Edit(ctx, cid, p, []byte("x"), hostsTag); !errors.Is(err, fsview.ErrNotRegular) {
+	r.mem.Entries["/srv"] = fsview.Entry{Name: "srv", Type: fsview.TypeDir}
+	r.mem.Entries["/srv/app.sock"] = fsview.Entry{Name: "app.sock", Type: fsview.TypeOther}
+	for _, p := range []string{"/srv/app.sock", "/etc", "/"} {
+		if _, err := r.w.Edit(ctx, ctr, p, []byte("x"), confTag); !errors.Is(err, fsview.ErrNotRegular) {
 			t.Errorf("%s : %v, attendu ErrNotRegular", p, err)
 		}
 	}
 	r.nothingWritten(t)
-	if _, err := r.w.Upload(ctx, cid, "/etc/hosts", "x", []byte("x"), "*"); !errors.Is(err, fsview.ErrNotDir) {
+	if _, err := r.w.Upload(ctx, ctr, "/etc/app.conf", "x", []byte("x"), "*"); !errors.Is(err, fsview.ErrNotDir) {
 		t.Errorf("envoi dans un fichier : %v, attendu ErrNotDir", err)
 	}
-	if _, err := r.w.Edit(ctx, cid, "/etc/absent", []byte("x"), hostsTag); !errors.Is(err, fs.ErrNotExist) {
+	if _, err := r.w.Edit(ctx, ctr, "/etc/absent", []byte("x"), confTag); !errors.Is(err, fs.ErrNotExist) {
 		t.Errorf("absent : %v", err)
 	}
 	r.nothingWritten(t)
@@ -773,15 +867,15 @@ func TestEditNotRegular(t *testing.T) {
 
 func TestSizeCaps(t *testing.T) {
 	r := newRig(t, false)
-	if _, err := r.w.Edit(ctx, cid, "/etc/hosts", make([]byte, MaxEditBytes+1), hostsTag); !errors.Is(err, fsview.ErrTooLarge) {
+	if _, err := r.w.Edit(ctx, ctr, "/etc/app.conf", make([]byte, MaxEditBytes+1), confTag); !errors.Is(err, fsview.ErrTooLarge) {
 		t.Errorf("édition : %v", err)
 	}
-	if _, err := r.w.Upload(ctx, cid, "/etc", "big", make([]byte, MaxUploadBytes+1), "*"); !errors.Is(err, fsview.ErrTooLarge) {
+	if _, err := r.w.Upload(ctx, ctr, "/etc", "big", make([]byte, MaxUploadBytes+1), "*"); !errors.Is(err, fsview.ErrTooLarge) {
 		t.Errorf("envoi : %v", err)
 	}
 	// The current file is read with a cap too: its hash never needs more.
 	r.mem.AddFile("/etc/huge", make([]byte, MaxEditBytes+1))
-	if _, err := r.w.Edit(ctx, cid, "/etc/huge", []byte("x"), ETag(make([]byte, MaxEditBytes+1))); !errors.Is(err, fsview.ErrTooLarge) {
+	if _, err := r.w.Edit(ctx, ctr, "/etc/huge", []byte("x"), ETag(make([]byte, MaxEditBytes+1))); !errors.Is(err, fsview.ErrTooLarge) {
 		t.Errorf("fichier actuel trop gros : %v", err)
 	}
 	r.nothingWritten(t)
@@ -791,17 +885,17 @@ func TestViewErrorsPassThrough(t *testing.T) {
 	for _, want := range []error{fsview.ErrForbiddenPath, &fsview.IndexingError{Progress: 0.4}, dockerx.ErrUnavailable} {
 		r := newRig(t, false)
 		r.w.Open = func(context.Context, string) (fsview.FS, error) { return nil, want }
-		if _, err := r.w.Edit(ctx, cid, "/etc/hosts", []byte("x"), hostsTag); !errors.Is(err, want) {
+		if _, err := r.w.Edit(ctx, ctr, "/etc/app.conf", []byte("x"), confTag); !errors.Is(err, want) {
 			t.Errorf("Edit : %v, attendu %v", err, want)
 		}
-		if _, err := r.w.Upload(ctx, cid, "/etc", "n", []byte("x"), "*"); !errors.Is(err, want) {
+		if _, err := r.w.Upload(ctx, ctr, "/etc", "n", []byte("x"), "*"); !errors.Is(err, want) {
 			t.Errorf("Upload : %v, attendu %v", err, want)
 		}
 		r.nothingWritten(t)
 	}
 	r := newRig(t, false)
 	r.mem.Err = fsview.ErrForbiddenPath // e.g. the parent directory is on a pseudo filesystem
-	if _, err := r.w.Upload(ctx, cid, "/etc", "n", []byte("x"), "*"); !errors.Is(err, fsview.ErrForbiddenPath) {
+	if _, err := r.w.Upload(ctx, ctr, "/etc", "n", []byte("x"), "*"); !errors.Is(err, fsview.ErrForbiddenPath) {
 		t.Errorf("dossier interdit : %v", err)
 	}
 	r.nothingWritten(t)
@@ -810,7 +904,7 @@ func TestViewErrorsPassThrough(t *testing.T) {
 func TestAuditIntentFailureWritesNothing(t *testing.T) {
 	r := newRig(t, false)
 	r.j.auditErr = errors.New("disque plein")
-	if _, err := r.w.Edit(ctx, cid, "/etc/hosts", []byte("x"), hostsTag); err == nil {
+	if _, err := r.w.Edit(ctx, ctr, "/etc/app.conf", []byte("x"), confTag); err == nil {
 		t.Fatal("sans ligne d'intention, pas d'écriture")
 	}
 	if n := len(r.fake.PutCalls()); n != 0 {
@@ -821,7 +915,7 @@ func TestAuditIntentFailureWritesNothing(t *testing.T) {
 func TestPutFailureIsAudited(t *testing.T) {
 	r := newRig(t, false)
 	r.fake.PutErr = dockerx.ErrRefused
-	if _, err := r.w.Edit(ctx, cid, "/etc/hosts", []byte("x"), hostsTag); !errors.Is(err, dockerx.ErrRefused) {
+	if _, err := r.w.Edit(ctx, ctr, "/etc/app.conf", []byte("x"), confTag); !errors.Is(err, dockerx.ErrRefused) {
 		t.Fatalf("Edit : %v", err)
 	}
 	if s := r.j.Steps(); !slices.Equal(s, []string{"audit:intent", "put:/etc", "audit:error"}) {
@@ -846,7 +940,7 @@ func TestPutSurvivesRequestEnd(t *testing.T) {
 			cancel()
 		}
 	}
-	if _, err := r.w.Edit(c, cid, "/etc/hosts", []byte("x"), hostsTag); err != nil {
+	if _, err := r.w.Edit(c, ctr, "/etc/app.conf", []byte("x"), confTag); err != nil {
 		t.Fatal(err)
 	}
 	if r.put.ctxErr != nil {
@@ -863,7 +957,7 @@ func TestStoppedContainerIndexDropped(t *testing.T) {
 	for _, h := range []*tar.Header{
 		{Name: "/", Typeflag: tar.TypeDir, Mode: 0o755},
 		{Name: "/etc/", Typeflag: tar.TypeDir, Mode: 0o755},
-		{Name: "/etc/hosts", Typeflag: tar.TypeReg, Mode: 0o644, Size: 4},
+		{Name: "/etc/app.conf", Typeflag: tar.TypeReg, Mode: 0o644, Size: 4},
 	} {
 		tw.WriteHeader(h)
 		if h.Size > 0 {
@@ -873,21 +967,21 @@ func TestStoppedContainerIndexDropped(t *testing.T) {
 	tw.Close()
 	var file bytes.Buffer
 	fw := tar.NewWriter(&file)
-	fw.WriteHeader(&tar.Header{Name: "hosts", Typeflag: tar.TypeReg, Mode: 0o644, Size: 4})
+	fw.WriteHeader(&tar.Header{Name: "app.conf", Typeflag: tar.TypeReg, Mode: 0o644, Size: 4})
 	io.WriteString(fw, "old\n")
 	fw.Close()
 	info := dockerx.ContainerInfo{ID: cid, Name: "db", FinishedAt: "2026-10-09T10:00:00Z"}
 	fake := &dockerx.Fake{
 		Infos:    map[string]dockerx.ContainerInfo{cid: info},
-		Archives: map[string][]byte{cid + ":/": buf.Bytes(), cid + ":/etc/hosts": file.Bytes()},
+		Archives: map[string][]byte{cid + ":/": buf.Bytes(), cid + ":/etc/app.conf": file.Bytes()},
 	}
 	views := fsview.NewViews(fake, fsview.Options{})
 	w := &Writer{Docker: fake, Audit: &journal{}, Open: views.For, Forget: views.Forget}
-	if _, err := w.Edit(ctx, cid, "/etc/hosts", []byte("new\n"), ETag([]byte("old\n"))); !errors.Is(err, fsview.ErrIndexing) {
+	if _, err := w.Edit(ctx, info, "/etc/app.conf", []byte("new\n"), ETag([]byte("old\n"))); !errors.Is(err, fsview.ErrIndexing) {
 		t.Fatalf("pendant l'indexation : %v, attendu ErrIndexing", err)
 	}
 	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(5 * time.Millisecond) {
-		_, err := w.Edit(ctx, cid, "/etc/hosts", []byte("new\n"), ETag([]byte("old\n")))
+		_, err := w.Edit(ctx, info, "/etc/app.conf", []byte("new\n"), ETag([]byte("old\n")))
 		if err == nil {
 			break
 		}
@@ -914,6 +1008,156 @@ func TestStoppedContainerIndexDropped(t *testing.T) {
 	for deadline := time.Now().Add(5 * time.Second); builds() != 2; time.Sleep(5 * time.Millisecond) {
 		if time.Now().After(deadline) {
 			t.Fatalf("l'accès suivant reconstruit l'index : %d construction(s)", builds())
+		}
+	}
+}
+
+// Spec §5.3: the path and the name are checked (step 2) before the
+// precondition (step 3). Without If-None-Match, a bad name is still
+// invalid_name and a link is still link_in_path, not conflict.
+func TestUploadChecksPathBeforePrecondition(t *testing.T) {
+	r := newRig(t, false)
+	r.mem.AddLink("/conf", "etc")
+	if _, err := r.w.Upload(ctx, ctr, "/etc", "../x", []byte("x"), ""); !errors.Is(err, ErrInvalidName) {
+		t.Errorf("../x sans If-None-Match : %v, attendu ErrInvalidName", err)
+	}
+	if _, err := r.w.Upload(ctx, ctr, "/conf", "x", []byte("x"), ""); !errors.Is(err, fsview.ErrLinkInPath) {
+		t.Errorf("dossier lié sans If-None-Match : %v, attendu ErrLinkInPath", err)
+	}
+	r.nothingWritten(t)
+}
+
+// Q22: a container whose mounts expose the host (spec §5.2 step 7) gets no
+// write at all, running or not: no view opened, nothing written.
+func TestHostBindRefusesEveryWrite(t *testing.T) {
+	r := newRig(t, false)
+	c := ctr
+	c.Mounts = []dockerx.Mount{{Type: "bind", Source: "/", Destination: "/host"}}
+	if _, err := r.w.Edit(ctx, c, "/etc/app.conf", []byte("x"), confTag); !errors.Is(err, fsview.ErrForbiddenPath) {
+		t.Errorf("édition : %v, attendu ErrForbiddenPath", err)
+	}
+	if _, err := r.w.Upload(ctx, c, "/etc", "n", []byte("x"), "*"); !errors.Is(err, fsview.ErrForbiddenPath) {
+		t.Errorf("envoi : %v, attendu ErrForbiddenPath", err)
+	}
+	if r.opens != 0 {
+		t.Error("refusé sur Inspect, avant d'ouvrir la vue")
+	}
+	r.nothingWritten(t)
+}
+
+// Q21: Docker writes in its own view of the mounts, not in the container's.
+// A file mounted on its own and the files Docker manages answer "device or
+// resource busy"; a tmpfs, /dev, /proc or /sys take the write and the
+// container never sees it (measured). Refused before the intent.
+func TestRefusesWhereDockerDoesNotWrite(t *testing.T) {
+	c := ctr
+	c.Mounts = []dockerx.Mount{
+		{Type: "bind", Source: "/srv/app.conf", Destination: "/etc/app.conf"},
+		{Type: "tmpfs", Destination: "/run/t"},
+		{Type: "bind", Source: "/srv/conf", Destination: "/etc/conf.d"},
+	}
+	c.Tmpfs = []string{"/scratch"}
+	cases := []struct {
+		name string
+		run  func(r *rig) error
+	}{
+		{"fichier monté", func(r *rig) error { _, err := r.w.Edit(ctx, c, "/etc/app.conf", []byte("x"), confTag); return err }},
+		{"/etc/hosts", func(r *rig) error { _, err := r.w.Edit(ctx, c, "/etc/hosts", []byte("x"), confTag); return err }},
+		{"/etc/resolv.conf", func(r *rig) error { _, err := r.w.Upload(ctx, c, "/etc", "resolv.conf", []byte("x"), "*"); return err }},
+		{"/etc/hostname", func(r *rig) error { _, err := r.w.Edit(ctx, c, "/etc/hostname", []byte("x"), confTag); return err }},
+		{"--mount type=tmpfs", func(r *rig) error { _, err := r.w.Upload(ctx, c, "/run/t", "n", []byte("x"), "*"); return err }},
+		{"--tmpfs", func(r *rig) error { _, err := r.w.Upload(ctx, c, "/scratch/sub", "n", []byte("x"), "*"); return err }},
+		{"/dev", func(r *rig) error { _, err := r.w.Upload(ctx, c, "/dev/shm", "n", []byte("x"), "*"); return err }},
+		{"/proc", func(r *rig) error { _, err := r.w.Upload(ctx, c, "/proc", "n", []byte("x"), "*"); return err }},
+		{"/sys", func(r *rig) error { _, err := r.w.Upload(ctx, c, "/sys/x", "n", []byte("x"), "*"); return err }},
+	}
+	for _, k := range cases {
+		r := newRig(t, false)
+		if err := k.run(r); !errors.Is(err, fsview.ErrForbiddenPath) {
+			t.Errorf("%s : %v, attendu ErrForbiddenPath", k.name, err)
+		}
+		if r.opens != 0 {
+			t.Errorf("%s : refusé avant d'ouvrir la vue", k.name)
+		}
+		r.nothingWritten(t)
+	}
+	// Control: a bind of a directory is in Docker's view, the write lands
+	// where the container sees it.
+	r := newRig(t, false)
+	r.mem.AddDir("/etc/conf.d")
+	if _, err := r.w.Upload(ctx, c, "/etc/conf.d", "n", []byte("x"), "*"); err != nil {
+		t.Errorf("dossier monté : %v", err)
+	}
+}
+
+// A request that has already ended (the guard answered 504) never starts a
+// write.
+func TestEndedRequestWritesNothing(t *testing.T) {
+	r := newRig(t, false)
+	c, cancel := context.WithCancel(ctx)
+	cancel()
+	if _, err := r.w.Edit(c, ctr, "/etc/app.conf", []byte("x"), confTag); !errors.Is(err, context.Canceled) {
+		t.Fatalf("requête terminée : %v", err)
+	}
+	r.nothingWritten(t)
+}
+
+// gatedPutter blocks every PutArchive on gate, then applies the write to the
+// in-memory view, as Docker would.
+type gatedPutter struct {
+	*dockerx.Fake
+	entered chan struct{}
+	gate    chan struct{}
+	apply   func(dir string, tarball []byte)
+}
+
+func (g *gatedPutter) PutArchive(ctx context.Context, id, dir string, r io.Reader) error {
+	b, _ := io.ReadAll(r)
+	g.entered <- struct{}{}
+	<-g.gate
+	g.apply(dir, b)
+	return g.Fake.PutArchive(ctx, id, dir, bytes.NewReader(b))
+}
+
+// Two writes on one container never interleave (Q23): two tabs with the same
+// If-Match, or two uploads of one name, give one write and one conflict.
+func TestWritesAreSerialized(t *testing.T) {
+	for _, k := range []struct {
+		name  string
+		write func(w *Writer) error
+	}{
+		{"deux éditions, même If-Match", func(w *Writer) error {
+			_, err := w.Edit(ctx, ctr, "/etc/app.conf", []byte("v2\n"), confTag)
+			return err
+		}},
+		{"deux envois, même nom", func(w *Writer) error {
+			_, err := w.Upload(ctx, ctr, "/etc", "new.conf", []byte("v2\n"), "*")
+			return err
+		}},
+	} {
+		r := newRig(t, false)
+		g := &gatedPutter{Fake: r.fake, entered: make(chan struct{}, 2), gate: make(chan struct{}),
+			apply: func(dir string, tarball []byte) {
+				h, body := entryOf(t, tarball)
+				r.mem.AddFile(dir+"/"+h.Name, []byte(body))
+			}}
+		r.w.Docker = g
+		errs := make(chan error, 2)
+		go func() { errs <- k.write(r.w) }()
+		<-g.entered // the first write is inside PutArchive
+		go func() { errs <- k.write(r.w) }()
+		select {
+		case <-g.entered:
+			t.Fatalf("%s : la seconde écriture a passé ses contrôles pendant la première", k.name)
+		case <-time.After(200 * time.Millisecond):
+		}
+		close(g.gate)
+		e1, e2 := <-errs, <-errs
+		if (e1 == nil) == (e2 == nil) || !(errors.Is(e1, ErrConflict) || errors.Is(e2, ErrConflict)) {
+			t.Errorf("%s : %v, %v ; attendu une écriture et un conflit", k.name, e1, e2)
+		}
+		if n := len(r.fake.PutCalls()); n != 1 {
+			t.Errorf("%s : %d appels à PutArchive, attendu 1", k.name, n)
 		}
 	}
 }
@@ -996,7 +1240,7 @@ func putDirs(puts []dockerx.Put) []string {
 }
 
 func TestProcLinksRefused(t *testing.T) {
-	root, hostDir := trapRoot(t)
+	root, _ := trapRoot(t)
 	w, fake := procRig(t, root)
 	// Control: a naive write path through /evil reaches the host.
 	if _, err := os.Stat(filepath.Join(root, "evil", "MARKER")); err != nil {
@@ -1004,21 +1248,19 @@ func TestProcLinksRefused(t *testing.T) {
 	}
 	edits := []string{"/lf", "/ld/f.txt", "/evil/MARKER", "/d/dangling"}
 	for _, p := range edits {
-		if _, err := w.Edit(ctx, cid, p, []byte("y"), xTag); !errors.Is(err, fsview.ErrLinkInPath) {
+		if _, err := w.Edit(ctx, ctr, p, []byte("y"), xTag); !errors.Is(err, fsview.ErrLinkInPath) {
 			t.Errorf("édition %s : %v, attendu ErrLinkInPath", p, err)
 		}
 	}
 	uploads := [][2]string{{"/ld", "new"}, {"/evil", "new"}, {"/d", "dangling"}, {"/", "lf"}, {"/", "ld"}}
 	for _, u := range uploads {
-		if _, err := w.Upload(ctx, cid, u[0], u[1], []byte("y"), "*"); !errors.Is(err, fsview.ErrLinkInPath) {
+		if _, err := w.Upload(ctx, ctr, u[0], u[1], []byte("y"), "*"); !errors.Is(err, fsview.ErrLinkInPath) {
 			t.Errorf("envoi %s/%s : %v, attendu ErrLinkInPath", u[0], u[1], err)
 		}
 	}
+	// The fake Docker writes nothing: the proof is that it was never asked.
 	if puts := fake.PutCalls(); len(puts) != 0 {
 		t.Fatalf("ÉVASION : PutArchive appelé malgré un lien, dossiers %v", putDirs(puts))
-	}
-	if b, _ := os.ReadFile(filepath.Join(hostDir, "MARKER")); string(b) != "HOST-SECRET" {
-		t.Fatalf("ÉVASION : fichier de l'hôte modifié : %q", b)
 	}
 }
 
@@ -1027,7 +1269,7 @@ func TestProcNotRegular(t *testing.T) {
 	w, fake := procRig(t, root)
 	done := make(chan error, 1)
 	go func() {
-		_, err := w.Edit(ctx, cid, "/d/fifo", []byte("y"), xTag)
+		_, err := w.Edit(ctx, ctr, "/d/fifo", []byte("y"), xTag)
 		done <- err
 	}()
 	select {
@@ -1038,7 +1280,7 @@ func TestProcNotRegular(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("la FIFO a bloqué l'édition")
 	}
-	if _, err := w.Edit(ctx, cid, "/d", []byte("y"), xTag); !errors.Is(err, fsview.ErrNotRegular) {
+	if _, err := w.Edit(ctx, ctr, "/d", []byte("y"), xTag); !errors.Is(err, fsview.ErrNotRegular) {
 		t.Errorf("dossier : %v", err)
 	}
 	if len(fake.PutCalls()) != 0 {
@@ -1047,17 +1289,16 @@ func TestProcNotRegular(t *testing.T) {
 }
 
 // The parent of an upload, or the target of an edit, on a pseudo filesystem
-// → forbidden_path (spec §5.3 step 2, fstatfs). With the host's / as root.
+// → forbidden_path (spec §5.3 step 2, fstatfs). The host's /proc is the
+// root: "/" and "/version" do not start with /proc, so the prefix rule of
+// Q21 lets them through and only fstatfs on the descriptor refuses them.
 func TestProcPseudoFSRefused(t *testing.T) {
-	w, fake := procRig(t, "/")
-	if _, err := w.Upload(ctx, cid, "/proc", "x", []byte("y"), "*"); !errors.Is(err, fsview.ErrForbiddenPath) {
-		t.Errorf("envoi dans /proc : %v, attendu ErrForbiddenPath", err)
+	w, fake := procRig(t, "/proc")
+	if _, err := w.Upload(ctx, ctr, "/", "x", []byte("y"), "*"); !errors.Is(err, fsview.ErrForbiddenPath) {
+		t.Errorf("envoi dans un dossier procfs : %v, attendu ErrForbiddenPath", err)
 	}
-	if _, err := w.Upload(ctx, cid, "/sys/kernel", "x", []byte("y"), "*"); !errors.Is(err, fsview.ErrForbiddenPath) {
-		t.Errorf("envoi dans /sys/kernel : %v, attendu ErrForbiddenPath", err)
-	}
-	if _, err := w.Edit(ctx, cid, "/proc/sys/kernel/hostname", []byte("y"), xTag); !errors.Is(err, fsview.ErrForbiddenPath) {
-		t.Errorf("édition dans /proc : %v, attendu ErrForbiddenPath", err)
+	if _, err := w.Edit(ctx, ctr, "/version", []byte("y"), xTag); !errors.Is(err, fsview.ErrForbiddenPath) {
+		t.Errorf("édition d'un fichier procfs : %v, attendu ErrForbiddenPath", err)
 	}
 	if len(fake.PutCalls()) != 0 {
 		t.Fatal("PutArchive appelé")
@@ -1073,13 +1314,13 @@ func TestProcWriteSendsExactPath(t *testing.T) {
 		must(t, os.Chown(filepath.Join(root, "d"), uid+1, gid+1))
 	}
 	w, fake := procRig(t, root)
-	if _, err := w.Edit(ctx, cid, "/d/./f.txt", []byte("y"), xTag); err != nil {
+	if _, err := w.Edit(ctx, ctr, "/d/./f.txt", []byte("y"), xTag); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := w.Upload(ctx, cid, "/d", "new.txt", []byte("z"), "*"); err != nil {
+	if _, err := w.Upload(ctx, ctr, "/d", "new.txt", []byte("z"), "*"); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := w.Upload(ctx, cid, "/d", "f.txt", []byte("z"), "*"); !errors.Is(err, ErrConflict) {
+	if _, err := w.Upload(ctx, ctr, "/d", "f.txt", []byte("z"), "*"); !errors.Is(err, ErrConflict) {
 		t.Errorf("fichier existant : %v, attendu ErrConflict", err)
 	}
 	puts := fake.PutCalls()
@@ -1127,10 +1368,10 @@ EOF
 - Create: `internal/files/files.go`
 
 **Interfaces:**
-- Consumes: `fsview.FS` (`StatNoLinks`, `Open`, `Close`), `fsview.CleanPath`, `fsview.UnixPerm`, `fsview.ErrNotRegular`, `fsview.ErrNotDir`, `fsview.ErrTooLarge`, `audit.Event`, `Putter` (satisfait par `dockerx.Client`), `Auditor` (satisfait par `*audit.Log`).
-- Produces: voir tâche 2, plus `PutTimeout = time.Minute`, `type Putter interface{ PutArchive(ctx context.Context, id, dir string, content io.Reader) error }`, `type Auditor interface{ Write(audit.Event) error }`.
+- Consumes: `fsview.FS` (`StatNoLinks`, `Open`, `Close`), `fsview.HostBind(ctx, dockerx.Client, []dockerx.Mount) error`, `fsview.CleanPath`, `fsview.UnixPerm`, `fsview.ErrNotRegular`, `fsview.ErrNotDir`, `fsview.ErrTooLarge`, `fsview.ErrForbiddenPath`, `audit.Event`, `dockerx.ContainerInfo`, `Auditor` (satisfait par `*audit.Log`).
+- Produces: voir tâche 2, plus `PutTimeout = time.Minute`, `type Auditor interface{ Write(audit.Event) error }`.
 
-> **À comprendre :** `Edit` et `Upload` suivent la spec ligne à ligne, les numéros d'étape sont en commentaire. Rien n'ouvre de chemin : la vue fait tous les contrôles (`StatNoLinks` refuse un lien n'importe où, dernier composant compris, et `procfs` y fait `fstatfs`), Docker fait l'écriture. Le chemin d'écriture est une **chaîne** : celle qui a été contrôlée est celle dont `path.Dir` part vers Docker. `put` regroupe les étapes 4 à 6 : intention, `PutArchive` avec un contexte détaché de la requête (Q17), `Forget` (Q20), résultat.
+> **À comprendre :** `Edit` et `Upload` suivent la spec ligne à ligne, les numéros d'étape sont en commentaire. Rien n'ouvre de chemin : la vue fait tous les contrôles (`StatNoLinks` refuse un lien n'importe où, dernier composant compris, et `procfs` y fait `fstatfs`), Docker fait l'écriture. Le chemin d'écriture est une **chaîne** : celle qui a été contrôlée est celle dont `path.Dir` part vers Docker. `writable` refuse, sur l'`Inspect` seul, ce que Docker n'écrirait pas comme le conteneur le voit (Q21) et tout conteneur dont un montage expose l'hôte (Q22). `lock` tient le verrou du conteneur de l'étape 2 à l'étape 6 (Q23). `put` regroupe les étapes 4 à 6 : rien si la requête est déjà finie, intention, `PutArchive` avec un contexte détaché de la requête (Q17), `Forget` (Q20), résultat.
 
 - [ ] **Step 1: Implémenter** — créer `internal/files/files.go` :
 
@@ -1154,9 +1395,13 @@ import (
 	"log/slog"
 	"path"
 	"strings"
+	"sync"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/levy-cmd/hublot-kit/internal/audit"
+	"github.com/levy-cmd/hublot-kit/internal/dockerx"
 	"github.com/levy-cmd/hublot-kit/internal/fsview"
 )
 
@@ -1178,11 +1423,6 @@ var (
 	ErrInvalidName = errors.New("nom de fichier invalide")
 )
 
-// Putter is the part of dockerx.Client the writer uses.
-type Putter interface {
-	PutArchive(ctx context.Context, id, dir string, content io.Reader) error
-}
-
 // Auditor is the part of *audit.Log the writer uses.
 type Auditor interface {
 	Write(audit.Event) error
@@ -1190,14 +1430,18 @@ type Auditor interface {
 
 type Writer struct {
 	ReadOnly bool
-	Docker   Putter
-	Audit    Auditor
+	// Docker: PutArchive, and VolumeOptions for the host-bind rule (Q22).
+	Docker dockerx.Client
+	Audit  Auditor
 	// Open opens the view of a container by full ID: fsview.Views.For.
 	Open func(ctx context.Context, id string) (fsview.FS, error)
 	// Forget drops the index of a stopped container: fsview.Views.Forget.
 	// Called after every PutArchive, failed ones included (Docker may have
 	// removed the file already). nil: nothing to drop.
 	Forget func(id string)
+
+	mu    sync.Mutex
+	locks map[string]chan struct{} // one per container: steps 2 to 6 never interleave (Q23)
 }
 
 // ETag is the quoted SHA-256 of content: the ETag of the preview (spec §6)
@@ -1216,9 +1460,9 @@ func (w *Writer) Allowed() error {
 	return nil
 }
 
-// Edit replaces the regular file p of container id (full ID) by content, if
-// the file's current ETag is ifMatch. It returns the new ETag.
-func (w *Writer) Edit(ctx context.Context, id, p string, content []byte, ifMatch string) (string, error) {
+// Edit replaces the regular file p of container c (its Inspect) by content,
+// if the file's current ETag is ifMatch. It returns the new ETag.
+func (w *Writer) Edit(ctx context.Context, c dockerx.ContainerInfo, p string, content []byte, ifMatch string) (string, error) {
 	// 1. Read-only mode.
 	if err := w.Allowed(); err != nil {
 		return "", err
@@ -1226,11 +1470,19 @@ func (w *Writer) Edit(ctx context.Context, id, p string, content []byte, ifMatch
 	if len(content) > MaxEditBytes {
 		return "", fmt.Errorf("%w : édition limitée à %d octets", fsview.ErrTooLarge, MaxEditBytes)
 	}
-	// 2. The write path is the cleaned request path, nothing else; no link
-	// anywhere on it; fstatfs (procfs) or the host-bind rule (tarindex) inside
-	// the view; a regular file.
+	// 2. The write path is the cleaned request path, nothing else; a place
+	// Docker really writes to (Inspect); no link anywhere on it; fstatfs
+	// (procfs) or the host-bind rule (tarindex) inside the view; a regular file.
 	target := fsview.CleanPath(p)
-	fsys, err := w.Open(ctx, id)
+	if err := w.writable(ctx, c, target); err != nil {
+		return "", err
+	}
+	unlock, err := w.lock(ctx, c.ID)
+	if err != nil {
+		return "", err
+	}
+	defer unlock()
+	fsys, err := w.Open(ctx, c.ID)
 	if err != nil {
 		return "", err
 	}
@@ -1255,33 +1507,40 @@ func (w *Writer) Edit(ctx context.Context, id, p string, content []byte, ifMatch
 		return "", err
 	}
 	// 4 to 6.
-	if err := w.put(ctx, "file.write", id, target, tarball); err != nil {
+	if err := w.put(ctx, "file.write", c.ID, target, tarball); err != nil {
 		return "", err
 	}
 	return ETag(content), nil
 }
 
-// Upload creates the file name in directory dir of container id; it never
-// replaces anything (If-None-Match: *). It returns the path written.
-func (w *Writer) Upload(ctx context.Context, id, dir, name string, content []byte, ifNoneMatch string) (string, error) {
+// Upload creates the file name in directory dir of container c (its
+// Inspect); it never replaces anything (If-None-Match: *). It returns the
+// path written.
+func (w *Writer) Upload(ctx context.Context, c dockerx.ContainerInfo, dir, name string, content []byte, ifNoneMatch string) (string, error) {
 	// 1. Read-only mode.
 	if err := w.Allowed(); err != nil {
 		return "", err
 	}
-	if ifNoneMatch != "*" {
-		return "", fmt.Errorf("%w : un envoi exige If-None-Match: *", ErrConflict)
-	}
 	if len(content) > MaxUploadBytes {
 		return "", fmt.Errorf("%w : envoi limité à %d octets", fsview.ErrTooLarge, MaxUploadBytes)
 	}
-	// 2. A single component; then the parent, without any link, not on a
-	// pseudo filesystem (inside StatNoLinks), a directory.
+	// 2. A single component; a place Docker really writes to (Inspect); then
+	// the parent, without any link, not on a pseudo filesystem (inside
+	// StatNoLinks), a directory.
 	if !validName(name) {
 		return "", fmt.Errorf("%w : %q", ErrInvalidName, name)
 	}
 	parent := fsview.CleanPath(dir)
 	target := fsview.CleanPath(parent + "/" + name)
-	fsys, err := w.Open(ctx, id)
+	if err := w.writable(ctx, c, target); err != nil {
+		return "", err
+	}
+	unlock, err := w.lock(ctx, c.ID)
+	if err != nil {
+		return "", err
+	}
+	defer unlock()
+	fsys, err := w.Open(ctx, c.ID)
 	if err != nil {
 		return "", err
 	}
@@ -1293,9 +1552,12 @@ func (w *Writer) Upload(ctx context.Context, id, dir, name string, content []byt
 	if d.Type != fsview.TypeDir {
 		return "", fmt.Errorf("%w : %s", fsview.ErrNotDir, parent)
 	}
-	// 3. The last component, without following a link: absent → go on; a
-	// link, even dangling → link_in_path (from StatNoLinks); anything else →
-	// conflict.
+	// 3. If-None-Match: *, then the last component, without following a
+	// link: absent → go on; a link, even dangling → link_in_path (from
+	// StatNoLinks); anything else → conflict.
+	if ifNoneMatch != "*" {
+		return "", fmt.Errorf("%w : un envoi exige If-None-Match: *", ErrConflict)
+	}
 	switch _, err := fsys.StatNoLinks(ctx, target); {
 	case err == nil:
 		return "", fmt.Errorf("%w : %s existe", ErrConflict, target)
@@ -1307,15 +1569,19 @@ func (w *Writer) Upload(ctx context.Context, id, dir, name string, content []byt
 		return "", err
 	}
 	// 4 to 6.
-	if err := w.put(ctx, "file.upload", id, target, tarball); err != nil {
+	if err := w.put(ctx, "file.upload", c.ID, target, tarball); err != nil {
 		return "", err
 	}
 	return target, nil
 }
 
 // put is steps 4 to 6: intent, PutArchive on the parent of the checked path
-// (exactly that string), result. A failed intent writes nothing.
+// (exactly that string), result. A failed intent writes nothing, and so
+// does a request that has already ended (the guard answered 504).
 func (w *Writer) put(ctx context.Context, action, id, target string, tarball []byte) error {
+	if err := ctx.Err(); err != nil {
+		return fmt.Errorf("requête terminée avant l'écriture, rien n'est écrit : %w", err)
+	}
 	ev := audit.Event{Action: action, Container: id, Path: target, Result: "intent"}
 	if err := w.Audit.Write(ev); err != nil {
 		return fmt.Errorf("journal d'audit, rien n'est écrit : %w", err)
@@ -1355,9 +1621,78 @@ func readCapped(ctx context.Context, fsys fsview.FS, p string) ([]byte, error) {
 	return b, nil
 }
 
-// validName: a single path component Linux accepts (NAME_MAX 255 bytes).
+// lock takes the lock of container id, or gives up with ctx.
+func (w *Writer) lock(ctx context.Context, id string) (func(), error) {
+	w.mu.Lock()
+	if w.locks == nil {
+		w.locks = map[string]chan struct{}{}
+	}
+	l, ok := w.locks[id]
+	if !ok {
+		l = make(chan struct{}, 1)
+		w.locks[id] = l
+	}
+	w.mu.Unlock()
+	select {
+	case l <- struct{}{}:
+		return func() { <-l }, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+}
+
+// writable refuses, from the Inspect alone and before any intent, a write
+// Docker would not make where the container sees it (Q21), and any write to
+// a container whose mounts expose the host (Q22, spec §5.2 step 7). Docker
+// extracts in its own view: the root filesystem plus the configured mounts.
+func (w *Writer) writable(ctx context.Context, c dockerx.ContainerInfo, target string) error {
+	if err := fsview.HostBind(ctx, w.Docker, c.Mounts); err != nil {
+		return fmt.Errorf("écriture refusée pour tout le conteneur : %w", err)
+	}
+	for _, d := range []string{"/proc", "/sys", "/dev"} {
+		if under(target, d) {
+			return fmt.Errorf("%w : %s : %s est monté au démarrage du conteneur, Docker n'y écrit pas", fsview.ErrForbiddenPath, target, d)
+		}
+	}
+	switch target {
+	case "/etc/hosts", "/etc/hostname", "/etc/resolv.conf":
+		return fmt.Errorf("%w : %s est géré et monté par Docker", fsview.ErrForbiddenPath, target)
+	}
+	for _, m := range c.Mounts {
+		d := fsview.CleanPath(m.Destination)
+		if d == target {
+			return fmt.Errorf("%w : %s est monté (%s %s) : modifiez sa source", fsview.ErrForbiddenPath, target, m.Type, m.Source+m.Name)
+		}
+		if m.Type == "tmpfs" && under(target, d) {
+			return fmt.Errorf("%w : %s est sous le tmpfs %s, Docker n'y écrit pas", fsview.ErrForbiddenPath, target, d)
+		}
+	}
+	for _, d := range c.Tmpfs {
+		if under(target, fsview.CleanPath(d)) {
+			return fmt.Errorf("%w : %s est sous le tmpfs %s, Docker n'y écrit pas", fsview.ErrForbiddenPath, target, d)
+		}
+	}
+	return nil
+}
+
+// under: p is dir or below it (both clean, absolute).
+func under(p, dir string) bool {
+	return p == dir || dir == "/" || strings.HasPrefix(p, dir+"/")
+}
+
+// validName: a single path component Linux accepts (NAME_MAX 255 bytes),
+// valid UTF-8 (the UI could not open it otherwise, spec §13), without
+// control characters (C0, DEL, C1: a misleading confirmation) nor backslash.
 func validName(n string) bool {
-	return n != "" && n != "." && n != ".." && len(n) <= 255 && !strings.ContainsAny(n, "/\x00")
+	if n == "" || n == "." || n == ".." || len(n) > 255 || !utf8.ValidString(n) || strings.ContainsAny(n, `/\`) {
+		return false
+	}
+	for _, r := range n {
+		if unicode.IsControl(r) {
+			return false
+		}
+	}
+	return true
 }
 
 // oneFile is the tar of a single regular file: base name, mode, owner.
@@ -1387,18 +1722,20 @@ Expected: `ok`, aucune sortie de `vet` ni de `gofmt`.
 - [ ] **Step 3: Vérifier sous Linux root**
 
 Run: `scripts/test-linux.sh -race ./internal/files/ -v 2>&1 | grep -E '^(---|ok|FAIL)' | tail -n 25`
-Expected: tous `PASS`, dont `TestProcLinksRefused`, `TestProcNotRegular` (la FIFO ne bloque pas : `StatNoLinks` ne l'ouvre jamais en lecture), `TestProcPseudoFSRefused`, `TestProcWriteSendsExactPath` ; aucun SKIP.
+Expected: tous `PASS` (24 tests), dont `TestProcLinksRefused`, `TestProcNotRegular` (la FIFO ne bloque pas : `StatNoLinks` ne l'ouvre jamais en lecture), `TestProcPseudoFSRefused`, `TestProcWriteSendsExactPath`, `TestWritesAreSerialized`, `TestRefusesWhereDockerDoesNotWrite`, `TestHostBindRefusesEveryWrite` ; aucun SKIP.
 
 - [ ] **Step 4: Contrôles de mutation** (une fois chacun, puis annuler avec `git checkout internal/files/files.go`)
   - Remplacer `fsys.StatNoLinks(` par `fsys.Stat(` (une vue qui suit les liens) : `scripts/test-linux.sh ./internal/files/ -run 'Links|Proc' 2>&1 | grep -E '^(---|FAIL)' | tail -n 8` doit montrer `FAIL: TestProcLinksRefused` (« ÉVASION : PutArchive appelé malgré un lien ») et `FAIL: TestLinksRefused`.
   - Remplacer `context.WithoutCancel(ctx)` par `ctx` : `go test ./internal/files/ -run Survives 2>&1 | tail -n 3` doit échouer.
+  - Faire rendre à `lock` un `func() {}` sans rien attendre : `go test ./internal/files/ -run Serialized 2>&1 | tail -n 3` doit échouer (« la seconde écriture a passé ses contrôles pendant la première »).
+  - Dans `internal/fsview/procfs_linux.go`, neutraliser `checkNotPseudo` de `StatNoLinks` : `scripts/test-linux.sh ./internal/files/ -run Pseudo 2>&1 | tail -n 3` doit échouer ; puis `git checkout internal/fsview`.
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add internal/files
 git commit -F - <<'EOF'
-files: seul point d'écriture, lecture seule, chemin sans lien, If-Match, audit, PutArchive
+files: seul point d'écriture, lecture seule, chemin sans lien, montages, verrou, If-Match, audit, PutArchive
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 EOF
@@ -1415,10 +1752,10 @@ EOF
 - Modify: `internal/api/server.go`, `internal/api/fserr.go`, `internal/api/fs.go`, `internal/api/fs_preview.go`, `internal/api/fs_download.go`
 
 **Interfaces:**
-- Consumes: `files.Writer` et ses erreurs (tâche 3), `files.ETag`, `files.MaxEditBytes`, `files.MaxUploadBytes`, `guarded`, `writeFSError`, `fsRequest`, `Deps.OpenFS`, `Deps.Views.Forget`, `dockerx.ErrRefused`.
-- Produces: `server.files *files.Writer` ; `fsRequest(w, r, param string)` (`"path"` ou `"dir"`) ; `PUT /api/containers/{id}/fs/file?path=` → `200 {"etag"}` + en-tête `ETag` ; `POST /api/containers/{id}/fs/upload?dir=` → `201 {"path","etag"}` ; helpers de test `(*fixture).send(method, path string, body []byte, cookie *http.Cookie, headers map[string]string)`, `(*fixture).upload(t, c, ctr, dir, filename string, content []byte, inm string)`, `multipartBody(t, field, filename string, content []byte) ([]byte, string)`.
+- Consumes: `files.Writer` et ses erreurs (tâche 3 ; `Edit` et `Upload` reçoivent l'`info` de `fsRequest`), `files.ETag`, `files.MaxEditBytes`, `files.MaxUploadBytes`, `guarded`, `writeFSError`, `fsRequest`, `Deps.OpenFS`, `Deps.Views.Forget`, `dockerx.ErrRefused`.
+- Produces: `server.files *files.Writer` ; `fsRequest(w, r, param string)` (`"path"` ou `"dir"`) ; `PUT /api/containers/{id}/fs/file?path=` → `200 {"etag"}` + en-tête `ETag` ; `POST /api/containers/{id}/fs/upload?dir=` → `201 {"path","etag"}` ; helpers de test `(*fixture).send(method, path string, body []byte, cookie *http.Cookie, headers map[string]string)`, `(*fixture).upload(t, c, ctr, dir, filename string, content []byte, inm string)`, `multipartBody(t, field, filename string, content []byte) ([]byte, string)`, `multipartRaw(t, disposition string, content []byte) ([]byte, string)`, `tarEntry(t, b []byte) (string, string)`.
 
-> **À comprendre :** la route ne décide de rien : elle lit le corps (borné), puis appelle `files` sous la garde de §13. Elle demande d'abord `files.Allowed()` pour répondre `read_only` sans lire le corps ni interroger Docker. Le nom d'un envoi est le `filename` brut de la partie `file` (Q19) : `Part.FileName()` aurait changé `a/b` en `b`. Les tests envoient ce nom brut eux-mêmes (`multipartBody`), comme un client qui ne passe pas par un navigateur.
+> **À comprendre :** la route ne décide de rien : elle lit le corps (borné), puis appelle `files` sous la garde de §13. Elle demande d'abord `files.Allowed()` pour répondre `read_only` sans lire le corps ni interroger Docker. Le nom d'un envoi est le `filename` de la partie `file` tel que `mime.ParseMediaType` le décode, et c'est cette valeur que `files` valide puis écrit (Q19) : `Part.FileName()` aurait changé `a/b` en `b`. Les tests envoient des en-têtes bruts (`multipartRaw`) : `filename*=UTF-8''..%2Fx` se décode en `../x` et doit être refusé ; `filename*=UTF-8''%C3%A9t%C3%A9.txt` doit arriver dans le tar sous `été.txt`.
 
 - [ ] **Step 1: Tests qui échouent** — créer `internal/api/fs_write_test.go` :
 
@@ -1429,9 +1766,11 @@ package api
 // New: package files on an in-memory view, a fake Docker.
 
 import (
+	"archive/tar"
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
@@ -1461,14 +1800,20 @@ func (f *fixture) send(method, path string, body []byte, cookie *http.Cookie, he
 	return rec
 }
 
-// multipartBody builds the body of an upload whose part "file" carries the
-// raw filename given (no escaping, no base name).
+// multipartBody builds the body of an upload whose part field carries the
+// filename given, quoted by %q (no base name).
 func multipartBody(t *testing.T, field, filename string, content []byte) ([]byte, string) {
+	t.Helper()
+	return multipartRaw(t, fmt.Sprintf(`form-data; name=%q; filename=%q`, field, filename), content)
+}
+
+// multipartRaw builds the body of an upload with a raw Content-Disposition.
+func multipartRaw(t *testing.T, disposition string, content []byte) ([]byte, string) {
 	t.Helper()
 	var b bytes.Buffer
 	mw := multipart.NewWriter(&b)
 	h := textproto.MIMEHeader{}
-	h.Set("Content-Disposition", fmt.Sprintf(`form-data; name=%q; filename=%q`, field, filename))
+	h.Set("Content-Disposition", disposition)
 	h.Set("Content-Type", "application/octet-stream")
 	p, err := mw.CreatePart(h)
 	if err != nil {
@@ -1492,15 +1837,15 @@ func (f *fixture) upload(t *testing.T, c *http.Cookie, ctr, dir, filename string
 func writeFixture(t *testing.T, readOnly bool) (*fixture, *http.Cookie) {
 	t.Helper()
 	f := newFixture(t, readOnly)
-	f.fs.AddDir("/etc").AddFile("/etc/hosts", []byte("127.0.0.1\n")).AddLink("/etc/alias", "hosts")
+	f.fs.AddDir("/etc").AddFile("/etc/app.conf", []byte("port=80\n")).AddLink("/etc/alias", "app.conf")
 	return f, f.session(t)
 }
 
 func TestEditRoute(t *testing.T) {
 	f, c := writeFixture(t, false)
 	// The If-Match is the ETag of the preview, as is.
-	tag := f.do("GET", "/api/containers/web/fs/file?path=/etc/hosts", "", c).Header().Get("ETag")
-	rec := f.send("PUT", "/api/containers/web/fs/file?path=/etc/hosts", []byte("10.0.0.1\n"), c, map[string]string{"If-Match": tag})
+	tag := f.do("GET", "/api/containers/web/fs/file?path=/etc/app.conf", "", c).Header().Get("ETag")
+	rec := f.send("PUT", "/api/containers/web/fs/file?path=/etc/app.conf", []byte("10.0.0.1\n"), c, map[string]string{"If-Match": tag})
 	var body struct{ ETag string }
 	json.Unmarshal(rec.Body.Bytes(), &body)
 	if rec.Code != http.StatusOK || body.ETag != files.ETag([]byte("10.0.0.1\n")) || rec.Header().Get("ETag") != body.ETag {
@@ -1518,7 +1863,7 @@ func TestEditRoute(t *testing.T) {
 
 func TestWriteRoutesErrors(t *testing.T) {
 	f, c := writeFixture(t, false)
-	tag := files.ETag([]byte("127.0.0.1\n"))
+	tag := files.ETag([]byte("port=80\n"))
 	put := func(p string, body []byte, ifMatch string) *httptest.ResponseRecorder {
 		return f.send("PUT", "/api/containers/web/fs/file?path="+p, body, c, map[string]string{"If-Match": ifMatch})
 	}
@@ -1528,17 +1873,20 @@ func TestWriteRoutesErrors(t *testing.T) {
 		status int
 		code   string
 	}{
-		{"If-Match faux", put("/etc/hosts", []byte("x"), files.ETag([]byte("autre"))), 409, "conflict"},
-		{"If-Match absent", put("/etc/hosts", []byte("x"), ""), 409, "conflict"},
+		{"If-Match faux", put("/etc/app.conf", []byte("x"), files.ETag([]byte("autre"))), 409, "conflict"},
+		{"If-Match absent", put("/etc/app.conf", []byte("x"), ""), 409, "conflict"},
 		{"lien final", put("/etc/alias", []byte("x"), tag), 422, "link_in_path"},
 		{"dossier", put("/etc", []byte("x"), tag), 422, "not_regular"},
 		{"absent", put("/etc/nope", []byte("x"), tag), 404, "not_found"},
-		{"trop gros", put("/etc/hosts", make([]byte, files.MaxEditBytes+1), tag), 413, "too_large"},
+		{"trop gros", put("/etc/app.conf", make([]byte, files.MaxEditBytes+1), tag), 413, "too_large"},
 		{"nom a/b brut", f.upload(t, c, "web", "/etc", "a/b", []byte("x"), "*"), 400, "invalid_name"},
 		{"nom ..", f.upload(t, c, "web", "/etc", "..", []byte("x"), "*"), 400, "invalid_name"},
 		{"nom vide", f.upload(t, c, "web", "/etc", "", []byte("x"), "*"), 400, "invalid_name"},
 		{"sans If-None-Match", f.upload(t, c, "web", "/etc", "n", []byte("x"), ""), 409, "conflict"},
-		{"nom existant", f.upload(t, c, "web", "/etc", "hosts", []byte("x"), "*"), 409, "conflict"},
+		{"nom existant", f.upload(t, c, "web", "/etc", "app.conf", []byte("x"), "*"), 409, "conflict"},
+		{"nom ../x sans If-None-Match", f.upload(t, c, "web", "/etc", "../x", []byte("x"), ""), 400, "invalid_name"},
+		{"nom avec \\", f.upload(t, c, "web", "/etc", `a\b`, []byte("x"), "*"), 400, "invalid_name"},
+		{"/etc/hosts (Q21)", f.upload(t, c, "web", "/etc", "hosts", []byte("x"), "*"), 403, "forbidden_path"},
 		{"envoi sur un lien", f.upload(t, c, "web", "/etc", "alias", []byte("x"), "*"), 422, "link_in_path"},
 		{"envoi trop gros", f.upload(t, c, "web", "/etc", "big", make([]byte, files.MaxUploadBytes+1), "*"), 413, "too_large"},
 	}
@@ -1559,10 +1907,10 @@ func TestWriteRoutesErrors(t *testing.T) {
 
 func TestUploadRoute(t *testing.T) {
 	f, c := writeFixture(t, false)
-	rec := f.upload(t, c, "web", "/etc", "app.conf", []byte("port=80\n"), "*")
+	rec := f.upload(t, c, "web", "/etc", "new.conf", []byte("port=80\n"), "*")
 	var body struct{ Path, ETag string }
 	json.Unmarshal(rec.Body.Bytes(), &body)
-	if rec.Code != http.StatusCreated || body.Path != "/etc/app.conf" || body.ETag != files.ETag([]byte("port=80\n")) {
+	if rec.Code != http.StatusCreated || body.Path != "/etc/new.conf" || body.ETag != files.ETag([]byte("port=80\n")) {
 		t.Fatalf("envoi : %d %s", rec.Code, rec.Body)
 	}
 	if puts := f.docker.PutCalls(); len(puts) != 1 || puts[0].Dir != "/etc" {
@@ -1574,7 +1922,7 @@ func TestWriteRoutesReadOnly(t *testing.T) {
 	f, c := writeFixture(t, true)
 	// Refused first: before the container is even looked up.
 	for _, rec := range []*httptest.ResponseRecorder{
-		f.send("PUT", "/api/containers/absent/fs/file?path=/etc/hosts", []byte("x"), c, map[string]string{"If-Match": "x"}),
+		f.send("PUT", "/api/containers/absent/fs/file?path=/etc/app.conf", []byte("x"), c, map[string]string{"If-Match": "x"}),
 		f.upload(t, c, "web", "/etc", "n", []byte("x"), "*"),
 	} {
 		if rec.Code != http.StatusForbidden || errCode(t, rec) != "read_only" {
@@ -1588,10 +1936,10 @@ func TestWriteRoutesReadOnly(t *testing.T) {
 
 func TestWriteRoutesNeedSessionAndOrigin(t *testing.T) {
 	f, c := writeFixture(t, false)
-	if rec := f.send("PUT", "/api/containers/web/fs/file?path=/etc/hosts", []byte("x"), nil, nil); rec.Code != http.StatusUnauthorized {
+	if rec := f.send("PUT", "/api/containers/web/fs/file?path=/etc/app.conf", []byte("x"), nil, nil); rec.Code != http.StatusUnauthorized {
 		t.Errorf("sans session : %d", rec.Code)
 	}
-	if rec := f.send("PUT", "/api/containers/web/fs/file?path=/etc/hosts", []byte("x"), c, map[string]string{"Origin": "http://evil.example"}); rec.Code != http.StatusForbidden || errCode(t, rec) != "forbidden_origin" {
+	if rec := f.send("PUT", "/api/containers/web/fs/file?path=/etc/app.conf", []byte("x"), c, map[string]string{"Origin": "http://evil.example"}); rec.Code != http.StatusForbidden || errCode(t, rec) != "forbidden_origin" {
 		t.Errorf("Origin étrangère : %d %s", rec.Code, rec.Body)
 	}
 }
@@ -1612,11 +1960,53 @@ func TestWriteStoppedIndexing(t *testing.T) {
 	fake := stoppedFake(t)
 	g := &gatedAPI{Fake: fake, open: make(chan struct{})}
 	f, c := stoppedFixture(t, g, fake, fsview.Options{})
-	rec := f.send("PUT", "/api/containers/db/fs/file?path=/etc/hostname", []byte("x"), c, map[string]string{"If-Match": files.ETag([]byte("db\n"))})
+	rec := f.send("PUT", "/api/containers/db/fs/file?path=/etc/motd", []byte("x"), c, map[string]string{"If-Match": files.ETag([]byte("db\n"))})
 	if rec.Code != http.StatusAccepted || errCode(t, rec) != "indexing" {
 		t.Fatalf("pendant l'indexation : %d %s", rec.Code, rec.Body)
 	}
 	close(g.open)
+}
+
+// The filename is decoded by mime.ParseMediaType (RFC 2231 filename*,
+// quoted pairs) before it is validated: the value checked is the value
+// written in the tar, never another one (Q19).
+func TestUploadNameIsTheDecodedValue(t *testing.T) {
+	f, c := writeFixture(t, false)
+	send := func(disposition string) *httptest.ResponseRecorder {
+		body, ct := multipartRaw(t, disposition, []byte("x"))
+		return f.send("POST", "/api/containers/web/fs/upload?dir=/etc", body, c, map[string]string{"Content-Type": ct, "If-None-Match": "*"})
+	}
+	for _, d := range []string{
+		`form-data; name="file"; filename*=UTF-8''..%2Fx`, // decodes to ../x
+		`form-data; name="file"; filename="a\/b"`,         // quoted pair: a/b
+		`form-data; name="file"; filename*=UTF-8''a%0Ab`,  // a, LF, b
+	} {
+		if rec := send(d); rec.Code != http.StatusBadRequest || errCode(t, rec) != "invalid_name" {
+			t.Errorf("%s : %d %s", d, rec.Code, rec.Body)
+		}
+	}
+	if n := len(f.docker.PutCalls()); n != 0 {
+		t.Fatalf("PutArchive appelé %d fois", n)
+	}
+	rec := send(`form-data; name="file"; filename*=UTF-8''%C3%A9t%C3%A9.txt`)
+	if rec.Code != http.StatusCreated || !strings.Contains(rec.Body.String(), `"/etc/été.txt"`) {
+		t.Fatalf("nom encodé : %d %s", rec.Code, rec.Body)
+	}
+	if h, _ := tarEntry(t, f.docker.PutCalls()[0].Tar); h != "été.txt" {
+		t.Fatalf("nom écrit dans le tar : %q", h)
+	}
+}
+
+// tarEntry returns the name and body of the single entry of a tar.
+func tarEntry(t *testing.T, b []byte) (string, string) {
+	t.Helper()
+	tr := tar.NewReader(bytes.NewReader(b))
+	h, err := tr.Next()
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(tr)
+	return h.Name, string(body)
 }
 ```
 
@@ -1663,7 +2053,7 @@ func (s *server) fsEdit(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx := r.Context()
 	tag, release, err := guarded(s.guard, ctx, info.ID, func() (string, error) {
-		return s.files.Edit(ctx, info.ID, p, body, r.Header.Get("If-Match"))
+		return s.files.Edit(ctx, info, p, body, r.Header.Get("If-Match"))
 	}, nil)
 	release()
 	if err != nil {
@@ -1693,7 +2083,7 @@ func (s *server) fsUpload(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx := r.Context()
 	written, release, err := guarded(s.guard, ctx, info.ID, func() (string, error) {
-		return s.files.Upload(ctx, info.ID, dir, name, content, r.Header.Get("If-None-Match"))
+		return s.files.Upload(ctx, info, dir, name, content, r.Header.Get("If-None-Match"))
 	}, nil)
 	release()
 	if err != nil {
@@ -1703,11 +2093,13 @@ func (s *server) fsUpload(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, map[string]string{"path": written, "etag": files.ETag(content)})
 }
 
-// readUpload returns the raw filename and the content of the part "file".
-// Not Part.FileName(): it keeps only the base name, and "a/b" would become
-// "b" instead of being refused (spec §5.3: invalid_name). No part "file":
-// an empty name, refused the same way. The content is read up to one byte
-// past the cap: package files reports too_large.
+// readUpload returns the filename and the content of the part "file". The
+// filename is the value mime.ParseMediaType decodes (RFC 2231 filename*,
+// quoted pairs): package files validates that very value, the one written
+// in the tar. Not Part.FileName(): it keeps only the base name, and "a/b"
+// would become "b" instead of being refused (spec §5.3: invalid_name). No
+// part "file": an empty name, refused the same way. The content is read up
+// to one byte past the cap: package files reports too_large.
 func readUpload(r *http.Request) (string, []byte, error) {
 	mr, err := r.MultipartReader()
 	if err != nil {
@@ -1935,7 +2327,7 @@ EOF
 - Consumes: `(*fixture).init`, `session`, `send`, `upload` (tâche 4), `errCode`, `dockerCLI` (`integration_test.go`, même build tag Linux), `dockerx.New`.
 - Produces: `whileIndexing(t, do func() *httptest.ResponseRecorder) *httptest.ResponseRecorder`.
 
-> **À comprendre :** ces tests prouvent ce que le faux ne peut pas : que l'index est bien reconstruit après une écriture (l'aperçu relit `v2`), que Docker garde le mode et le propriétaire du tar (`640 1000 1001`), qu'un lien pendant reste intact après un envoi refusé, et que le refus d'un rootfs `--read-only` arrive en `read_only` avec le message de Docker. Une écriture sur un conteneur arrêté retire l'index : la requête suivante peut recevoir `202`, d'où `whileIndexing`.
+> **À comprendre :** ces tests prouvent ce que le faux ne peut pas : que l'index est bien reconstruit après une écriture (l'aperçu relit `v2`), que Docker garde le mode et le propriétaire du tar (`640 1000 1001`), qu'un lien pendant reste intact après un envoi refusé, que `/etc/hosts` et un `--tmpfs` sont refusés avant Docker (Q21), et que le refus d'un rootfs `--read-only` arrive en `read_only` avec le message de Docker. Une écriture sur un conteneur arrêté retire l'index : la requête suivante peut recevoir `202`, d'où `whileIndexing`.
 
 - [ ] **Step 1: Conteneur arrêté** — créer `internal/api/integration_write_test.go` :
 
@@ -2049,7 +2441,7 @@ func TestIntegrationWriteRunning(t *testing.T) {
 	name := "hublot-it-write-run"
 	exec.Command("docker", "rm", "-f", name).Run()
 	t.Cleanup(func() { exec.Command("docker", "rm", "-f", name).Run() })
-	dockerCLI(t, "run", "-d", "--name", name, "alpine:3", "sleep", "300")
+	dockerCLI(t, "run", "-d", "--name", name, "--tmpfs", "/scratch", "alpine:3", "sleep", "300")
 	dockerCLI(t, "exec", name, "sh", "-c", "echo v1 > /etc/app.conf && chown 1000:1001 /etc/app.conf && chmod 640 /etc/app.conf && ln -s /etc /linkdir && ln -s /nope /tmp/dangling")
 	dc, err := dockerx.New()
 	if err != nil {
@@ -2086,6 +2478,16 @@ func TestIntegrationWriteRunning(t *testing.T) {
 		}, 422, "link_in_path"},
 		{"envoi dans /proc", func() (int, string) {
 			r := f.upload(t, c, name, "/proc", "x", []byte("x"), "*")
+			return r.Code, errCode(t, r)
+		}, 403, "forbidden_path"},
+		// Q21: Docker would answer "device or resource busy" (500), or take
+		// the write where the container never sees it.
+		{"édition de /etc/hosts", func() (int, string) {
+			r := f.send("PUT", base+"/fs/file?path=/etc/hosts", []byte("x"), c, map[string]string{"If-Match": tag})
+			return r.Code, errCode(t, r)
+		}, 403, "forbidden_path"},
+		{"envoi dans un --tmpfs", func() (int, string) {
+			r := f.upload(t, c, name, "/scratch", "x", []byte("x"), "*")
 			return r.Code, errCode(t, r)
 		}, 403, "forbidden_path"},
 	} {
@@ -2133,9 +2535,9 @@ EOF
 
 **Interfaces:**
 - Consumes: `api()`, `fsPath`, `errorMessage`, `t`.
-- Produces: `saveFile(id: string, path: string, text: string, etag: string): Promise<string>` ; `uploadFile(id: string, dir: string, file: File): Promise<{ path: string; etag: string }>` ; `Preview` texte : `{ kind: 'text'; text; etag; utf8: boolean }` ; `write.ts` : `EDIT_MAX`, `UPLOAD_MAX`, `decodeUtf8(bytes: Uint8Array): string | null`, `lineSeparatorOf(text: string): '\n' | '\r\n' | null`, `type Language`, `languageOf(path: string): Language`, `writeErrorMessage(kind: 'edit' | 'upload', code: string, detail?: string): string` ; `editor.ts` : `loadLanguage(l: Language): Promise<Extension>` ; clés i18n `write.*`, `confirm.*`.
+- Produces: `saveFile(id: string, path: string, text: string, etag: string): Promise<string>` ; `uploadFile(id: string, dir: string, file: File): Promise<{ path: string; etag: string }>` ; `Preview` texte : `{ kind: 'text'; text; etag; utf8: boolean }` ; `write.ts` : `EDIT_MAX`, `UPLOAD_MAX`, `decodeUtf8(bytes: Uint8Array): string | null`, `lineSeparatorOf(text: string): '\n' | '\r\n' | null`, `type Language`, `languageOf(path: string): Language`, `writeErrorMessage(kind: 'edit' | 'upload', code: string, detail?: string, status?: number): string` (`status` 504 → « l'écriture a peut-être eu lieu ») ; `editor.ts` : `loadLanguage(l: Language): Promise<Extension>`, `docText(state: EditorState): string` ; clés i18n `write.*`, `confirm.*`.
 
-> **À comprendre :** `api()` posait `Content-Type: application/json` dès qu'un corps existait ; un `FormData` doit laisser le navigateur poser le `boundary` du multipart. La condition devient « corps texte ». L'aperçu lit désormais les octets et les décode strictement (Q16) : `utf8: false` garde l'affichage avec U+FFFD, mais l'interface n'offrira pas l'édition. Chaque langage est un `import()` séparé : Vite en fait un morceau chargé quand un fichier de ce type s'ouvre dans l'éditeur.
+> **À comprendre :** `api()` posait `Content-Type: application/json` dès qu'un corps existait ; un `FormData` doit laisser le navigateur poser le `boundary` du multipart. La condition devient « corps texte ». L'aperçu lit désormais les octets et les décode strictement (Q16) : `utf8: false` garde l'affichage avec U+FFFD, mais l'interface n'offrira pas l'édition. Chaque langage est un `import()` séparé : Vite en fait un morceau chargé quand un fichier de ce type s'ouvre dans l'éditeur. `docText` relit le texte par `state.sliceDoc()` : `state.doc.toString()` joint toujours par LF, et un fichier CRLF serait enregistré en LF (R1 ; le test le montre).
 
 - [ ] **Step 1: Dépendances**
 
@@ -2216,19 +2618,41 @@ describe('writeErrorMessage', () => {
 		expect(writeErrorMessage('edit', 'too_large')).toBe(t('write.editTooLarge'));
 		expect(writeErrorMessage('upload', 'too_large')).toBe(t('write.uploadTooLarge'));
 		expect(writeErrorMessage('upload', 'invalid_name')).toBe(t('error.invalid_name'));
+		expect(writeErrorMessage('upload', 'forbidden_path', 'tmpfs /scratch')).toBe(`${t('write.forbidden')} (tmpfs /scratch)`);
+		// 504: the guard gave up, the write may still happen (Q17).
+		expect(writeErrorMessage('edit', 'internal', 'délai dépassé', 504)).toBe(t('write.maybeWritten'));
+		expect(writeErrorMessage('edit', 'internal', undefined, 500)).toBe(t('error.internal'));
 	});
 });
 ```
 
 ```ts
+import { EditorState } from '@codemirror/state';
 import { describe, expect, it } from 'vitest';
-import { loadLanguage } from './editor.ts';
+import { docText, loadLanguage } from './editor.ts';
 
 describe('loadLanguage', () => {
 	it('loads every language on demand', async () => {
 		for (const l of ['json', 'yaml', 'javascript', 'python', 'shell', 'text'] as const) {
 			await expect(loadLanguage(l)).resolves.toBeDefined();
 		}
+	});
+});
+
+describe('docText', () => {
+	it('gives back the text with the file own line separator, byte for byte', () => {
+		const cases: [string, string][] = [
+			['a\r\nb\r\n', '\r\n'],
+			['a\nb\n', '\n'],
+			['a\rb\n', '\n'] // a lone CR stays a character
+		];
+		for (const [doc, sep] of cases) {
+			const state = EditorState.create({ doc, extensions: [EditorState.lineSeparator.of(sep)] });
+			expect(docText(state)).toBe(doc);
+		}
+		// The trap: Text.toString() always joins with LF.
+		const crlf = EditorState.create({ doc: 'a\r\nb', extensions: [EditorState.lineSeparator.of('\r\n')] });
+		expect(crlf.doc.toString()).toBe('a\nb');
 	});
 });
 ```
@@ -2296,7 +2720,7 @@ describe('loadLanguage', () => {
 +});
 ```
 
-Run: `npx vitest run 2>&1 | tail -n 5` — Expected: `3 failed` (fichiers), `4 failed` (tests).
+Run: `npx vitest run 2>&1 | tail -n 5` — Expected: `FAIL` ; `write.ts` et `editor.ts` n'existent pas, `saveFile` et `uploadFile` ne sont pas exportés.
 
 - [ ] **Step 3: Implémenter** — créer `web/src/lib/write.ts` et `web/src/lib/editor.ts`, modifier `api.ts`, ajouter les textes (mêmes clés en français et en anglais) :
 
@@ -2343,8 +2767,13 @@ export function languageOf(path: string): Language {
 	return (dot > 0 && BY_EXT[name.slice(dot + 1)]) || 'text';
 }
 
-/** Message for a refused edit or upload. A read_only from Docker names its cause in the detail (shown as text). */
-export function writeErrorMessage(kind: 'edit' | 'upload', code: string, detail?: string): string {
+/**
+ * Message for a refused edit or upload. A read_only from Docker and a
+ * forbidden_path name their cause in the detail (shown as text). A 504 means
+ * the guard gave up while the agent may still write (Q17).
+ */
+export function writeErrorMessage(kind: 'edit' | 'upload', code: string, detail?: string, status?: number): string {
+	if (status === 504) return t('write.maybeWritten');
 	switch (code) {
 		case 'conflict':
 			return t(kind === 'edit' ? 'write.conflictEdit' : 'write.conflictUpload');
@@ -2355,7 +2784,7 @@ export function writeErrorMessage(kind: 'edit' | 'upload', code: string, detail?
 		case 'too_large':
 			return t(kind === 'edit' ? 'write.editTooLarge' : 'write.uploadTooLarge');
 		case 'forbidden_path':
-			return t('write.forbidden');
+			return detail ? `${t('write.forbidden')} (${detail})` : t('write.forbidden');
 		default:
 			return errorMessage(code);
 	}
@@ -2363,7 +2792,7 @@ export function writeErrorMessage(kind: 'edit' | 'upload', code: string, detail?
 ```
 
 ```ts
-import type { Extension } from '@codemirror/state';
+import type { EditorState, Extension } from '@codemirror/state';
 import type { Language } from './write.ts';
 
 // Each language is its own chunk, loaded when a file of that kind is edited
@@ -2384,6 +2813,13 @@ const loaders: Record<Language, () => Promise<Extension>> = {
 };
 
 export const loadLanguage = (l: Language): Promise<Extension> => loaders[l]();
+
+/**
+ * The edited text with the state's line separator (EditorState.lineSeparator).
+ * Not state.doc.toString(): it always joins lines with LF, and a CRLF file
+ * would be saved in LF (Q16).
+ */
+export const docText = (state: EditorState): string => state.sliceDoc();
 ```
 
 ```diff
@@ -2457,7 +2893,7 @@ export const loadLanguage = (l: Language): Promise<Extension> => loaders[l]();
 ```diff
 --- a/web/src/lib/i18n/fr.ts
 +++ b/web/src/lib/i18n/fr.ts
-@@ -68,6 +68,34 @@ export const fr = {
+@@ -68,6 +68,37 @@ export const fr = {
  	'files.unit.mib': 'Mio',
  	'files.unit.gib': 'Gio',
  	'files.unit.tib': 'Tio',
@@ -2480,7 +2916,10 @@ export const loadLanguage = (l: Language): Promise<Extension> => loaders[l]();
 +		"Ce chemin passe par un lien symbolique : l'agent n'écrit que sur un chemin sans lien. Ouvrez la cible du lien.",
 +	'write.editTooLarge': "Plus de 2 Mio : l'éditeur s'arrête là.",
 +	'write.uploadTooLarge': 'Plus de 32 Mio : utilisez docker cp pour ce fichier.',
-+	'write.forbidden': "Écriture interdite à cet endroit (pseudo-système de fichiers, ou montage qui expose l'hôte).",
++	'write.forbidden':
++		"Écriture refusée à cet endroit : Docker n'y écrit pas (fichier ou tmpfs monté, /etc/hosts, /dev, /proc, /sys), ou un montage du conteneur expose l'hôte",
++	'write.maybeWritten':
++		"L'agent a dépassé son délai, mais l'écriture a peut-être eu lieu. Rechargez le fichier avant de réessayer.",
 +	'confirm.edit': 'Enregistrer ce fichier dans le conteneur ?',
 +	'confirm.upload': 'Envoyer ce fichier dans le conteneur ?',
 +	'confirm.container': 'Conteneur',
@@ -2497,7 +2936,7 @@ export const loadLanguage = (l: Language): Promise<Extension> => loaders[l]();
 ```diff
 --- a/web/src/lib/i18n/en.ts
 +++ b/web/src/lib/i18n/en.ts
-@@ -69,6 +69,32 @@ export const en: Record<Key, string> = {
+@@ -69,6 +69,34 @@ export const en: Record<Key, string> = {
  	'files.unit.mib': 'MiB',
  	'files.unit.gib': 'GiB',
  	'files.unit.tib': 'TiB',
@@ -2518,7 +2957,9 @@ export const loadLanguage = (l: Language): Promise<Extension> => loaders[l]();
 +	'write.linkInPath': 'This path goes through a symbolic link: the agent only writes on a path without links. Open the link target.',
 +	'write.editTooLarge': 'Over 2 MiB: the editor stops there.',
 +	'write.uploadTooLarge': 'Over 32 MiB: use docker cp for this file.',
-+	'write.forbidden': 'Writing is not allowed here (pseudo filesystem, or a mount that exposes the host).',
++	'write.forbidden':
++		'Write refused here: Docker does not write there (mounted file or tmpfs, /etc/hosts, /dev, /proc, /sys), or a mount of the container exposes the host',
++	'write.maybeWritten': 'The agent timed out, but the write may have happened. Reload the file before trying again.',
 +	'confirm.edit': 'Save this file in the container?',
 +	'confirm.upload': 'Upload this file to the container?',
 +	'confirm.container': 'Container',
@@ -2535,7 +2976,7 @@ export const loadLanguage = (l: Language): Promise<Extension> => loaders[l]();
 - [ ] **Step 4: Vérifier**
 
 Run: `npx vitest run 2>&1 | tail -n 4 && npm run check 2>&1 | tail -n 3 && npm run lint 2>&1 | tail -n 3`
-Expected: `54 passed` ; `0 ERRORS 0 WARNINGS` ; ESLint sans sortie.
+Expected: `55 passed` ; `0 ERRORS 0 WARNINGS` ; ESLint sans sortie.
 
 - [ ] **Step 5: Commit**
 
@@ -2556,20 +2997,20 @@ EOF
 
 **Files:**
 - Create: `web/src/lib/components/FileEditor.svelte`, `web/src/lib/components/ConfirmDialog.svelte`
-- Modify: `web/src/lib/components/FilePreview.svelte`, `web/src/lib/components/FileBrowser.svelte`, `web/src/routes/c/[id]/+page.svelte`
+- Modify: `web/src/lib/components/FilePreview.svelte`, `web/src/lib/components/FileBrowser.svelte`, `web/src/routes/+layout.svelte`, `web/src/routes/c/[id]/+page.svelte`
 
 **Interfaces:**
-- Consumes: tâche 6 (`saveFile`, `uploadFile`, `Preview.utf8`, `write.ts`, `loadLanguage`), `getMeta`, `joinPath`, `formatSize`.
-- Produces: `<FileEditor {path} {text} />` avec la méthode `content(): string | null` (par `bind:this`) ; `<ConfirmDialog title container path details? onconfirm oncancel />` ; `FilePreview` gagne les props `name: string`, `readOnly?: boolean` (défaut `true`) ; `FileBrowser` gagne `name: string`, `readOnly?: boolean` (défaut `true`).
+- Consumes: tâche 6 (`saveFile`, `uploadFile`, `Preview.utf8`, `write.ts`, `loadLanguage`, `docText`), le `meta` du layout, `joinPath`, `formatSize`.
+- Produces: `<FileEditor {path} {text} />` avec la méthode `content(): string | null` (par `bind:this`) ; `<ConfirmDialog title container path details? onconfirm oncancel />` ; `FilePreview` gagne les props `name: string`, `readOnly?: boolean` (défaut `true`) ; `FileBrowser` gagne `name: string`, `readOnly?: boolean` (défaut `true`) ; contexte `'readOnly'` : `() => boolean`, posé par le layout.
 
-> **À comprendre :** la page lit `readOnly` dans `/api/meta` et le passe à l'explorateur, qui le passe à l'aperçu. Tant que la réponse n'est pas là, ou si elle échoue, `readOnly` vaut `true` : aucun bouton d'écriture (§9). L'éditeur importe CodeMirror quand il s'ouvre, avec le séparateur de lignes du fichier ; la boîte de confirmation est un `<dialog>` natif monté seulement pendant la confirmation (Échap vaut Annuler). Un enregistrement ou un envoi dont la réponse arrive après un changement de fichier n'écrase rien à l'écran (`path !== wanted`, `dir === u.dir`).
+> **À comprendre :** le layout demande déjà `/api/meta` ; il expose `readOnly` par un contexte, la page le lit et le passe à l'explorateur, qui le passe à l'aperçu. Tant que la réponse n'est pas là, ou si elle échoue, `readOnly` vaut `true` : aucun bouton d'écriture (§9). Un texte de plus de `EDIT_MAX` octets est refusé avant la confirmation. L'éditeur importe CodeMirror quand il s'ouvre, avec le séparateur de lignes du fichier ; la boîte de confirmation est un `<dialog>` natif monté seulement pendant la confirmation (Échap vaut Annuler). Un enregistrement ou un envoi dont la réponse arrive après un changement de fichier n'écrase rien à l'écran (`path !== wanted`, `dir === u.dir`).
 
 - [ ] **Step 1: Composants nouveaux** — créer `web/src/lib/components/FileEditor.svelte` et `web/src/lib/components/ConfirmDialog.svelte` :
 
 ```svelte
 <script lang="ts">
 	import type { EditorView } from '@codemirror/view';
-	import { loadLanguage } from '#lib/editor.ts';
+	import { docText, loadLanguage } from '#lib/editor.ts';
 	import { t } from '#lib/i18n/index.ts';
 	import { languageOf, lineSeparatorOf } from '#lib/write.ts';
 
@@ -2614,7 +3055,7 @@ EOF
 
 	/** The edited text, with the file's line separator; null while the editor loads. */
 	export function content(): string | null {
-		return view ? view.state.doc.toString() : null;
+		return view ? docText(view.state) : null;
 	}
 </script>
 
@@ -2695,7 +3136,7 @@ EOF
 </style>
 ```
 
-- [ ] **Step 2: Aperçu, explorateur, page**
+- [ ] **Step 2: Aperçu, explorateur, layout, page**
 
 ```diff
 --- a/web/src/lib/components/FilePreview.svelte
@@ -2707,7 +3148,7 @@ EOF
 +	import { ApiError, checkDownload, downloadUrl, previewFile, saveFile, type Entry, type Preview } from '#lib/api.ts';
  	import { baseName, downloadErrorMessage, formatMode, formatSize, fsErrorMessage, indexingPercent } from '#lib/files.ts';
  	import { t } from '#lib/i18n/index.ts';
-+	import { lineSeparatorOf, writeErrorMessage } from '#lib/write.ts';
++	import { EDIT_MAX, lineSeparatorOf, writeErrorMessage } from '#lib/write.ts';
 +	import ConfirmDialog from '#lib/components/ConfirmDialog.svelte';
 +	import FileEditor from '#lib/components/FileEditor.svelte';
  
@@ -2749,13 +3190,18 @@ EOF
  		loading = true;
  		previewFile(id, wanted)
  			.then((p) => {
-@@ -60,6 +82,35 @@
+@@ -60,6 +82,41 @@
  		};
  	});
  
 +	function askSave() {
-+		pending = editor?.content() ?? null; // null while the editor loads: nothing to confirm
++		const text = editor?.content() ?? null; // null while the editor loads: nothing to confirm
 +		writeError = '';
++		if (text !== null && new TextEncoder().encode(text).length > EDIT_MAX) {
++			writeError = t('write.editTooLarge'); // the agent would refuse it: no confirmation
++			return;
++		}
++		pending = text;
 +	}
 +
 +	async function save() {
@@ -2776,7 +3222,8 @@ EOF
 +				goto('/login').catch(() => {});
 +				return;
 +			}
-+			writeError = e instanceof ApiError ? writeErrorMessage('edit', e.code, e.detail) : writeErrorMessage('edit', 'unknown');
++			writeError =
++				e instanceof ApiError ? writeErrorMessage('edit', e.code, e.detail, e.status) : writeErrorMessage('edit', 'unknown');
 +		} finally {
 +			saving = false;
 +		}
@@ -2785,7 +3232,7 @@ EOF
  	async function download() {
  		downloadError = '';
  		const url = downloadUrl(id, path);
-@@ -82,7 +133,17 @@
+@@ -82,7 +139,17 @@
  		</p>
  	{/if}
  	<button type="button" onclick={download}>{t('files.download')}</button>
@@ -2803,7 +3250,7 @@ EOF
  </header>
  
  {#if indexing !== null}
-@@ -94,14 +155,40 @@
+@@ -94,14 +161,40 @@
  {:else if error}
  	<p role="alert">{error}</p>
  	<button type="button" onclick={() => reloads++}>{t('files.reload')}</button>
@@ -2844,7 +3291,7 @@ EOF
  <style>
  	header { display: flex; flex-wrap: wrap; gap: 0.5rem 1rem; align-items: baseline; }
  	h2 { font-size: 1.1rem; margin: 0; word-break: break-all; }
-@@ -109,5 +196,6 @@
+@@ -109,5 +202,6 @@
  	pre { overflow: auto; max-height: 70vh; padding: 0.75rem; background: #f6f6f6; border-radius: 0.25rem; white-space: pre; }
  	img { max-width: 100%; height: auto; }
  	.note { font-style: italic; }
@@ -2895,7 +3342,7 @@ EOF
  
  	const href = (path: string, selectedFile?: string) =>
  		'?' + new URLSearchParams(selectedFile ? { path, file: selectedFile } : { path });
-@@ -114,6 +126,39 @@
+@@ -114,6 +126,41 @@
  		else go(dir, p);
  	}
  
@@ -2926,7 +3373,9 @@ EOF
 +				return;
 +			}
 +			uploadError =
-+				e instanceof ApiError ? writeErrorMessage('upload', e.code, e.detail) : writeErrorMessage('upload', 'unknown');
++				e instanceof ApiError
++					? writeErrorMessage('upload', e.code, e.detail, e.status)
++					: writeErrorMessage('upload', 'unknown');
 +		} finally {
 +			uploading = false;
 +		}
@@ -2935,7 +3384,7 @@ EOF
  	async function downloadDir() {
  		downloadError = '';
  		const url = downloadUrl(id, dir);
-@@ -137,8 +182,15 @@
+@@ -137,8 +184,15 @@
  		</nav>
  		<div class="tools">
  			<button type="button" onclick={downloadDir}>{t('files.downloadDir')}</button>
@@ -2951,7 +3400,7 @@ EOF
  
  		{#if indexing !== null}
  			<p role="status">{t('files.indexing')} : {indexing} %</p>
-@@ -198,13 +250,27 @@
+@@ -198,13 +252,27 @@
  
  	<section class="preview">
  		{#if file}
@@ -2983,39 +3432,48 @@ EOF
 ```
 
 ```diff
+--- a/web/src/routes/+layout.svelte
++++ b/web/src/routes/+layout.svelte
+@@ -1,5 +1,6 @@
+ <script lang="ts">
+ 	import favicon from '#lib/assets/favicon.svg';
++	import { setContext } from 'svelte';
+ 	import { goto } from '$app/navigation';
+ 	import { page } from '$app/state';
+ 	import { ApiError, getMeta, logout, type Meta } from '#lib/api.ts';
+@@ -7,6 +8,9 @@
+ 
+ 	let { children } = $props();
+ 	let meta = $state<Meta | null>(null);
++	// Pages read it instead of asking /api/meta again; true until the answer
++	// arrives: write buttons never show by mistake (spec §9).
++	setContext('readOnly', () => meta?.readOnly ?? true);
+ 
+ 	// Re-checks the session on every navigation; an expired session sends back to /login.
+ 	$effect(() => {
+```
+
+```diff
 --- a/web/src/routes/c/[id]/+page.svelte
 +++ b/web/src/routes/c/[id]/+page.svelte
-@@ -1,7 +1,7 @@
+@@ -1,6 +1,7 @@
  <script lang="ts">
  	import { goto } from '$app/navigation';
  	import { page } from '$app/state';
--	import { ApiError, listContainers, type Container } from '#lib/api.ts';
-+	import { ApiError, getMeta, listContainers, type Container } from '#lib/api.ts';
++	import { getContext } from 'svelte';
+ 	import { ApiError, listContainers, type Container } from '#lib/api.ts';
  	import { stateLabel } from '#lib/containers.ts';
  	import { errorMessage, t } from '#lib/i18n/index.ts';
- 	import ChangesList from '#lib/components/ChangesList.svelte';
-@@ -12,6 +12,20 @@
+@@ -12,6 +13,8 @@
  	let error = $state('');
  	let reloads = $state(0); // bumped by the Reload button
  	let tab = $derived(page.url.searchParams.get('tab') === 'changes' ? 'changes' : 'files');
-+	// Write buttons stay hidden until /api/meta says the agent may write (spec §9).
-+	let readOnly = $state(true);
-+
-+	$effect(() => {
-+		let current = true;
-+		getMeta()
-+			.then((m) => {
-+				if (current) readOnly = m.readOnly;
-+			})
-+			.catch(() => {}); // stays read-only; the layout handles a 401
-+		return () => {
-+			current = false;
-+		};
-+	});
++	// From the layout's /api/meta: true until it answers (spec §9).
++	const readOnly = getContext<() => boolean>('readOnly');
  
  	// The list gives the name, image and state; GET /api/containers/{id}
  	// arrives with the X-ray tab (phase Observation).
-@@ -59,7 +73,12 @@
+@@ -59,7 +62,12 @@
  		{#if tab === 'changes'}
  			<ChangesList id={container.id} />
  		{:else}
@@ -3023,7 +3481,7 @@ EOF
 +			<FileBrowser
 +				id={container.id}
 +				name={container.name}
-+				{readOnly}
++				readOnly={readOnly()}
 +				stopped={container.state !== 'running' && container.state !== 'paused'}
 +			/>
  		{/if}
@@ -3034,7 +3492,7 @@ EOF
 - [ ] **Step 3: Vérifier le typage, le style et le découpage**
 
 Run: `npm run check 2>&1 | tail -n 3 && npm run lint 2>&1 | tail -n 3 && npx vitest run 2>&1 | tail -n 3 && npm run build 2>&1 | tail -n 2 && grep -l 'cm-content' build/_app/immutable/nodes/*.js build/_app/immutable/entry/*.js ; grep -l 'cm-content' build/_app/immutable/chunks/*.js | wc -l`
-Expected: `0 ERRORS 0 WARNINGS` ; ESLint muet ; `54 passed` ; build réussi ; le premier `grep` ne trouve rien (CodeMirror n'est ni dans l'entrée ni dans un nœud de page) ; le second compte `1` morceau.
+Expected: `0 ERRORS 0 WARNINGS` ; ESLint muet ; `55 passed` ; build réussi ; le premier `grep` ne trouve rien (CodeMirror n'est ni dans l'entrée ni dans un nœud de page) ; le second compte `1` morceau.
 
 - [ ] **Step 4: Parcours jetable d'écriture** — créer `web/e2e/zz-ecriture.e2e.ts` (il ne sera **pas** commité : §10 garde un seul parcours) :
 
@@ -3081,12 +3539,32 @@ test('écriture : édition et envoi', async ({ page }) => {
 	await page.locator('input[type=file]').setInputFiles({ name: 'envoi.txt', mimeType: 'text/plain', buffer: Buffer.from('autre\n') });
 	await page.getByRole('dialog').getByRole('button', { name: 'Confirmer' }).click();
 	await expect(page.getByRole('alert').filter({ hasText: 'porte déjà ce nom' })).toBeVisible();
+	// A CRLF file keeps its CRLF line endings after an edit (Q16), byte for byte.
+	await page.locator('input[type=file]').setInputFiles({ name: 'crlf.txt', mimeType: 'text/plain', buffer: Buffer.from('un\r\ndeux\r\n') });
+	await page.getByRole('dialog').getByRole('button', { name: 'Confirmer' }).click();
+	await expect(page.locator('.preview pre')).toContainText('deux');
+	await page.getByRole('button', { name: 'Modifier', exact: true }).click();
+	await page.locator('.cm-content').click();
+	await page.keyboard.press('ControlOrMeta+Home');
+	await page.keyboard.press('End');
+	await page.keyboard.type(' 1');
+	await page.getByRole('button', { name: 'Enregistrer…' }).click();
+	await page.getByRole('dialog').getByRole('button', { name: 'Confirmer' }).click();
+	await expect(page.getByRole('status').filter({ hasText: 'Enregistré.' })).toBeVisible();
+	const raw = await page.evaluate(async () => {
+		for (;;) {
+			const r = await fetch('/api/containers/hublot-e2e/fs/file?path=%2Froot%2Fcrlf.txt');
+			if (r.status !== 202) return r.text();
+			await new Promise((ok) => setTimeout(ok, 200));
+		}
+	});
+	expect(raw).toBe('un 1\r\ndeux\r\n');
 	expect(errors.filter((e) => /Content Security Policy|Refused/.test(e))).toEqual([]);
 });
 ```
 
 Run: `cd .. && export PATH=/opt/homebrew/bin:$PATH && DOCKER_HOST=unix://$HOME/.docker/run/docker.sock scripts/e2e.sh 2>&1 | tail -n 6 ; rm web/e2e/zz-ecriture.e2e.ts`
-Expected: `2 passed` (le parcours unique et le jetable). Le jetable prouve, contre un vrai agent et sous la CSP : CodeMirror se charge, la boîte nomme le conteneur et le chemin, Annuler a le focus, l'écriture est relue après réindexation, l'envoi sélectionne le nouveau fichier, un nom existant est refusé.
+Expected: `2 passed` (le parcours unique et le jetable). Le jetable prouve, contre un vrai agent et sous la CSP : `readOnly` arrive par le contexte (le bouton « Modifier » existe), CodeMirror se charge, la boîte nomme le conteneur et le chemin, Annuler a le focus, l'écriture est relue après réindexation, l'envoi sélectionne le nouveau fichier, un nom existant est refusé, et un fichier CRLF modifié revient octet pour octet (`un 1\r\ndeux\r\n`).
 
 - [ ] **Step 5: Essai manuel en lecture seule** — lancer l'agent de dev avec `--read-only` (`scripts/dev-agent.sh --read-only`), ouvrir un fichier texte : ni « Modifier », ni « Envoyer un fichier ici » ; le badge « Lecture seule » est dans la barre. À 390 px de large, la boîte de confirmation tient dans l'écran.
 
@@ -3134,7 +3612,9 @@ EOF
    par :
 
    ```text
-   Le nom du fichier envoyé doit être un composant unique : ni `/`, ni `.`, ni `..`, ni vide, ni octet nul, ni plus de 255 octets, sinon `400 invalid_name`. C'est le `filename` brut de la partie `file` du multipart, jamais réduit à son nom de base.
+   Le nom du fichier envoyé doit être un composant unique : ni `/`, ni `.`, ni `..`, ni vide, ni `\`, ni caractère de contrôle (octet nul compris), ni plus de 255 octets, et en UTF-8 valide, sinon `400 invalid_name`. C'est le `filename` de la partie `file` du multipart tel que le décode `mime.ParseMediaType` (`filename*` prioritaire), jamais réduit à son nom de base : la valeur validée est celle qui part dans le tar.
+
+      Avant d'ouvrir la vue, à partir de l'`Inspect` (refus `forbidden_path`, détail qui nomme la cause) : tout le conteneur si un de ses montages expose l'hôte (règle et extensions de §5.2 étape 7, conteneur actif compris) ; tout chemin où Docker n'écrit pas comme le conteneur le voit, car Docker extrait dans sa propre vue (rootfs et montages configurés), pas dans l'espace de noms de montage du conteneur : `/etc/hosts`, `/etc/hostname`, `/etc/resolv.conf`, la `Destination` d'un montage, un chemin sous un tmpfs (`Mounts`, `HostConfig.Tmpfs`), sous `/dev`, `/proc` ou `/sys`. Les étapes 2 à 6 tiennent le verrou du conteneur : deux écritures sur un même conteneur ne s'entrelacent jamais.
    ```
 
 3. §5.3 étape 3, `If-Match` (Q14, Q18) — remplacer :
@@ -3194,12 +3674,48 @@ EOF
    par :
 
    ```text
-   Notre contrôle garantit la cohérence (on écrit là où on a vérifié), pas l'atomicité. Pour un seul utilisateur, c'est acceptable. L'écriture n'est pas atomique non plus : Docker remplace le fichier par un nouvel inode, un lien physique vers l'ancien est rompu, et un process qui le garde ouvert continue de lire l'ancien contenu.
+   Notre contrôle garantit la cohérence (on écrit là où on a vérifié), pas l'atomicité. Pour un seul utilisateur, c'est acceptable. L'écriture n'est pas atomique non plus : Docker remplace le fichier par un nouvel inode, un lien physique vers l'ancien est rompu, et un process qui le garde ouvert continue de lire l'ancien contenu. Une requête déjà terminée (la garde a répondu `504`) ne commence aucune écriture ; une écriture commencée continue après le `504`, et l'interface le dit.
 
    Plafonds : édition 2 Mio (l'aperçu s'arrête là, et avec lui l'`ETag`), envoi 32 Mio ; au-delà, `too_large`.
    ```
 
-8. §6, statuts (Q15, Q18) — remplacer :
+8. §5.3, filet de sécurité (Opus Minor 11) — remplacer :
+
+   ```text
+   Docker résout alors le chemin lui-même, dans la racine du conteneur : c'est le filet de sécurité.
+   ```
+
+   par :
+
+   ```text
+   Docker résout alors le chemin lui-même, dans la racine du conteneur : c'est le filet de sécurité. Il repose sur l'extraction chrootée de dockerd dans la racine du conteneur (correctif de CVE-2018-15664, présent dans toute API ≥ 1.44, §8). Un lien posé pendant la course peut mener Docker vers un autre montage du conteneur : aucun n'expose l'hôte (étape 2).
+   ```
+
+9. §6, définition de `forbidden_path` (Q21, Q22) — remplacer :
+
+   ```text
+   ou tar d'un dossier refusé par le contrôle des montages, §5.4)
+   ```
+
+   par :
+
+   ```text
+   ou tar d'un dossier refusé par le contrôle des montages, §5.4, ou écriture là où Docker n'écrit pas comme le conteneur le voit, ou dans un conteneur dont un montage expose l'hôte, §5.3 étape 2)
+   ```
+
+10. §7, binds de l'hôte (Q22) — remplacer :
+
+   ```text
+   La lecture et le listing ne sont pas refusés : l'utilisateur de l'interface est de fait root sur l'hôte (début de §7), et les pseudo-systèmes et les périphériques restent refusés.
+   ```
+
+   par :
+
+   ```text
+   La lecture et le listing ne sont pas refusés : l'utilisateur de l'interface est de fait root sur l'hôte (début de §7), et les pseudo-systèmes et les périphériques restent refusés. L'écriture, elle, est refusée pour tout le conteneur, comme l'explorateur d'un conteneur arrêté (§5.3 étape 2) : avec la course de §5.3, Docker pourrait sinon être mené vers ce bind.
+   ```
+
+11. §6, statuts (Q15, Q18) — remplacer :
 
    ```text
    Statuts HTTP : `not_found` 404 (`ELOOP` compris : boucle de liens, lien magique refusé), `forbidden_path` 403,
@@ -3211,7 +3727,7 @@ EOF
    Statuts HTTP : `not_found` 404 (`ELOOP` compris : boucle de liens, lien magique refusé), `read_only` 403 (agent `--read-only`, ou refus de Docker : rootfs `--read-only`, volume `:ro`, avec son message en détail), `conflict` 409, `forbidden_path` 403,
    ```
 
-9. §6, route `PUT /fs/file` — remplacer :
+12. §6, route `PUT /fs/file` — remplacer :
 
    ```text
    | PUT | `/api/containers/{id}/fs/file?path=` | F4 édition, `If-Match` obligatoire ; `link_in_path` (lien dans la chaîne, dernier composant compris), `not_regular`, `forbidden_path`, `indexing` |
@@ -3223,7 +3739,7 @@ EOF
    | PUT | `/api/containers/{id}/fs/file?path=` | F4 édition, corps brut (au plus 2 Mio), `If-Match` obligatoire (l'`ETag` de l'aperçu, sinon `conflict`) → `200 {"etag"}` et en-tête `ETag` ; `link_in_path` (lien dans la chaîne, dernier composant compris), `not_regular`, `forbidden_path`, `read_only`, `too_large`, `indexing` |
    ```
 
-10. §6, route `POST /fs/upload` — remplacer :
+13. §6, route `POST /fs/upload` — remplacer :
 
    ```text
    | POST | `/api/containers/{id}/fs/upload?dir=` | F4 envoi, multipart, `If-None-Match: *` ; `link_in_path` (lien dans la chaîne, ou nom existant qui est un lien, même pendant), `conflict`, `forbidden_path` (dossier dans un pseudo-système), `invalid_name`, `indexing` |
@@ -3235,7 +3751,7 @@ EOF
    | POST | `/api/containers/{id}/fs/upload?dir=` | F4 envoi, multipart (partie `file`, au plus 32 Mio), `If-None-Match: *` obligatoire → `201 {"path", "etag"}` ; `link_in_path` (lien dans la chaîne, ou nom existant qui est un lien, même pendant), `conflict`, `forbidden_path` (dossier dans un pseudo-système), `invalid_name`, `read_only`, `too_large`, `indexing` |
    ```
 
-11. §7, journal d'audit — remplacer :
+14. §7, journal d'audit — remplacer :
 
    ```text
    Écrit avant et après chaque écriture.
@@ -3247,7 +3763,7 @@ EOF
    Écrit avant (`result` : `intent`) et après (`ok` ou `error`) chaque écriture ; si l'intention ne s'écrit pas, rien n'est écrit dans le conteneur.
    ```
 
-12. §13, nouveau risque (ligne ajoutée après celle des noms non UTF-8) — remplacer :
+15. §13, nouveau risque (ligne ajoutée après celle des noms non UTF-8) — remplacer :
 
    ```text
    | Noms de fichiers non UTF-8 : JSON les transporte avec U+FFFD, le fichier ne s'ouvre plus depuis l'interface (`not_found`) | limite v0.1 ; le listing ne casse pas |
@@ -3257,7 +3773,11 @@ EOF
 
    ```text
    | Noms de fichiers non UTF-8 : JSON les transporte avec U+FFFD, le fichier ne s'ouvre plus depuis l'interface (`not_found`) | limite v0.1 ; le listing ne casse pas |
-   | Écriture non atomique : Docker supprime le fichier puis le recrée ; une écriture coupée le perdrait | `PutArchive` détaché de la requête une fois l'intention journalisée (délai d'une minute) ; journal avant et après ; limite assumée pour la v0.1 (§5.3) |
+   | Écriture non atomique : Docker supprime le fichier puis le recrée ; une écriture coupée le perdrait | `PutArchive` détaché de la requête une fois l'intention journalisée ; journal avant et après. Au-delà du délai d'une minute, l'écriture est coupée : fichier perdu ou tronqué, limite assumée pour la v0.1 (§5.3) |
+   | La garde répond `504` pendant qu'une écriture continue | l'interface dit que l'écriture a peut-être eu lieu et demande de recharger avant de réessayer ; une requête déjà terminée ne commence rien (§5.3) |
+   | Montage dont la `Destination` passe par un lien du conteneur (ex. `/var/run/…` quand `/var/run` → `/run`) : le chemin sans lien ne correspond pas au texte de Docker, qui répond `device or resource busy` (500 → `docker_unavailable`) | limite assumée pour la v0.1 ; les fichiers que Docker monte lui-même (`/etc/hosts`…) et les tmpfs sont refusés avant (§5.3 étape 2) |
+   | Course de §5.3 : un lien posé entre les contrôles et `PutArchive` mène Docker vers un montage ordinaire du conteneur, où root écrit avec le propriétaire du tar | aucun montage qui expose l'hôte n'est accepté pour une écriture (§5.3 étape 2) ; un montage `:ro` reste refusé par Docker ; limite assumée pour la v0.1 |
+   | userns-remap (hors v0.1, §2) : `procfs` donne les uid/gid de l'hôte, le tar attend ceux du conteneur | non pris en charge en v0.1 |
    ```
 
 - [ ] **Step 2: Suite complète sur les deux VM**
@@ -3285,6 +3805,7 @@ EOF
 - Docker remplace le fichier par un nouvel inode (570993 → 320851) : un lien physique est rompu, un process qui garde le fichier ouvert continue de lire l'ancien contenu (Q17).
 - `docker cp` vers un conteneur en pause réussit ; l'interface traite déjà un conteneur en pause comme actif (`procfs`).
 - `openat2 RESOLVE_NO_SYMLINKS` refuse un lien pendant en dernier composant (`ELOOP` → `link_in_path`) : `TestProcLinksRefused`, envoi sur `/d/dangling`.
+- Revue 1 : sur un conteneur actif, `docker cp` vers `/dev`, `/dev/shm` ou un `--tmpfs` réussit et le conteneur ne voit pas le fichier ; vers `/run` (pas un tmpfs), il le voit. Un conteneur jamais démarré a `HostsPath` vide et accepte `/etc/hosts`, que Docker masquera au démarrage. `HostConfig.Tmpfs` porte les `--tmpfs`, absents de `Mounts`.
 - Build de l'interface : CodeMirror et ses langages vivent dans des morceaux atteints par `import()` seulement ; le nœud de la page conteneur pèse 22 Ko, le plus gros morceau CodeMirror 263 Ko (non compressé).
 
 #### Constats de la tâche 8
