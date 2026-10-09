@@ -38,8 +38,12 @@ export const en: Record<Key, string> = {
 	'container.tab.logs': 'Logs',
 	'container.tab.xray': 'X-ray',
 	'container.soon': 'soon',
-	'container.stoppedSoon':
-		'Stopped container: the explorer for stopped containers comes in the next step. Start it to explore its files.',
+	'files.indexing': 'Indexing the stopped container',
+	'files.indexingHint': 'First opening: the agent reads the headers of the container archive. Later ones are immediate.',
+	'files.stoppedUnavailable':
+		'File explorer unavailable for this stopped container: one of its mounts could expose the host. Changes remain available.',
+	'files.stoppedTooLarge':
+		'Container too large to index (at most 4 GiB, volumes included, 5 minutes or 1,000,000 entries). Start it to explore it.',
 	'files.path': 'Path',
 	'files.parent': 'Parent folder',
 	'files.loading': 'Loading…',

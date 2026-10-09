@@ -7,6 +7,8 @@
 		downloadErrorMessage,
 		formatMode,
 		formatSize,
+		fsErrorMessage,
+		indexingPercent,
 		joinPath,
 		parentPath,
 		resolveLinkTarget,
@@ -15,13 +17,14 @@
 	import { errorMessage, t } from '#lib/i18n/index.ts';
 	import FilePreview from '#lib/components/FilePreview.svelte';
 
-	let { id }: { id: string } = $props();
+	let { id, stopped = false }: { id: string; stopped?: boolean } = $props();
 
 	// The URL carries the state (?path=dir&file=selected): back button and links work.
 	let dir = $derived(page.url.searchParams.get('path') || '/');
 	let file = $derived(page.url.searchParams.get('file'));
 	let listing = $state<Listing | null>(null);
 	let error = $state('');
+	let indexing = $state<number | null>(null); // percent while the index is built
 	let loading = $state(false);
 	let downloadError = $state('');
 	let reloads = $state(0); // bumped by the Reload button: same URL, new request
@@ -39,12 +42,14 @@
 		const wanted = dir;
 		void reloads; // dependency: the Reload button re-runs this effect
 		let current = true;
+		let retry: ReturnType<typeof setTimeout> | undefined;
 		loading = true;
 		error = '';
 		downloadError = '';
 		listDir(id, wanted)
 			.then((l) => {
 				if (!current) return;
+				indexing = null;
 				// A link to a file, or a deep link: show its folder and preview it.
 				if (l.type !== 'dir') go(parentPath(l.path), l.path, true);
 				else listing = l;
@@ -56,19 +61,20 @@
 					return;
 				}
 				listing = null;
-				const code = e instanceof ApiError ? e.code : 'unknown';
-				error =
-						e instanceof ApiError && e.status === 501
-							? t('container.stoppedSoon')
-							: code === 'forbidden_path'
-								? t('files.inaccessible')
-								: errorMessage(code);
+				if (e instanceof ApiError && e.code === 'indexing') {
+					indexing = indexingPercent(e.progress);
+					retry = setTimeout(() => reloads++, 1000); // ask again until the index is ready
+					return;
+				}
+				indexing = null;
+				error = e instanceof ApiError ? fsErrorMessage(e.code, e.detail, stopped) : errorMessage('unknown');
 			})
 			.finally(() => {
 				if (current) loading = false;
 			});
 		return () => {
 			current = false;
+			clearTimeout(retry);
 		};
 	});
 
@@ -105,7 +111,11 @@
 		</div>
 		{#if downloadError}<p role="alert">{downloadError}</p>{/if}
 
-		{#if error}
+		{#if indexing !== null}
+			<p role="status">{t('files.indexing')} : {indexing} %</p>
+			<progress max="100" value={indexing}></progress>
+			<p class="note">{t('files.indexingHint')}</p>
+		{:else if error}
 			<p role="alert">{error}</p>
 			<button type="button" onclick={() => reloads++}>{t('files.reload')}</button>
 		{:else if loading && !listing}
@@ -152,7 +162,7 @@
 
 	<section class="preview">
 		{#if file}
-			<FilePreview {id} path={file} entry={selected} />
+			<FilePreview {id} path={file} entry={selected} {stopped} />
 		{:else}
 			<p>{t('files.selectFile')}</p>
 		{/if}

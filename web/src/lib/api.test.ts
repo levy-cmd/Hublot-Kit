@@ -88,3 +88,20 @@ describe('file routes', () => {
 		expect(fetchMock.mock.calls[0][0]).toBe('/api/x?path=%2Fetc&check=1');
 	});
 });
+
+describe('202 indexing (spec §6)', () => {
+	const indexing = () =>
+		new Response(JSON.stringify({ error: 'indexing', detail: 'indexation en cours (42 %)', progress: 0.42 }), { status: 202 });
+	it('listDir rejects with the progress', async () => {
+		stubFetch(async () => indexing());
+		await expect(listDir('db', '/')).rejects.toMatchObject({ status: 202, code: 'indexing', progress: 0.42 });
+	});
+	it('previewFile rejects instead of showing a binary file', async () => {
+		stubFetch(async () => indexing());
+		await expect(previewFile('db', '/etc/hostname')).rejects.toMatchObject({ code: 'indexing' });
+	});
+	it('checkDownload rejects: the browser never saves the JSON', async () => {
+		stubFetch(async () => indexing());
+		await expect(checkDownload(downloadUrl('db', '/etc'))).rejects.toMatchObject({ code: 'indexing' });
+	});
+});

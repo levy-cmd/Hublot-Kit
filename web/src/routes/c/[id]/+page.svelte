@@ -54,12 +54,7 @@
 			<span class="tab soon">{t('container.tab.logs')} ({t('container.soon')})</span>
 			<span class="tab soon">{t('container.tab.xray')} ({t('container.soon')})</span>
 		</nav>
-		{#if container.state === 'running' || container.state === 'paused'}
-			<FileBrowser id={container.id} />
-		{:else}
-			<p>{t('container.stoppedSoon')}</p>
-			<button type="button" onclick={() => reloads++}>{t('files.reload')}</button>
-		{/if}
+		<FileBrowser id={container.id} stopped={container.state !== 'running' && container.state !== 'paused'} />
 	{/if}
 </main>
 

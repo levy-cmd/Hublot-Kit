@@ -5,6 +5,8 @@ import {
 	breadcrumbs,
 	downloadErrorMessage,
 	formatMode,
+	fsErrorMessage,
+	indexingPercent,
 	formatSize,
 	joinPath,
 	normalize,
@@ -88,5 +90,26 @@ describe('downloadErrorMessage', () => {
 		expect(downloadErrorMessage('forbidden_path')).toBe(t('files.archiveForbidden'));
 		expect(downloadErrorMessage('link_in_path', 'x')).toBe(t('files.linkDirHint'));
 		expect(downloadErrorMessage('docker_unavailable', 'dial')).toBe(errorMessage('docker_unavailable'));
+	});
+});
+
+describe('indexingPercent', () => {
+	it('never shows 100 before the end', () => {
+		expect([undefined, 0, 0.42, 0.99, 1, 7, -1].map(indexingPercent)).toEqual([0, 0, 42, 99, 99, 99, 0]);
+	});
+});
+
+describe('fsErrorMessage', () => {
+	it('names the mount of a stopped container that cannot be explored', () => {
+		expect(fsErrorMessage('forbidden_path', 'bind /proc -> /host/proc', true)).toBe(
+			`${t('files.stoppedUnavailable')} (bind /proc -> /host/proc)`
+		);
+	});
+	it('keeps the pseudo filesystem message of a running container', () => {
+		expect(fsErrorMessage('forbidden_path', undefined, false)).toBe(t('files.inaccessible'));
+	});
+	it('explains the index cap of a stopped container', () => {
+		expect(fsErrorMessage('too_large', undefined, true)).toBe(t('files.stoppedTooLarge'));
+		expect(fsErrorMessage('not_found', undefined, true)).toBe(errorMessage('not_found'));
 	});
 });
