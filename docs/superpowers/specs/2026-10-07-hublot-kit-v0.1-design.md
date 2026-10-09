@@ -202,7 +202,7 @@ Préfixe `/api`, JSON. Erreur : `{"error": "<code>", "detail": "<texte libre pou
 | GET | `/api/containers/{id}/fs/download?path=` | F3 ; `indexing` (conteneur arrêté) ; fichier : `not_regular`, `forbidden_path` ; dossier : `link_in_path`, `forbidden_path` ; `&check=1` : contrôles seuls, `204` ; dossier d'un conteneur actif : `forbidden_path` si le tar traverserait un bind de l'hôte, un pseudo-système ou un FUSE (§5.4) |
 | PUT | `/api/containers/{id}/fs/file?path=` | F4 édition, `If-Match` obligatoire ; `link_in_path` (lien dans la chaîne, dernier composant compris), `not_regular`, `forbidden_path`, `indexing` |
 | POST | `/api/containers/{id}/fs/upload?dir=` | F4 envoi, multipart, `If-None-Match: *` ; `link_in_path` (lien dans la chaîne, ou nom existant qui est un lien, même pendant), `conflict`, `forbidden_path` (dossier dans un pseudo-système), `invalid_name`, `indexing` |
-| GET | `/api/containers/{id}/changes` | F5 `[{path, kind: "added"|"modified"|"deleted"}]` |
+| GET | `/api/containers/{id}/changes` | F5 `[{path, kind: "added"|"modified"|"deleted"}]`, trié par chemin, liste complète ; diff de la couche du conteneur (volumes exclus), sans garde FUSE, délai 30 s |
 | GET | `/api/containers/{id}/logs?tail=500` | F6 SSE : `{ts, stream: "stdout"|"stderr", line}` |
 | GET | `/api/containers/{id}/logs/download` | F6 fichier texte |
 

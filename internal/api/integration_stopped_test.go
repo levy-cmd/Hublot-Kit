@@ -5,9 +5,11 @@ package api
 import (
 	"archive/tar"
 	"bytes"
+	"encoding/json"
 	"io"
 	"net/http"
 	"os/exec"
+	"slices"
 	"testing"
 	"time"
 
@@ -63,5 +65,11 @@ func TestIntegrationStoppedAndChanges(t *testing.T) {
 	}
 	if !found {
 		t.Error("root/note.txt absent du tar")
+	}
+	rec = f.do("GET", base+"/changes", "", c)
+	var cs []dockerx.Change
+	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &cs) != nil ||
+		!slices.Contains(cs, dockerx.Change{Path: "/root/note.txt", Kind: "added"}) {
+		t.Errorf("changes : %d %s", rec.Code, rec.Body)
 	}
 }
