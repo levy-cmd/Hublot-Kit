@@ -174,7 +174,7 @@ web/playwright.config.ts, web/e2e/parcours.e2e.ts, scripts/e2e.sh
 - Consumes: rien de nouveau.
 - Produces: `ContainerInfo.FinishedAt string` (`State.FinishedAt` brut, `"0001-01-01T00:00:00Z"` si jamais lancé) ; `type Change struct { Path string \`json:"path"\`; Kind string \`json:"kind"\` }` (`"added"|"modified"|"deleted"`) ; dans `Client` : `SizeRootFs(ctx, id string) (int64, error)` (`Inspect` avec `Size: true` ; 0 si Docker ne la donne pas), `Changes(ctx, id string) ([]Change, error)` (jamais nil) ; `Fake` gagne `Sizes map[string]int64` (par ID), `Diffs map[string][]Change` (par id tel que donné), `Calls() []string` (copie de `ArchiveCalls` sous verrou).
 
-- [ ] **Step 1: Tests unitaires qui échouent** — ajouter à `internal/dockerx/dockerx_test.go` (importer `slices` si absent) :
+- [x] **Step 1: Tests unitaires qui échouent** — ajouter à `internal/dockerx/dockerx_test.go` (importer `slices` si absent) :
 
 ```go
 func TestFromInspectFinishedAt(t *testing.T) {
@@ -221,7 +221,7 @@ func TestFakeSizesDiffsCalls(t *testing.T) {
 
 Run: `go test ./internal/dockerx/ 2>&1 | tail -n 5` — Expected: FAIL à la compilation (`fromChanges`, `Change`, `FinishedAt`, `Sizes`… indéfinis).
 
-- [ ] **Step 2: Implémenter**
+- [x] **Step 2: Implémenter**
 
 `dockerx.go` :
 - `ContainerInfo` : ajouter `FinishedAt string // State.FinishedAt as Docker gives it: part of the index cache key (spec §5.2 step 1)` ; dans `fromInspect`, sous `if c.State != nil`, `info.FinishedAt = c.State.FinishedAt`.
@@ -245,7 +245,7 @@ Implémentations :
 
 Run: `go test -race ./internal/dockerx/ 2>&1 | tail -n 5 && go vet ./... 2>&1 | tail -n 5` — Expected: `ok`, aucun avertissement.
 
-- [ ] **Step 3: Mesure sur un vrai Docker** — ajouter à `internal/dockerx/integration_test.go` (même en-tête de build). `FinishedAt` et `Changes` sont couverts de bout en bout aux tâches 6 et 9 ; ce test ne fait que relever `SizeRootFs`.
+- [x] **Step 3: Mesure sur un vrai Docker** — ajouter à `internal/dockerx/integration_test.go` (même en-tête de build). `FinishedAt` et `Changes` sont couverts de bout en bout aux tâches 6 et 9 ; ce test ne fait que relever `SizeRootFs`.
 
 ```go
 func TestMeasureSizeRootFs(t *testing.T) {
@@ -271,7 +271,7 @@ func TestMeasureSizeRootFs(t *testing.T) {
 
 Run: `DOCKER_HOST=unix://$HOME/.docker/run/docker.sock go test -tags integration ./internal/dockerx/ -run MeasureSizeRootFs -v 2>&1 | grep -E 'MESURE|^(ok|FAIL|---)'` — Expected: `--- PASS`, une ligne `MESURE`.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add internal/dockerx
@@ -318,9 +318,9 @@ func newTarFS(docker dockerx.Client, id string, mounts []dockerx.Mount, idx *ind
 
 > **À comprendre :** ici, « s'échapper », c'est demander à Docker autre chose que le chemin entièrement résolu : le lien lui-même, un `..` lexical, la cible brute. Docker résoudrait ce chemin à sa façon, et ce ne serait plus celui qu'on a vérifié. Le faux Docker sert donc `HOST-SECRET` à chacun de ces chemins piégés. `TestTarTrapsAreArmed` prouve qu'il les sert vraiment ; les autres tests prouvent qu'aucun n'est demandé, et qu'aucun octet `HOST-SECRET` n'est lu, même quand une erreur est renvoyée.
 
-- [ ] **Step 1: Stub compilable** — `internal/fsview/tarindex.go` : en-tête de paquet, les déclarations ci-dessus, `var errNotYet = errors.New("tarindex : pas encore implémenté (tâche 3)")`, `var _ FS = (*tarFS)(nil)`. `buildIndex` renvoie `nil, errNotYet` ; `progress` renvoie `-1` ; `newTarFS` remplit les champs ; chaque méthode de `tarFS`, `CheckOpen` compris, renvoie `errNotYet` (`Close` renvoie `nil`).
+- [x] **Step 1: Stub compilable** — `internal/fsview/tarindex.go` : en-tête de paquet, les déclarations ci-dessus, `var errNotYet = errors.New("tarindex : pas encore implémenté (tâche 3)")`, `var _ FS = (*tarFS)(nil)`. `buildIndex` renvoie `nil, errNotYet` ; `progress` renvoie `-1` ; `newTarFS` remplit les champs ; chaque méthode de `tarFS`, `CheckOpen` compris, renvoie `errNotYet` (`Close` renvoie `nil`).
 
-- [ ] **Step 2: Écrire les tests** — `internal/fsview/tarindex_test.go` (sans étiquette de build ; noms de helpers choisis pour ne pas heurter ceux de `procfs_test.go`, compilé sous Linux) :
+- [x] **Step 2: Écrire les tests** — `internal/fsview/tarindex_test.go` (sans étiquette de build ; noms de helpers choisis pour ne pas heurter ceux de `procfs_test.go`, compilé sous Linux) :
 
 ```go
 package fsview
@@ -853,12 +853,12 @@ func TestProgress(t *testing.T) {
 }
 ```
 
-- [ ] **Step 3: Vérifier qu'ils échouent pour la bonne raison**
+- [x] **Step 3: Vérifier qu'ils échouent pour la bonne raison**
 
 Run: `go vet ./internal/fsview/ 2>&1 | tail -n 3 && go test ./internal/fsview/ -run 'Tar|BuildIndex|Progress' 2>&1 | grep -cE '^\s+--- FAIL'; go test ./internal/fsview/ -run 'TarTrapsAreArmed' 2>&1 | tail -n 1`
 Expected: `vet` muet ; une douzaine de `--- FAIL` (`buildIndex : tarindex : pas encore implémenté`, ou `progress = -1`) ; `TestTarTrapsAreArmed` **passe** (`ok`) : le piège est armé. Les autres tests du paquet restent verts : `go test ./internal/fsview/ -skip 'Tar|BuildIndex|Progress' 2>&1 | tail -n 1` → `ok`.
 
-- [ ] **Step 4: Commit (tests rouges, ne pas pousser)**
+- [x] **Step 4: Commit (tests rouges, ne pas pousser)**
 
 ```bash
 git add internal/fsview/tarindex.go internal/fsview/tarindex_test.go
@@ -882,7 +882,7 @@ EOF
 - Consumes: les signatures de la tâche 2 ; `changed(format, …)` de `cgroup.go` (renvoie une erreur `ErrContainerChanged`) ; `HostBind`.
 - Produces: celles de la tâche 2, implémentées ; `(*index).resolve(p string) (string, error)` ; `maxHops = 40`.
 
-- [ ] **Step 1: Construction** — dans `tarindex.go`, retirer `errNotYet` et écrire :
+- [x] **Step 1: Construction** — dans `tarindex.go`, retirer `errNotYet` et écrire :
 
 ```go
 // maxHops: one single counter for a whole resolution (spec §5.2 step 5).
@@ -1016,7 +1016,7 @@ func progress(read, total int64) float64 {
 }
 ```
 
-- [ ] **Step 2: Résolution (logique de sécurité, à recopier telle quelle)**
+- [x] **Step 2: Résolution (logique de sécurité, à recopier telle quelle)**
 
 ```go
 // resolve walks p component by component in the index (spec §5.2 step 5)
@@ -1086,7 +1086,7 @@ func childPath(dir, name string) string {
 func notExist(p string) error { return &fs.PathError{Op: "resolve", Path: p, Err: fs.ErrNotExist} }
 ```
 
-- [ ] **Step 3: La vue `tarFS`**
+- [x] **Step 3: La vue `tarFS`**
 
 ```go
 // tarFS is the view of a stopped container (spec §5.2): every lookup in the
@@ -1221,7 +1221,7 @@ func (t *tarFS) CheckArchive(ctx context.Context, _ string) error {
 func (t *tarFS) Close() error { return nil }
 ```
 
-- [ ] **Step 4: Mesure de la mémoire (revue I5)** — ajouter à `tarindex_test.go` (importer `runtime`) :
+- [x] **Step 4: Mesure de la mémoire (revue I5)** — ajouter à `tarindex_test.go` (importer `runtime`) :
 
 ```go
 // Review I5: bytes per index entry, against the 50 MB goal of spec §5.2 step 4.
@@ -1247,12 +1247,12 @@ func TestMeasureIndexMemory(t *testing.T) {
 }
 ```
 
-- [ ] **Step 5: Vérifier**
+- [x] **Step 5: Vérifier**
 
 Run: `go test ./internal/fsview/ -run MeasureIndexMemory -v 2>&1 | grep MESURE && go test -race ./internal/fsview/ 2>&1 | tail -n 3 && go vet ./internal/fsview/ && GOOS=linux go vet ./internal/fsview/ 2>&1 | tail -n 3`
 Expected: `ok` ; aucun avertissement. Mutations à rejouer (le test doit rougir, puis revenir) : supprimer le contrôle `if len(todo) > 0 && e.Type != TypeDir` → `TestTarStat` échoue (`/etc/passwd/..` devient `/etc`) ; passer `maxHops` à 41 → `TestTarHopBudget` échoue ; retirer le `resolve(first)` de `regularPath` → `TestTarHardLinkThroughSymlink` échoue.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add internal/fsview/tarindex.go
@@ -1300,7 +1300,7 @@ func (v *Views) Forget(id string)
 // api: Deps.Views *fsview.Views; fixture.views *fsview.Views (tests)
 ```
 
-- [ ] **Step 1: Tests qui échouent** — `git mv internal/fsview/for.go internal/fsview/views.go && git mv internal/fsview/for_test.go internal/fsview/views_test.go`. Remplacer **tout** le contenu de `views_test.go` par :
+- [x] **Step 1: Tests qui échouent** — `git mv internal/fsview/for.go internal/fsview/views.go && git mv internal/fsview/for_test.go internal/fsview/views_test.go`. Remplacer **tout** le contenu de `views_test.go` par :
 
 ```go
 package fsview
@@ -1753,13 +1753,13 @@ func TestViewsInspectErrors(t *testing.T) {
 
 Run: `go test ./internal/fsview/ 2>&1 | tail -n 3` — Expected: FAIL à la compilation (`NewViews`, `Options`, `IndexingError` indéfinis).
 
-- [ ] **Step 2: Retirer `SetCgroupReaderForTests` (écart c)**
+- [x] **Step 2: Retirer `SetCgroupReaderForTests` (écart c)**
   - `root_linux.go` : supprimer `SetCgroupReaderForTests` et l'import `testing`. `openRoot(pid int, containerID string, read func(int) ([]byte, error))` : `if read == nil { read = readCgroup }` en tête, puis `read(pid)` à la place de `readCgroup(pid)`. `OpenRoot` passe `nil`. `openProcFS(docker, info, read)` passe `read` à `openRoot`. La variable `readCgroup` reste : `root_linux_test.go` la remplace encore.
   - `procfs_other.go` : `openProcFS(dockerx.Client, dockerx.ContainerInfo, func(int) ([]byte, error)) (FS, error)`.
   - `procfs_archive_linux_test.go`, `TestForWiresMountsIntoCheckArchive` : supprimer `restore := SetCgroupReaderForTests(…)` et `t.Cleanup(restore)` ; remplacer `For(context.Background(), docker, "c")` par `NewViews(docker, Options{ReadCgroup: func(int) ([]byte, error) { return []byte("0::/docker/" + id + "\n"), nil }}).For(context.Background(), "c")`.
   - `integration_test.go` (fsview) : dans `openFor`, `For(ctx, dc, id)` devient `NewViews(dc, Options{}).For(ctx, id)`. Dans `TestIntegrationForStoppedContainer`, supprimer la partie `ErrStopped` (la tâche 6 la remplace) ; garder seulement le cas `hublot-it-absent` → `dockerx.ErrNotFound` ; renommer le test `TestIntegrationForAbsentContainer`.
 
-- [ ] **Step 3: Implémenter `Views`**
+- [x] **Step 3: Implémenter `Views`**
 
 `fsview.go` : supprimer `ErrStopped` ; ajouter dans le bloc `var` `ErrIndexing = errors.New("indexation en cours")` et, après le bloc (importer `fmt`) :
 
@@ -2043,7 +2043,7 @@ func (v *Views) buildFor(ctx context.Context, b *build, info dockerx.ContainerIn
 - `fs_download_linux_test.go` : supprimer le `t.Cleanup(fsview.SetCgroupReaderForTests(…))` ; construire `f := &fixture{docker: fake, views: fsview.NewViews(fake, fsview.Options{ReadCgroup: func(int) ([]byte, error) { return []byte("0::/docker/" + webID + "\n"), nil }})}`. `OpenFS` reste nil : le test passe toujours par le câblage par défaut de `New`.
 - `fserr.go` : supprimer le cas `ErrStopped` (501). `fserr_test.go` : supprimer sa ligne. `fs_test.go`, `TestFSListErrors` : supprimer le bloc `f.openErr = … ErrStopped` (5 lignes) ; le `f := newFixture(t, false)` qui le précède reste, pour le cas `nope`.
 
-- [ ] **Step 4: Spec** — dans `docs/superpowers/specs/2026-10-07-hublot-kit-v0.1-design.md` :
+- [x] **Step 4: Spec** — dans `docs/superpowers/specs/2026-10-07-hublot-kit-v0.1-design.md` :
   - §4 : « Un constructeur `fsview.For(ctx, docker, containerID)` renvoie `procfs` si le conteneur tourne, `tarindex` sinon. » → « Un `fsview.Views` par agent, qui garde le cache des index (§5.2) : `Views.For(ctx, containerID)` renvoie `procfs` si le conteneur tourne, `tarindex` sinon. »
   - §5.2 étape 2 : ajouter « La requête qui lance la construction attend au plus 1 s : un petit conteneur répond sans `202`. Les requêtes suivantes répondent tout de suite. »
   - §5.2 étape 3 : après « (valeurs proposées : 4 Gio, 5 minutes) », insérer « , et en nombre d'entrées (1 000 000) » ; à la fin de l'étape : « Après la fin du tar, un second `Inspect` doit montrer le conteneur arrêté avec le même `FinishedAt`, sinon l'index est jeté (`container_changed`). »
@@ -2051,7 +2051,7 @@ func (v *Views) buildFor(ctx context.Context, b *build, info dockerx.ContainerIn
   - §5.2 étape 7 : après la phrase sur le volume `local` en `o=bind`, insérer « Comme pour le tar d'un dossier d'un conteneur actif (§5.4 a), sont refusés aussi les types de montage autres que bind, volume, tmpfs et image, les volumes `local` dont `type=` est un pseudo-système ou FUSE, les volumes d'un pilote tiers et ceux dont les options ne se lisent pas : `GET /archive` de `/` les traverse tous, et un volume qui ne répond pas bloquerait dockerd. »
   - §5.4 puce (a) : « Ces extensions ne valent pas, pour l'instant, pour l'explorateur d'un conteneur arrêté (§5.2) ; » → « Ces extensions valent aussi pour l'explorateur d'un conteneur arrêté (§5.2 étape 7) ; ».
 
-- [ ] **Step 5: Vérifier**
+- [x] **Step 5: Vérifier**
 
 Run:
 ```bash
@@ -2062,7 +2062,7 @@ scripts/test-linux.sh -race ./internal/fsview/ ./internal/api/ 2>&1 | tail -n 5
 ```
 Expected: tout `ok` ; `vet` muet ; `grep -c` affiche `0` (écart c soldé ; il affichait `1` avant cette tâche) ; sous Linux, `ok` pour les deux paquets.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add internal/fsview internal/api docs/superpowers/specs/2026-10-07-hublot-kit-v0.1-design.md
@@ -2090,7 +2090,7 @@ EOF
 - Consumes: `fsview.IndexingError`, `fsview.ErrIndexing`, `fsview.NewViews`, `fsview.Options`, `fixture.views` (tâche 4) ; `tarFS.CheckOpen` (tâche 3).
 - Produces: réponse `202 {"error":"indexing","detail":"…","progress":<0..0.99>}` ; `type OpenChecker interface { CheckOpen(ctx context.Context, path string) error }` dans `fsview.go` (facultatif : `procfs` et `MemFS` ne l'implémentent pas et gardent `Open` + `Close`).
 
-- [ ] **Step 1: Tests qui échouent** — `internal/api/fs_stopped_test.go` :
+- [x] **Step 1: Tests qui échouent** — `internal/api/fs_stopped_test.go` :
 
 ```go
 package api
@@ -2324,7 +2324,7 @@ Dans `fserr_test.go`, ajouter la ligne `{&fsview.IndexingError{Progress: 0.5}, h
 Run: `go test ./internal/api/ -run 'Stopped|Indexing|FSListErrors|FSErrorStatus' 2>&1 | grep -E '^(---|ok|FAIL)' | head -n 12`
 Expected: FAIL — 500 `internal` au lieu de 202 (le code ne connaît pas encore `ErrIndexing`). `TestStoppedHostBindRefusesEveryRoute` passe déjà (tâche 4) : c'est le contrôle du câblage.
 
-- [ ] **Step 2: Implémenter** — `fserr.go` :
+- [x] **Step 2: Implémenter** — `fserr.go` :
 
 ```go
 // indexingJSON is the 202 of spec §6: the error body plus the progress.
@@ -2349,14 +2349,14 @@ et dans `fsErrorStatus`, après les deux cas de la garde : `case errors.Is(err, 
 
 `fsview.go` : `OpenChecker` (voir Interfaces), commenté « every check of Open without reading: a view that would have to ask Docker implements it (spec §5.4, &check=1) ». `fs_download.go`, branche fichier : en mode `check`, si `fsys` implémente `fsview.OpenChecker`, appeler `CheckOpen(ctx, p)` et renvoyer `opened{}` ; sinon le code actuel (`Open` puis `Close`) reste.
 
-- [ ] **Step 3: Spec §6** — supprimer « Conteneur arrêté, en attendant l'index (Explorateur 2) : 501 `internal`, temporaire (Q4). » ; après « Statuts HTTP : … `internal` 500. », ajouter « `indexing` 202, corps `{"error":"indexing","detail":"…","progress":0.42}` (progression plafonnée à 0,99), sur toutes les routes de fichiers, `&check=1` et `HEAD` compris. »
+- [x] **Step 3: Spec §6** — supprimer « Conteneur arrêté, en attendant l'index (Explorateur 2) : 501 `internal`, temporaire (Q4). » ; après « Statuts HTTP : … `internal` 500. », ajouter « `indexing` 202, corps `{"error":"indexing","detail":"…","progress":0.42}` (progression plafonnée à 0,99), sur toutes les routes de fichiers, `&check=1` et `HEAD` compris. »
 
-- [ ] **Step 4: Vérifier**
+- [x] **Step 4: Vérifier**
 
 Run: `go test -race ./internal/api/ 2>&1 | tail -n 3 && scripts/test-linux.sh -race ./internal/api/ 2>&1 | tail -n 3`
 Expected: `ok` partout.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add internal/api docs/superpowers/specs/2026-10-07-hublot-kit-v0.1-design.md
@@ -2382,7 +2382,7 @@ EOF
 
 > **À comprendre :** ces tests ne montent rien de l'hôte (règle C1 : les binds dangereux ne se testent qu'avec le faux client). Ils vérifient ce que le faux ne peut pas : la forme réelle des noms et des `linkname` de Docker (liens physiques compris), les volumes dans l'archive, le cas « jamais démarré ».
 
-- [ ] **Step 1: Tests `fsview`** — `internal/fsview/integration_tarindex_test.go` :
+- [x] **Step 1: Tests `fsview`** — `internal/fsview/integration_tarindex_test.go` :
 
 ```go
 //go:build integration
@@ -2512,7 +2512,7 @@ func TestIntegrationTarIndexCreated(t *testing.T) {
 Run: `DOCKER_HOST=unix://$HOME/.docker/run/docker.sock go test -tags integration ./internal/fsview/ -run TarIndex -v 2>&1 | grep -E '^(---|ok|FAIL)|_test.go'`
 Expected: `--- PASS` ×2. Un échec sur le lien physique dit comment Docker écrit son `linkname` : corriger `add`, ne pas assouplir le test.
 
-- [ ] **Step 2: Test `api`** — `internal/api/integration_stopped_test.go` :
+- [x] **Step 2: Test `api`** — `internal/api/integration_stopped_test.go` :
 
 ```go
 //go:build integration
@@ -2564,7 +2564,7 @@ La tâche 9 ajoute à la fin de ce test la vérification de `/changes`.
 Run: `DOCKER_HOST=unix://$HOME/.docker/run/docker.sock go test -tags integration ./internal/api/ -run IntegrationStopped -v 2>&1 | grep -E '^(---|ok|FAIL)'` puis `scripts/test-linux.sh -tags integration ./internal/fsview/ ./internal/api/ 2>&1 | tail -n 5`
 Expected: `PASS` ; sous Linux, `ok` (les tests procfs du plan 1 tournent aussi).
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add internal/fsview/integration_tarindex_test.go internal/api/integration_stopped_test.go
@@ -2591,7 +2591,7 @@ EOF
 
 > **À comprendre :** le plan 1 testait la vie par `pidfd_send_signal(pidfd, 0)`. Un `EPERM` (droits, ou profil seccomp) y passait pour une mort. Or un pidfd devient lisible quand son process se termine (noyau ≥ 5.3, déjà requis par §5.1). `poll` sans attente répond donc sans aucun contrôle de droit. Un zombie compte désormais pour terminé, ce qui est plus juste : sa racine disparaît.
 
-- [ ] **Step 1: Tests qui échouent** — ajouter à `root_linux_test.go` (importer `os/exec`, `time`, `golang.org/x/sys/unix` si absents) :
+- [x] **Step 1: Tests qui échouent** — ajouter à `root_linux_test.go` (importer `os/exec`, `time`, `golang.org/x/sys/unix` si absents) :
 
 ```go
 func TestAliveSeam(t *testing.T) {
@@ -2646,7 +2646,7 @@ func TestAliveReal(t *testing.T) {
 
 Run: `GOOS=linux go vet ./internal/fsview/ 2>&1 | tail -n 3` — Expected: `undefined: pidfdExited`, `undefined: alive`.
 
-- [ ] **Step 2: Implémenter** — dans `root_linux.go` :
+- [x] **Step 2: Implémenter** — dans `root_linux.go` :
 
 ```go
 // pidfdExited polls pidfd without waiting: readable once the process has
@@ -2684,14 +2684,14 @@ func alive(pidfd, pid int) error {
 
 Dans `openRoot`, le bloc `if err := unix.PidfdSendSignal(…)` devient `if err := alive(pidfd, pid); err != nil { unix.Close(fd); return fail(err) }`. Dans `CheckArchive`, le bloc équivalent devient `if err := alive(p.pidfd, p.pid); err != nil { return err }`. Plus aucun `PidfdSendSignal` : `grep -rn PidfdSendSignal internal | grep -v _test` est vide.
 
-- [ ] **Step 3: Spec §5.1 étape 5** — « `pidfd_send_signal(pidfd, 0)` doit réussir : le process est toujours vivant, donc le PID n'a pas été réattribué entre les étapes 2 et 4, et `rootfd` est bien sa racine. Sinon → fermer, `container_changed`. » → « Le `pidfd` ne doit pas être lisible (`poll` sans attente ; il le devient quand le process se termine, zombie compris) : le process est toujours vivant, donc le PID n'a pas été réattribué entre les étapes 2 et 4, et `rootfd` est bien sa racine. Lisible → fermer, `container_changed` ; échec de `poll` → fermer, `internal`. `pidfd_send_signal(pidfd, 0)` n'est pas utilisé : il répond `EPERM` sans droit de signaler (ou sous un profil seccomp). » Adapter de même la mention de §5.4 (b) « qui doit être vivant après la lecture » si elle cite le signal.
+- [x] **Step 3: Spec §5.1 étape 5** — « `pidfd_send_signal(pidfd, 0)` doit réussir : le process est toujours vivant, donc le PID n'a pas été réattribué entre les étapes 2 et 4, et `rootfd` est bien sa racine. Sinon → fermer, `container_changed`. » → « Le `pidfd` ne doit pas être lisible (`poll` sans attente ; il le devient quand le process se termine, zombie compris) : le process est toujours vivant, donc le PID n'a pas été réattribué entre les étapes 2 et 4, et `rootfd` est bien sa racine. Lisible → fermer, `container_changed` ; échec de `poll` → fermer, `internal`. `pidfd_send_signal(pidfd, 0)` n'est pas utilisé : il répond `EPERM` sans droit de signaler (ou sous un profil seccomp). » Adapter de même la mention de §5.4 (b) « qui doit être vivant après la lecture » si elle cite le signal.
 
-- [ ] **Step 4: Vérifier**
+- [x] **Step 4: Vérifier**
 
 Run: `scripts/test-linux.sh ./internal/fsview/ -run 'Alive|OpenRoot|CheckArchive' -v 2>&1 | grep -E '^(---|ok|FAIL)'` puis, en non-root, `docker run --rm --pid=host -u 1000 -v "$PWD":/src -w /src -e GOCACHE=/tmp/gc -e GOPATH=/tmp/gp hublot-test go test ./internal/fsview/ -run Alive 2>&1 | tail -n 3`
 Expected: tout PASS, aucun SKIP, dans les deux cas. Contrôle de l'ancienne implémentation (à rejouer une fois) : avec le signal 0, `TestAliveReal` échoue sur le zombie.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add internal/fsview docs/superpowers/specs/2026-10-07-hublot-kit-v0.1-design.md
@@ -2718,7 +2718,7 @@ EOF
 
 > **À comprendre :** prenons `-v /var/run/docker.sock:/var/run/docker.sock` dans une image où `/var/run` → `/run`. Docker monte en `/run/docker.sock`, que `mountinfo` montre. `CheckVisibleMounts` ne trouve pas `/var/run/docker.sock` et refuse tout tar. Retrouver le montage par son identifiant (`statx` `STATX_MNT_ID`, noyau ≥ 5.8) ne suffit pas : si le PID 1 s'est chrooté sur un point de montage, des liens plantés dedans peuvent mener chaque destination vers une racine de montage visible (revue I4). Le montage trouvé doit donc **être** ce montage Docker : sa racine (`mountinfo`, champ 4) doit terminer la `Source` d'un bind, ou finir par `/<Name>/_data` pour un volume. De plus, P ne peut pas être `/`, et un même P ne peut pas servir deux destinations.
 
-- [ ] **Step 1: Tests qui échouent** — `mounts_test.go` (portable ; importer `io/fs`) :
+- [x] **Step 1: Tests qui échouent** — `mounts_test.go` (portable ; importer `io/fs`) :
 
 ```go
 func TestLocateMounts(t *testing.T) {
@@ -2853,7 +2853,7 @@ func TestIntegrationDockerSocketUnderVarRun(t *testing.T) {
 
 Run: `go test ./internal/fsview/ -run LocateMounts 2>&1 | tail -n 3` — Expected: FAIL à la compilation (`MountIdent`, `LocateMounts` indéfinis).
 
-- [ ] **Step 2: Implémenter** — `mounts.go` :
+- [x] **Step 2: Implémenter** — `mounts.go` :
   - `scanMountinfo(mountinfo string, visit func(mountLine) bool)` : `ID` par `strconv.ParseUint(f[0], 10, 64)`, `Root` = `f[3]` et `Point` = `f[4]`, tous deux par `unescapeMountinfo`. Un ID illisible ou un échappement invalide arrête le parcours, `return line, "…", true` (échec fermé, comme aujourd'hui). Adapter ses deux appelants, `dangerousMount` et `CheckVisibleMounts` ; aucun test ne l'appelle directement.
   - Ajouter :
 
@@ -2980,14 +2980,14 @@ func (p *procFS) CheckArchive(ctx context.Context, dir string) error {
 
 `HostBind` garde `p.mounts` : il juge les sources, pas les destinations.
 
-- [ ] **Step 3: Spec** — §5.4 puce (b) : « La table des montages doit montrer la racine `/` et chaque destination d'`Inspect.Mounts` telle quelle, sinon refus (PID 1 chrooté, destination sous un lien). » → « La table des montages doit montrer la racine `/` et chaque destination d'`Inspect.Mounts`, telle quelle ou retrouvée par identifiant de montage. Pour la retrouver : la destination résolue dans le conteneur (`statx` `STATX_MNT_ID`) est sur le montage n ; `mountinfo` montre n au point P, et P résolu donne le même montage, le même périphérique et le même inode. La racine du montage n (champ 4) doit terminer la `Source` du bind, ou finir par `/<nom>/_data` pour un volume. P n'est pas `/`, et il ne sert qu'une seule destination. Sinon refus (PID 1 chrooté). Les contrôles qui ne lisent rien dans le conteneur passent avant cette résolution. » §13, dernière ligne : remplacer « ; tout tar de dossier d'un tel conteneur est refusé (fail closed). Une comparaison par identifiant de montage est prévue plus tard » par « : la destination est retrouvée par identifiant de montage, lié au montage Docker (§5.4 b) ; sans preuve, refus (fail closed) ».
+- [x] **Step 3: Spec** — §5.4 puce (b) : « La table des montages doit montrer la racine `/` et chaque destination d'`Inspect.Mounts` telle quelle, sinon refus (PID 1 chrooté, destination sous un lien). » → « La table des montages doit montrer la racine `/` et chaque destination d'`Inspect.Mounts`, telle quelle ou retrouvée par identifiant de montage. Pour la retrouver : la destination résolue dans le conteneur (`statx` `STATX_MNT_ID`) est sur le montage n ; `mountinfo` montre n au point P, et P résolu donne le même montage, le même périphérique et le même inode. La racine du montage n (champ 4) doit terminer la `Source` du bind, ou finir par `/<nom>/_data` pour un volume. P n'est pas `/`, et il ne sert qu'une seule destination. Sinon refus (PID 1 chrooté). Les contrôles qui ne lisent rien dans le conteneur passent avant cette résolution. » §13, dernière ligne : remplacer « ; tout tar de dossier d'un tel conteneur est refusé (fail closed). Une comparaison par identifiant de montage est prévue plus tard » par « : la destination est retrouvée par identifiant de montage, lié au montage Docker (§5.4 b) ; sans preuve, refus (fail closed) ».
 
-- [ ] **Step 4: Vérifier**
+- [x] **Step 4: Vérifier**
 
 Run: `go test -race ./internal/fsview/ 2>&1 | tail -n 3 && scripts/test-linux.sh -race ./internal/fsview/ -run 'CheckArchive|Locate' -v 2>&1 | grep -E '^(---|ok|FAIL)' && scripts/test-linux.sh -tags integration ./internal/fsview/ -run 'DockerSocket|CheckArchive' 2>&1 | tail -n 3`
 Expected: `ok` ; sous Linux, `TestCheckArchiveDestinationUnderSymlink` **PASS** (pas SKIP). Si `TestIntegrationDockerSocketUnderVarRun` échoue sur Docker Desktop, la racine du montage ne termine pas la `Source` d'`Inspect` (socket mandataire) : relever les deux valeurs et en discuter avant tout assouplissement. Mutations : retirer `sameMount` → « chroot vers un autre montage », « autre source » et « autre volume » rougissent (« chroot vers / » reste refusé par `P ≠ "/"`) ; retirer le second `ident` → « autre inode » rougit.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add internal/fsview docs/superpowers/specs/2026-10-07-hublot-kit-v0.1-design.md
@@ -3012,7 +3012,7 @@ EOF
 - Consumes: `dockerx.Client.Changes`, `containerRef`, `writeFSError`, `session`.
 - Produces: `GET /api/containers/{id}/changes` → `200 [{"path","kind"}]` trié par chemin, `[]` si vide ; erreurs `not_found`, `docker_unavailable`.
 
-- [ ] **Step 1: Tests qui échouent** — `changes_test.go` :
+- [x] **Step 1: Tests qui échouent** — `changes_test.go` :
 
 ```go
 package api
@@ -3069,7 +3069,7 @@ func TestChangesErrors(t *testing.T) {
 
 Run: `go test ./internal/api/ -run Changes 2>&1 | tail -n 3` — Expected: FAIL (404 JSON de la route inconnue).
 
-- [ ] **Step 2: Implémenter** — `changes.go` : `const changesTimeout = 30 * time.Second` (commentaire : Docker calcule le diff de la couche, lent sur une grosse ; pas de garde, le diff ne traverse pas les montages). `func (s *server) changes(w, r)` :
+- [x] **Step 2: Implémenter** — `changes.go` : `const changesTimeout = 30 * time.Second` (commentaire : Docker calcule le diff de la couche, lent sur une grosse ; pas de garde, le diff ne traverse pas les montages). `func (s *server) changes(w, r)` :
   1. `id := r.PathValue("id")` ; si `!containerRef.MatchString(id)` → `404 not_found`, sans appel à Docker ;
   2. `ctx` borné par `changesTimeout` ; `cs, err := s.d.Docker.Changes(ctx, id)` ; erreur → `writeFSError` ;
   3. `nil` → `[]dockerx.Change{}` ; `sort.Slice` par `Path` ; `writeJSON(w, 200, cs)`.
@@ -3085,14 +3085,14 @@ Run: `go test ./internal/api/ -run Changes 2>&1 | tail -n 3` — Expected: FAIL 
 	}
 ```
 
-- [ ] **Step 3: Spec §6**, ligne `/changes` : « F5 `[{path, kind: "added"|"modified"|"deleted"}]` » → « F5 `[{path, kind: "added"|"modified"|"deleted"}]`, trié par chemin, liste complète ; diff de la couche du conteneur (volumes exclus), sans garde FUSE, délai 30 s ».
+- [x] **Step 3: Spec §6**, ligne `/changes` : « F5 `[{path, kind: "added"|"modified"|"deleted"}]` » → « F5 `[{path, kind: "added"|"modified"|"deleted"}]`, trié par chemin, liste complète ; diff de la couche du conteneur (volumes exclus), sans garde FUSE, délai 30 s ».
 
-- [ ] **Step 4: Vérifier**
+- [x] **Step 4: Vérifier**
 
 Run: `go test -race ./internal/api/ 2>&1 | tail -n 3 && DOCKER_HOST=unix://$HOME/.docker/run/docker.sock go test -tags integration ./internal/api/ -run IntegrationStopped 2>&1 | tail -n 3`
 Expected: `ok` ×2.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add internal/api docs/superpowers/specs/2026-10-07-hublot-kit-v0.1-design.md
@@ -3117,7 +3117,7 @@ EOF
 - Consumes: `202 {"error":"indexing","progress"}` (tâche 5).
 - Produces: `ApiError.progress?: number` ; `indexingPercent(progress?: number): number` ; `fsErrorMessage(code: string, detail: string | undefined, stopped: boolean): string` ; prop `stopped: boolean` de `FileBrowser` et `FilePreview`.
 
-- [ ] **Step 1: Tests qui échouent** — `api.test.ts` :
+- [x] **Step 1: Tests qui échouent** — `api.test.ts` :
 
 ```ts
 describe('202 indexing (spec §6)', () => {
@@ -3165,7 +3165,7 @@ describe('fsErrorMessage', () => {
 
 Run: `cd web && export PATH=/opt/homebrew/bin:$PATH && npx vitest run 2>&1 | tail -n 8` — Expected: FAIL (`listDir` résout avec le JSON ; `indexingPercent` absent).
 
-- [ ] **Step 2: `api.ts`, `files.ts`, i18n**
+- [x] **Step 2: `api.ts`, `files.ts`, i18n**
   - `ApiError` : 4ᵉ paramètre `public progress?: number`. `errorOf` : `const progress = typeof body?.progress === 'number' ? body.progress : undefined;` passé au constructeur.
   - `api()` : avant `if (res.status === 204)`, `// 202 is res.ok but never a result: the index is being built (spec §6).` puis `if (res.status === 202) throw await errorOf(res);`. `get()` : `if (res.status === 202 || !res.ok) throw await errorOf(res);`.
   - `files.ts` :
@@ -3200,7 +3200,7 @@ export function fsErrorMessage(code: string, detail: string | undefined, stopped
 | `files.stoppedUnavailable` | `Explorateur indisponible pour ce conteneur arrêté : un de ses montages pourrait exposer l'hôte. Les changements restent consultables.` | `File explorer unavailable for this stopped container: one of its mounts could expose the host. Changes remain available.` |
 | `files.stoppedTooLarge` | `Conteneur trop volumineux pour être indexé (au plus 4 Gio, volumes compris, 5 minutes ou 1 000 000 d'entrées). Démarrez-le pour l'explorer.` | `Container too large to index (at most 4 GiB, volumes included, 5 minutes or 1,000,000 entries). Start it to explore it.` |
 
-- [ ] **Step 3: Composants**
+- [x] **Step 3: Composants**
 
 `FileBrowser.svelte` :
 - Prop : `let { id, stopped = false }: { id: string; stopped?: boolean } = $props();` ; état `let indexing = $state<number | null>(null); // percent while the index is built`.
@@ -3232,14 +3232,14 @@ export function fsErrorMessage(code: string, detail: string | undefined, stopped
 
 `+page.svelte` : remplacer le bloc `{#if container.state === 'running' || …}…{:else}…{/if}` par `<FileBrowser id={container.id} stopped={container.state !== 'running' && container.state !== 'paused'} />`.
 
-- [ ] **Step 4: Vérifier**
+- [x] **Step 4: Vérifier**
 
 Run: `cd web && export PATH=/opt/homebrew/bin:$PATH && npx vitest run 2>&1 | tail -n 5 && npm run check 2>&1 | tail -n 3 && npm run lint 2>&1 | tail -n 3 && npm run build 2>&1 | tail -n 2 && grep -rn 'stoppedSoon\|501' src | wc -l`
 Expected: tests verts, `check` et `lint` sans erreur, build OK, `0`.
 
 Essai manuel : `make web && scripts/dev-agent.sh`, puis dans un autre terminal `docker run --name hk-big node:22 true`. Ouvrir `hk-big` : barre de progression, puis le listing sans recharger la page. Ensuite `mkdir -p /tmp/hk-bind && docker run --name hk-bind -v /tmp/hk-bind:/data alpine:3 true` doit s'explorer (`/tmp` est partagé par Docker Desktop, `/srv` ne l'est pas). Ne **pas** essayer un bind de `/proc` contre le vrai démon (règle C1). Relever la durée d'indexation de `node:22` pour la tâche 13.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add web/src
@@ -3264,7 +3264,7 @@ EOF
 - Consumes: `GET /changes` (tâche 9).
 - Produces: `type Change = { path: string; kind: 'added' | 'modified' | 'deleted' }` et `listChanges(id: string): Promise<Change[]>` dans `api.ts` ; dans `changes.ts` : `changeMarks`, `deletedIn`, `countChanges`, `kindLabel`, `kindLetter`, `CHANGES_SHOWN = 1000`.
 
-- [ ] **Step 1: Tests qui échouent** — `changes.test.ts` :
+- [x] **Step 1: Tests qui échouent** — `changes.test.ts` :
 
 ```ts
 import { describe, expect, it } from 'vitest';
@@ -3303,7 +3303,7 @@ describe('changes', () => {
 
 Run: `cd web && export PATH=/opt/homebrew/bin:$PATH && npx vitest run src/lib/changes.test.ts 2>&1 | tail -n 4` — Expected: FAIL (module absent).
 
-- [ ] **Step 2: Logique** — `api.ts` : le type `Change` et `export const listChanges = (id: string) => api<Change[]>(\`/containers/${encodeURIComponent(id)}/changes\`);`. `changes.ts` (imports : `type Change` de `./api.ts`, `t` de `./i18n/index.ts`) :
+- [x] **Step 2: Logique** — `api.ts` : le type `Change` et `export const listChanges = (id: string) => api<Change[]>(\`/containers/${encodeURIComponent(id)}/changes\`);`. `changes.ts` (imports : `type Change` de `./api.ts`, `t` de `./i18n/index.ts`) :
   - `type ChangeKind = Change['kind']` ; `CHANGES_SHOWN = 1000` (Q12) ;
   - `changeMarks(changes): Map<string, ChangeKind>` : chemin → type ;
   - `deletedIn(changes, dir): string[]` : préfixe `dir === '/' ? '/' : dir + '/'`, garde les `deleted` dont le reste ne contient pas de `/`, renvoie ce reste (enfants directs seulement) ;
@@ -3322,7 +3322,7 @@ i18n :
 | `changes.more` | `changements de plus, non affichés` | `more changes, not shown` |
 | `changes.deletedHere` | `supprimé(s) dans ce dossier depuis l'image :` | `deleted in this folder since the image:` |
 
-- [ ] **Step 3: Composants**
+- [x] **Step 3: Composants**
 
 `ChangesList.svelte` (nouveau ; prop `id`) : même squelette d'effet que `FileBrowser` (`const wanted = id`, `void reloads`, drapeau `current`, 401 → `/login`). États : erreur (`role="alert"` + bouton Recharger qui fait `reloads++`), chargement (`files.loading`), vide (`changes.empty`). Sinon : `changes.hint` en tête ; une ligne de décompte `{t('changes.added')} : n · …` via `{@const n = countChanges(changes)}` ; une `<ul>` des `CHANGES_SHOWN` premiers changements. Chaque `<li>` est une grille `1.5rem 5.5rem minmax(0, 1fr)` avec `<abbr class="mark {kind}" title={kindLabel(kind)}>{kindLetter(kind)}</abbr>`, le libellé en clair, puis le chemin. Le chemin est `<s>` pour un supprimé, sinon `<a href={'?' + new URLSearchParams({ path })}>` (l'explorateur ouvre un fichier ainsi). Au-delà de `CHANGES_SHOWN`, `{changes.length - CHANGES_SHOWN} {t('changes.more')}`. Couleurs : ajouté `#1b7f3b`, modifié `#8a5a00`, supprimé `#b00020`. Le chemin vient du conteneur : du texte, jamais `{@html}`.
 
@@ -3339,12 +3339,12 @@ Dans la ligne du tableau, juste après `{#each entries as e, i (i)}`, `{@const k
 
 et le contenu : `{#if tab === 'changes'}<ChangesList id={container.id} />{:else}<FileBrowser … />{/if}`.
 
-- [ ] **Step 4: Vérifier**
+- [x] **Step 4: Vérifier**
 
 Run: `cd web && export PATH=/opt/homebrew/bin:$PATH && npx vitest run 2>&1 | tail -n 5 && npm run check 2>&1 | tail -n 3 && npm run lint 2>&1 | tail -n 3 && npm run build 2>&1 | tail -n 2`
 Expected: tout vert. Essai manuel (agent de dev) : onglet Changements d'un conteneur modifié, lien vers un fichier ajouté, marque `A` dans l'explorateur, retour arrière du navigateur, largeur téléphone (390 px) sans débordement horizontal.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add web/src
@@ -3369,9 +3369,9 @@ EOF
 - Consumes: l'agent complet ; `reset-token` (« Nouveau jeton d'accès (affiché une seule fois) : <jeton> ») ; le champ `#token` et le bouton `submit` de `/login` ; le lien du nom de conteneur dans `/` ; les boutons `root/` et `note.txt` de l'explorateur ; `.preview` ; `abbr.mark.added` ; l'onglet « Changements ».
 - Produces: `scripts/e2e.sh` (variables `HUBLOT_URL`, `HUBLOT_TOKEN` pour Playwright).
 
-- [ ] **Step 1: Dépendance** — `cd web && export PATH=/opt/homebrew/bin:$PATH && npm i -D -E @playwright/test 2>&1 | tail -n 2 && npx playwright install chromium 2>&1 | tail -n 1`. La version exacte installée est figée dans `package.json`.
+- [x] **Step 1: Dépendance** — `cd web && export PATH=/opt/homebrew/bin:$PATH && npm i -D -E @playwright/test 2>&1 | tail -n 2 && npx playwright install chromium 2>&1 | tail -n 1`. La version exacte installée est figée dans `package.json`.
 
-- [ ] **Step 2: Config et parcours**
+- [x] **Step 2: Config et parcours**
 
 `web/playwright.config.ts` :
 
@@ -3416,7 +3416,7 @@ test('connexion, liste, fichier, diff', async ({ page }) => {
 });
 ```
 
-- [ ] **Step 3: `scripts/e2e.sh`** (exécutable : `chmod +x`) :
+- [x] **Step 3: `scripts/e2e.sh`** (exécutable : `chmod +x`) :
 
 ```bash
 #!/usr/bin/env bash
@@ -3455,7 +3455,7 @@ cd web && HUBLOT_URL=http://127.0.0.1:7879 HUBLOT_TOKEN="$tok" npx playwright te
 Run: `export PATH=/opt/homebrew/bin:$PATH && DOCKER_HOST=unix://$HOME/.docker/run/docker.sock scripts/e2e.sh 2>&1 | tail -n 8` puis `cd web && npx vitest run 2>&1 | tail -n 3`
 Expected: `1 passed` ; Vitest n'a pas ramassé `parcours.e2e.ts` (même nombre de fichiers de test qu'avant). En cas d'échec : `docker logs hublot-e2e-agent | tail -n 20` avant le nettoyage (retirer temporairement le `trap`).
 
-- [ ] **Step 4: CI** — `.github/workflows/ci.yml` :
+- [x] **Step 4: CI** — `.github/workflows/ci.yml` :
   - Job `integration` : ajouter, sous `runs-on`,
 
 ```yaml
@@ -3487,9 +3487,9 @@ Expected: `1 passed` ; Vitest n'a pas ramassé `parcours.e2e.ts` (même nombre d
 
   Si une règle de protection de `main` exige le contexte `integration`, la mettre à jour : il devient `integration (overlay2)` et `integration (containerd)`.
 
-- [ ] **Step 5: Spec §10** — puce « Interface » : après « un seul parcours Playwright : connexion → liste → ouvrir un fichier → voir le diff », ajouter « (`web/e2e/parcours.e2e.ts`, lancé par `scripts/e2e.sh` contre un agent réel et un conteneur arrêté) ». Puce « Intégration » : « matrice overlay2 / containerd configurée par `daemon.json` » → « matrice overlay2 / containerd (`features.containerd-snapshotter` dans `daemon.json`, vérifiée par `docker info`) ».
+- [x] **Step 5: Spec §10** — puce « Interface » : après « un seul parcours Playwright : connexion → liste → ouvrir un fichier → voir le diff », ajouter « (`web/e2e/parcours.e2e.ts`, lancé par `scripts/e2e.sh` contre un agent réel et un conteneur arrêté) ». Puce « Intégration » : « matrice overlay2 / containerd configurée par `daemon.json` » → « matrice overlay2 / containerd (`features.containerd-snapshotter` dans `daemon.json`, vérifiée par `docker info`) ».
 
-- [ ] **Step 6: Vérifier et commiter**
+- [x] **Step 6: Vérifier et commiter**
 
 Run: `python3 -I -c "import sys,yaml; yaml.safe_load(open('.github/workflows/ci.yml'))" && echo yaml-ok; cd web && export PATH=/opt/homebrew/bin:$PATH && npm run check 2>&1 | tail -n 3 && npm run lint 2>&1 | tail -n 3`
 Expected: `yaml-ok` (si PyYAML manque, `ruby -ryaml -e 'YAML.load_file(".github/workflows/ci.yml")' && echo yaml-ok`) ; `check` et `lint` sans erreur.
@@ -3512,16 +3512,16 @@ EOF
 **Files:**
 - Modify: spec §5.2 (paragraphe « Spike » : mesure), `docs/superpowers/plans/2026-10-09-explorateur-2-tarindex-diff.md` (cases cochées, constats)
 
-- [ ] **Step 1: Suite complète sur les deux VM**
+- [x] **Step 1: Suite complète sur les deux VM**
 
 Run (pour chaque VM) : `limactl start hk-ubuntu >/dev/null && limactl shell --workdir "$PWD" hk-ubuntu -- sudo scripts/test-linux.sh -race -tags integration ./cmd/... ./internal/... 2>&1 | grep -E '^(ok|FAIL|---)|MESURE' | tail -n 30`, puis idem `hk-fedora`.
 Expected: `ok` pour chaque paquet. `TestCheckArchiveDestinationUnderSymlink` et `TestIntegrationDockerSocketUnderVarRun` passent (pas de SKIP). Lignes `MESURE` relevées.
 
-- [ ] **Step 2: Mesures** — avec l'agent de dev, indexer un conteneur arrêté de `node:22` : nombre d'entrées (`docker export hk-big | tar -t | wc -l`) et durée (premier 202 → premier 200 dans l'onglet Réseau). Reprendre la ligne `MESURE` de `TestMeasureIndexMemory` (tâche 3 : octets par entrée). Ajouter au paragraphe « Spike » de §5.2 : « Mesuré (plan Explorateur 2, Docker Desktop) : `node:22`, <entrées> entrées, <durée> s ; index : <octets> octets par entrée, soit <Mo> Mo pour 1 000 000 d'entrées. » Si un index de 1 000 000 d'entrées dépasse 300 Mo, baisser `MaxHeaders` en conséquence, dans le code et la spec.
+- [x] **Step 2: Mesures** — avec l'agent de dev, indexer un conteneur arrêté de `node:22` : nombre d'entrées (`docker export hk-big | tar -t | wc -l`) et durée (premier 202 → premier 200 dans l'onglet Réseau). Reprendre la ligne `MESURE` de `TestMeasureIndexMemory` (tâche 3 : octets par entrée). Ajouter au paragraphe « Spike » de §5.2 : « Mesuré (plan Explorateur 2, Docker Desktop) : `node:22`, <entrées> entrées, <durée> s ; index : <octets> octets par entrée, soit <Mo> Mo pour 1 000 000 d'entrées. » Si un index de 1 000 000 d'entrées dépasse 300 Mo, baisser `MaxHeaders` en conséquence, dans le code et la spec.
 
 - [ ] **Step 3: Revue de branche** — demander la revue complète de la branche (sous-agent indépendant + Codex), corriger, puis cocher les cases de ce plan et y noter les constats.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add docs/superpowers
@@ -3531,3 +3531,10 @@ docs: Explorateur 2/3 vérifié sur hk-ubuntu et hk-fedora, mesure d'indexation
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 EOF
 ```
+
+#### Constats de la tâche 13
+
+- hk-ubuntu (AppArmor) et hk-fedora (SELinux) : `go test -race -tags integration ./cmd/... ./internal/...` donne `ok` pour chaque paquet. `TestCheckArchiveDestinationUnderSymlink` et `TestIntegrationDockerSocketUnderVarRun` passent sur les deux, sans SKIP.
+- Mesure : `TestMeasureIndexMemory` donne 237 octets par entrée sur les deux VM, soit 237 Mo pour 1 000 000 d'entrées, sous le seuil de 300 Mo : `MaxHeaders` reste à 1 000 000.
+- `node:22` sur hk-fedora : 33 538 entrées (`docker export | tar -t | wc -l`) ; l'index lui-même se construit en 1,0 s depuis un fichier tar, l'export du démon prend 7 à 8 s. Le délai 202 → 200 dans l'onglet Réseau n'a pas été relevé (pas d'essai manuel de l'interface).
+- Step 3 (revue de branche) : reste à faire par le contrôleur ; case non cochée.
