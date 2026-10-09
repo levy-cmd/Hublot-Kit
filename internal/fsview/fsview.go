@@ -50,6 +50,9 @@ type FS interface {
 	// under or above dir (spec §5.4). Called before every GetArchive of a directory.
 	CheckArchive(ctx context.Context, dir string) error
 	// Close releases the view (procfs: the root and pidfd descriptors).
+	// Lifecycle contract: Close must only be called once every in-flight call
+	// on the view has returned. procfs passes the raw root fd number to the
+	// kernel; closing early lets that number be reused by an unrelated open.
 	Close() error
 }
 

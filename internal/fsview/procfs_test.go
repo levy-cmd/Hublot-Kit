@@ -148,11 +148,11 @@ func TestSymlinkLoopFails(t *testing.T) {
 	fsys, rp, _ := newRoot(t)
 	must(t, os.Symlink("loop2", filepath.Join(rp, "loop1")))
 	must(t, os.Symlink("loop1", filepath.Join(rp, "loop2")))
-	if _, err := readAll(fsys, "/loop1"); err == nil {
-		t.Fatal("une boucle de liens doit échouer")
+	if _, err := readAll(fsys, "/loop1"); !errors.Is(err, unix.ELOOP) {
+		t.Fatalf("une boucle de liens doit échouer avec ELOOP, reçu %v", err)
 	}
-	if _, _, err := fsys.List(ctx, "/loop1"); err == nil {
-		t.Fatal("une boucle de liens doit échouer au listing")
+	if _, _, err := fsys.List(ctx, "/loop1"); !errors.Is(err, unix.ELOOP) {
+		t.Fatalf("une boucle de liens doit échouer avec ELOOP au listing, reçu %v", err)
 	}
 }
 

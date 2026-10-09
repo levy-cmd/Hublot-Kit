@@ -128,7 +128,7 @@ func (p *procFS) Open(_ context.Context, name string) (io.ReadCloser, error) {
 	if st.Mode&unix.S_IFMT != unix.S_IFREG {
 		return nil, fmt.Errorf("%w : %s", ErrNotRegular, name)
 	}
-	// O_NONBLOCK: never block if the file was swapped for a FIFO meanwhile.
+	// O_NONBLOCK: defence in depth; Reopen reopens the very inode checked above, so it is a regular file.
 	f, err := pathrs.Reopen(h, unix.O_RDONLY|unix.O_NONBLOCK|unix.O_CLOEXEC)
 	if err != nil {
 		return nil, err // never a typed nil *os.File inside the interface
