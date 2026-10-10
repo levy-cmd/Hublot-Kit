@@ -2,12 +2,11 @@ package api
 
 import (
 	"bytes"
-	"crypto/sha256"
-	"encoding/hex"
 	"fmt"
 	"io"
 	"net/http"
 
+	"github.com/levy-cmd/hublot-kit/internal/files"
 	"github.com/levy-cmd/hublot-kit/internal/fsview"
 )
 
@@ -20,7 +19,7 @@ const binaryType = "application/octet-stream"
 // one of four raster image types, never an active type. The ETag is the
 // SHA-256 of the content: the If-Match of a later edit (plan Explorateur 3).
 func (s *server) fsFile(w http.ResponseWriter, r *http.Request) {
-	info, p, ok := s.fsRequest(w, r)
+	info, p, ok := s.fsRequest(w, r, "path")
 	if !ok {
 		return
 	}
@@ -50,9 +49,8 @@ func (s *server) fsFile(w http.ResponseWriter, r *http.Request) {
 		writeFSError(w, err)
 		return
 	}
-	sum := sha256.Sum256(b)
 	ct := previewType(b)
-	w.Header().Set("ETag", `"`+hex.EncodeToString(sum[:])+`"`)
+	w.Header().Set("ETag", files.ETag(b)) // the If-Match of an edit
 	w.Header().Set("Content-Type", ct)
 	if ct == binaryType {
 		return // no text preview for a binary file: the UI offers the download

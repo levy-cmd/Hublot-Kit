@@ -8,6 +8,7 @@ import (
 	"syscall"
 
 	"github.com/levy-cmd/hublot-kit/internal/dockerx"
+	"github.com/levy-cmd/hublot-kit/internal/files"
 	"github.com/levy-cmd/hublot-kit/internal/fsview"
 )
 
@@ -43,6 +44,14 @@ func fsErrorStatus(err error) (int, string) {
 		return http.StatusGatewayTimeout, "internal"
 	case errors.Is(err, dockerx.ErrNotFound):
 		return http.StatusNotFound, "not_found"
+	case errors.Is(err, files.ErrReadOnly), errors.Is(err, dockerx.ErrRefused): // Q15: Docker's read-only rootfs or volume
+		return http.StatusForbidden, "read_only"
+	case errors.Is(err, files.ErrConflict), errors.Is(err, dockerx.ErrPutInvalid): // the path changed after the checks
+		return http.StatusConflict, "conflict"
+	case errors.Is(err, files.ErrInvalidName):
+		return http.StatusBadRequest, "invalid_name"
+	case isTooLarge(err):
+		return http.StatusRequestEntityTooLarge, "too_large"
 	case errors.Is(err, dockerx.ErrUnavailable):
 		return http.StatusServiceUnavailable, "docker_unavailable"
 	case errors.Is(err, fsview.ErrContainerChanged):
