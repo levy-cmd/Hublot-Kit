@@ -328,6 +328,7 @@ func TestLocateMountsTmpfs(t *testing.T) {
 		"/part": {56, 56, 1}, "/to-part": {56, 56, 1}, // a part of a tmpfs, not a whole one
 		"/": {20, 20, 2}, "/to-root": {20, 20, 2}, // jail: the link leads to the root
 		"/other-inode": {50, 50, 9}, // same mount, another inode
+		"/var/run2":    {50, 50, 1},
 	}
 	ident := func(p string) (MountIdent, error) {
 		if id, ok := ids[p]; ok {
@@ -357,7 +358,6 @@ func TestLocateMountsTmpfs(t *testing.T) {
 		"introuvable":                         {tmpfs("/absent")},
 		"deux destinations sur un même tmpfs": {tmpfs("/var/run"), tmpfs("/var/run2")},
 	}
-	ids["/var/run2"] = MountIdent{50, 50, 1}
 	for name, ms := range refused {
 		if err := CheckVisibleMounts(mi, LocateMounts(mi, ms, ident)); !errors.Is(err, ErrForbiddenPath) {
 			t.Errorf("ÉVASION : %s accepté", name)
@@ -381,5 +381,60 @@ func TestLocateMountsTmpfs(t *testing.T) {
 	bind := []dockerx.Mount{{Type: "bind", Source: "/srv/run", Destination: "/var/run"}}
 	if err := CheckVisibleMounts(mi, LocateMounts(mi, bind, ident)); !errors.Is(err, ErrForbiddenPath) {
 		t.Errorf("ÉVASION : un bind localisé sur un tmpfs")
+	}
+}
+
+// Review I1: a whole tmpfs that no Docker mount declares can still be a
+// decoy when a declared bind brings it (rbind of a host tree with
+// submounts, here /hostrun/lock) or when the container mounts it itself
+// under a volume. runc mounts a --tmpfs directly on the container's root
+// filesystem: the parent of its line (field 2) must be a "/" line.
+func TestLocateMountsTmpfsParentIsRoot(t *testing.T) {
+	tmpfs := func(dst string) dockerx.Mount { return dockerx.Mount{Type: "tmpfs", Destination: dst} }
+	identOf := func(ids map[string]MountIdent) func(string) (MountIdent, error) {
+		return func(p string) (MountIdent, error) {
+			if id, ok := ids[p]; ok {
+				return id, nil
+			}
+			return MountIdent{}, fs.ErrNotExist
+		}
+	}
+	// A, no jail: /var/run -> /hostrun/lock, a tmpfs under the bind of /run.
+	a := strings.Join([]string{
+		"20 1 0:20 / / rw - overlay overlay rw",
+		"30 20 0:30 / /hostrun rw - tmpfs tmpfs rw",
+		"31 30 0:31 / /hostrun/lock rw - tmpfs tmpfs rw",
+	}, "\n")
+	mountsA := []dockerx.Mount{tmpfs("/var/run"), {Type: "bind", Source: "/run", Destination: "/hostrun"}}
+	identA := identOf(map[string]MountIdent{
+		"/var/run": {31, 31, 1}, "/hostrun/lock": {31, 31, 1}, "/hostrun": {30, 30, 1},
+	})
+	if err := CheckVisibleMounts(a, LocateMounts(a, mountsA, identA)); !errors.Is(err, ErrForbiddenPath) {
+		t.Errorf("ÉVASION : tmpfs d'un sous-montage de bind pris pour le --tmpfs (%v)", err)
+	}
+	// B, jail: PID 1 chrooted in the tmpfs /jail, which holds a bind of /srv
+	// whose submount /srv/cache is a whole tmpfs. The table shows the jail's
+	// "/", /srv and /srv/cache; /jail is not there, and must not be found
+	// on /srv/cache.
+	b := strings.Join([]string{
+		"60 1 0:60 / / rw - tmpfs tmpfs rw",
+		"61 60 8:1 /srv /srv rw - ext4 /dev/sda1 rw",
+		"62 61 0:62 / /srv/cache rw - tmpfs tmpfs rw",
+	}, "\n")
+	mountsB := []dockerx.Mount{tmpfs("/jail"), {Type: "bind", Source: "/srv", Destination: "/srv"}}
+	identB := identOf(map[string]MountIdent{
+		"/jail": {62, 62, 1}, "/srv/cache": {62, 62, 1}, "/srv": {61, 8, 2},
+	})
+	if err := CheckVisibleMounts(b, LocateMounts(b, mountsB, identB)); !errors.Is(err, ErrForbiddenPath) {
+		t.Errorf("ÉVASION : prison avec un tmpfs sous un bind acceptée (%v)", err)
+	}
+	// Control: the same tmpfs, child of the root, is found.
+	c := strings.Join([]string{
+		"20 1 0:20 / / rw - overlay overlay rw",
+		"50 20 0:50 / /run rw - tmpfs tmpfs rw",
+	}, "\n")
+	identC := identOf(map[string]MountIdent{"/var/run": {50, 50, 1}, "/run": {50, 50, 1}})
+	if got := LocateMounts(c, []dockerx.Mount{tmpfs("/var/run")}, identC); got[0].Destination != "/run" {
+		t.Errorf("contrôle : tmpfs fils de la racine non retrouvé (%v)", got)
 	}
 }
