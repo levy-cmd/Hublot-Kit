@@ -54,8 +54,12 @@ type MountPointChecker interface {
 // container's root (procfs: the mount table of the pinned process shows "/").
 // With a chrooted PID 1 the view shows another tree than the one Docker
 // writes in: package files refuses every write then (review I1, plan 3).
+// It also returns where the container's tmpfs mounts are (Inspect.Mounts
+// of type tmpfs and --tmpfs), in the view's coordinates: a destination
+// under a link is found where it is really mounted (spec §13; procfs by
+// mount ID, tarindex through the index). Docker writes in none of them.
 type WriteRootChecker interface {
-	CheckWriteRoot(ctx context.Context) error
+	CheckWriteRoot(ctx context.Context) (tmpfs []string, err error)
 }
 
 // FS is a read view of a container's tree. Paths are container paths;

@@ -37,12 +37,13 @@ type tarFS struct {
 	docker dockerx.Client
 	id     string
 	mounts []dockerx.Mount
+	tmpfs  []string // --tmpfs destinations of Inspect (not in mounts)
 	idx    *index
 	stale  func()
 }
 
-func newTarFS(docker dockerx.Client, id string, mounts []dockerx.Mount, idx *index, stale func()) *tarFS {
-	return &tarFS{docker: docker, id: id, mounts: mounts, idx: idx, stale: stale}
+func newTarFS(docker dockerx.Client, info dockerx.ContainerInfo, idx *index, stale func()) *tarFS {
+	return &tarFS{docker: docker, id: info.ID, mounts: info.Mounts, tmpfs: info.Tmpfs, idx: idx, stale: stale}
 }
 
 var _ FS = (*tarFS)(nil)
@@ -182,6 +183,19 @@ func progress(read, total int64) float64 {
 // path that ever goes to GetArchive. cur never contains a link, so ".." is
 // the parent of the resolved target, and stays at "/" on the root.
 func (x *index) resolve(p string) (string, error) {
+	cur, rest, err := x.walk(p)
+	if err != nil {
+		return "", err
+	}
+	if rest != nil {
+		return "", notExist(p)
+	}
+	return cur, nil
+}
+
+// walk is resolve that stops at the first missing component: it returns
+// the resolved path so far and the components left (nil when p exists).
+func (x *index) walk(p string) (cur string, rest []string, err error) {
 	todo := components(p)
 	mustDir := strings.HasSuffix(p, "/")
 	cur, hops := "/", 0
@@ -195,14 +209,14 @@ func (x *index) resolve(p string) (string, error) {
 		next := childPath(cur, c)
 		e, ok := x.entries[next]
 		if !ok {
-			return "", notExist(p)
+			return cur, append([]string{c}, todo...), nil
 		}
 		if e.Type == TypeSymlink {
 			if hops++; hops > maxHops {
-				return "", &fs.PathError{Op: "resolve", Path: p, Err: syscall.ELOOP}
+				return "", nil, &fs.PathError{Op: "resolve", Path: p, Err: syscall.ELOOP}
 			}
 			if e.LinkTarget == "" {
-				return "", notExist(p)
+				return "", nil, notExist(p)
 			}
 			if strings.HasPrefix(e.LinkTarget, "/") {
 				cur = "/" // absolute: from the container root, never the host's
@@ -214,14 +228,14 @@ func (x *index) resolve(p string) (string, error) {
 			continue
 		}
 		if len(todo) > 0 && e.Type != TypeDir {
-			return "", fmt.Errorf("%w : %s", ErrNotDir, p)
+			return "", nil, fmt.Errorf("%w : %s", ErrNotDir, p)
 		}
 		cur = next
 	}
 	if mustDir && x.entries[cur].Type != TypeDir {
-		return "", fmt.Errorf("%w : %s", ErrNotDir, p)
+		return "", nil, fmt.Errorf("%w : %s", ErrNotDir, p)
 	}
-	return cur, nil
+	return cur, nil, nil
 }
 
 func components(p string) []string {
@@ -370,6 +384,23 @@ func (t *tarFS) StatNoLinks(_ context.Context, p string) (Entry, error) {
 // already refused such a container, this guards the view on its own.
 func (t *tarFS) CheckArchive(ctx context.Context, _ string) error {
 	return HostBind(ctx, t.docker, t.mounts)
+}
+
+// CheckWriteRoot (stopped container): no process, the root is the one
+// Docker writes in. At start, runc mounts each tmpfs at its destination
+// resolved in the root filesystem, links followed (spec §13: /var/run ->
+// ../run puts it at /run): the index resolves it the same way, never out
+// of the root, as far as the path exists; runc creates the rest there
+// (review Minor 1: /dangling -> ../real, then x, gives /real/x). A path
+// the index refuses (loop, not a directory) stays as declared.
+func (t *tarFS) CheckWriteRoot(context.Context) ([]string, error) {
+	points := tmpfsPoints(withTmpfs(t.mounts, t.tmpfs))
+	for i, d := range points {
+		if cur, rest, err := t.idx.walk(d); err == nil {
+			points[i] = CleanPath(cur + "/" + strings.Join(rest, "/"))
+		}
+	}
+	return points, nil
 }
 
 func (t *tarFS) Close() error { return nil }

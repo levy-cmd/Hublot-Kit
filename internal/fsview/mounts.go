@@ -285,7 +285,7 @@ func LocateMounts(mountinfo string, mounts []dockerx.Mount, ident func(p string)
 			continue
 		}
 		l, ok := lines[want.MountID]
-		if !ok || l.Point == "/" || taken[l.Point] || !sameMount(m, l.Root) {
+		if !ok || l.Point == "/" || taken[l.Point] || !sameMount(m, l) {
 			continue
 		}
 		if got, err := ident(l.Point); err != nil || got != want {
@@ -296,15 +296,53 @@ func LocateMounts(mountinfo string, mounts []dockerx.Mount, ident func(p string)
 	return out
 }
 
-// sameMount ties a mountinfo root (field 4) to a Docker mount: the end of a
-// bind's Source, or the data directory of a named volume. Anything else
-// (tmpfs, a bind of a host mount root shown as "/") cannot be tied: false.
-func sameMount(m dockerx.Mount, root string) bool {
+// sameMount ties a mountinfo line to a Docker mount: its root (field 4) ends
+// the Source of a bind, or is the data directory of a named volume. A tmpfs
+// (spec §13: a --tmpfs under a link) has no source to tie: the line must be
+// a whole tmpfs (type tmpfs, root "/") outside the mounts the runtime adds
+// (/dev, /dev/shm, /proc, /sys), which a link could otherwise borrow.
+// Anything else (a bind of a host mount root shown as "/") cannot be tied:
+// false.
+func sameMount(m dockerx.Mount, l mountLine) bool {
 	switch m.Type {
 	case "bind":
-		return root != "/" && strings.HasSuffix(CleanPath(m.Source), root)
+		return l.Root != "/" && strings.HasSuffix(CleanPath(m.Source), l.Root)
 	case "volume":
-		return m.Name != "" && strings.HasSuffix(root, "/"+m.Name+"/_data")
+		return m.Name != "" && strings.HasSuffix(l.Root, "/"+m.Name+"/_data")
+	case "tmpfs":
+		return l.FSType == "tmpfs" && l.Root == "/" && !runtimeMount(l.Point)
 	}
 	return false
+}
+
+// runtimeMount: on or under /dev, /proc or /sys, which the runtime mounts in
+// every container (Docker never writes there either).
+func runtimeMount(p string) bool {
+	for _, d := range []string{"/dev", "/proc", "/sys"} {
+		if p == d || strings.HasPrefix(p, d+"/") {
+			return true
+		}
+	}
+	return false
+}
+
+// withTmpfs: the Docker mounts plus the --tmpfs destinations
+// (HostConfig.Tmpfs, absent from Inspect.Mounts), as tmpfs mounts.
+func withTmpfs(mounts []dockerx.Mount, tmpfs []string) []dockerx.Mount {
+	out := slices.Clone(mounts)
+	for _, d := range tmpfs {
+		out = append(out, dockerx.Mount{Type: "tmpfs", Destination: d})
+	}
+	return out
+}
+
+// tmpfsPoints: the cleaned destinations of the tmpfs mounts of ms.
+func tmpfsPoints(ms []dockerx.Mount) []string {
+	var out []string
+	for _, m := range ms {
+		if m.Type == "tmpfs" {
+			out = append(out, CleanPath(m.Destination))
+		}
+	}
+	return out
 }

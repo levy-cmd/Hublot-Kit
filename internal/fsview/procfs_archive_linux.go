@@ -10,7 +10,6 @@ import (
 	"slices"
 
 	pathrs "github.com/cyphar/filepath-securejoin/pathrs-lite"
-	"github.com/levy-cmd/hublot-kit/internal/dockerx"
 	"golang.org/x/sys/unix"
 )
 
@@ -58,42 +57,42 @@ func (p *procFS) mountIdent(name string) (MountIdent, error) {
 //     descriptor pinned when the view was opened (else the process changed
 //     root after the open);
 //   - every destination declared by Inspect, tmpfs included, appears as a
-//     mount point (CheckVisibleMounts): a PID 1 chrooted into a volume or a
-//     tmpfs of the container shows a "/" line, but its destination is gone.
+//     mount point (CheckVisibleMounts), verbatim or found by mount ID
+//     (LocateMounts: a --tmpfs under a link, spec §13): a PID 1 chrooted
+//     into a volume or a tmpfs of the container shows a "/" line, but its
+//     destination is gone.
 //
+// It returns the mount points of the tmpfs mounts, as located.
 // A jail the container mounts itself (CAP_SYS_ADMIN) is not seen: spec §13.
 // A view without process (NewProcFS, tests only) has nothing to read; every
 // real view comes from For with a pid.
-func (p *procFS) CheckWriteRoot(context.Context) error {
+func (p *procFS) CheckWriteRoot(context.Context) ([]string, error) {
 	if p.pidfd < 0 {
-		return nil
+		return nil, nil
 	}
 	raw, err := readMountinfo(p.pid)
 	if err != nil {
-		return changed("lecture de /proc/%d/mountinfo : %v", p.pid, err)
+		return nil, changed("lecture de /proc/%d/mountinfo : %v", p.pid, err)
 	}
 	if err := alive(p.pidfd, p.pid); err != nil {
-		return err
+		return nil, err
 	}
 	mi := string(raw)
 	if err := CheckRootMount(mi); err != nil {
-		return err
+		return nil, err
 	}
 	st, err := statxMountID(int(p.root.Fd()), 0, 0)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if !slices.Contains(rootMountIDs(mi), st.Mnt_id) {
-		return fmt.Errorf("%w : le montage \"/\" du process n'est pas celui de la racine épinglée à l'ouverture de la vue (chroot du process) : écriture refusée", ErrForbiddenPath)
+		return nil, fmt.Errorf("%w : le montage \"/\" du process n'est pas celui de la racine épinglée à l'ouverture de la vue (chroot du process) : écriture refusée", ErrForbiddenPath)
 	}
-	mounts := slices.Clone(p.mounts)
-	for _, d := range p.tmpfs {
-		mounts = append(mounts, dockerx.Mount{Type: "tmpfs", Destination: d})
+	mounts := LocateMounts(mi, withTmpfs(p.mounts, p.tmpfs), p.mountIdent)
+	if err := CheckVisibleMounts(mi, mounts); err != nil {
+		return nil, fmt.Errorf("%w (écriture refusée : le process n'est peut-être pas dans la racine du conteneur, chroot du PID 1)", err)
 	}
-	if err := CheckVisibleMounts(mi, LocateMounts(mi, mounts, p.mountIdent)); err != nil {
-		return fmt.Errorf("%w (écriture refusée : le process n'est peut-être pas dans la racine du conteneur, chroot du PID 1)", err)
-	}
-	return nil
+	return tmpfsPoints(mounts), nil
 }
 
 // CheckArchive (spec §5.2 step 7, §5.4). The checks that read nothing in the
