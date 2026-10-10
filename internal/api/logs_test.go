@@ -636,3 +636,58 @@ func TestLogsLongLine(t *testing.T) {
 		t.Errorf("téléchargement : %d octets", rec.Body.Len())
 	}
 }
+
+// Review I1: a download cut by a Docker error before the first byte is an
+// API error (code of spec §6), never a 200 with an empty or partial file.
+func TestLogsDownloadErrorBeforeFirstByte(t *testing.T) {
+	f, c := logsFixture(t)
+	f.docker.LogStreams[webID] = muxAll(mux(1, lts1+" avant\n"), mux(3, "log file rotated"))
+	rec := f.do("GET", "/api/containers/web/logs/download", "", c)
+	if rec.Code != http.StatusServiceUnavailable || errCode(t, rec) != "docker_unavailable" {
+		t.Fatalf("erreur avant le premier octet : %d %s", rec.Code, rec.Body)
+	}
+}
+
+// Review I1: once bytes are out, the connection is cut (no final chunk), so
+// the browser shows a failed download instead of a complete-looking file.
+func TestLogsDownloadErrorAfterFirstByte(t *testing.T) {
+	f, c := logsFixture(t)
+	big := strings.Repeat("x", 1000)
+	var frames [][]byte
+	for i := 0; i < 200; i++ { // 200 KB: beyond the 64 KiB buffer
+		frames = append(frames, mux(1, lts1+" "+big+"\n"))
+	}
+	frames = append(frames, mux(3, "log file rotated"))
+	f.docker.LogStreams[webID] = muxAll(frames...)
+	srv := httptest.NewServer(f.h)
+	t.Cleanup(srv.Close)
+	req, _ := http.NewRequest("GET", srv.URL+"/api/containers/web/logs/download", nil)
+	req.AddCookie(c)
+	res, err := srv.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	if _, err := io.ReadAll(res.Body); err == nil {
+		t.Fatal("fichier tronqué présenté comme complet")
+	}
+}
+
+// Codex: Docker silent before any byte: the download gives up after
+// downloadIdle, answers an API error, and frees its slot.
+func TestLogsDownloadIdle(t *testing.T) {
+	old := downloadIdle
+	downloadIdle = 100 * time.Millisecond
+	t.Cleanup(func() { downloadIdle = old })
+	f, c := logsFixture(t)
+	f.docker.LogStreams[webID] = nil
+	f.docker.LogsGate = make(chan struct{})
+	start := time.Now()
+	rec := f.do("GET", "/api/containers/web/logs/download", "", c)
+	if rec.Code == http.StatusOK || time.Since(start) > 3*time.Second {
+		t.Fatalf("%d après %v : %s", rec.Code, time.Since(start), rec.Body)
+	}
+	if f.docker.LogsCloses.Load() != 1 {
+		t.Fatal("flux de Docker resté ouvert")
+	}
+}
