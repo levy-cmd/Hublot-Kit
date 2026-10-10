@@ -11,6 +11,7 @@
 > - Mesuré sur Docker Desktop (voir « Constats de la rédaction ») : format des logs (trames, horodatage, parties de 16 Kio, TTY), `--log-driver none` → 501, `since` inclusif, `/var/run` → `../run` dans `alpine:3`, arrêt de l'agent avec un flux ouvert (6 s et code 1 sans le correctif de la tâche 3, 1 s et code 0 avec).
 > - Interface : Vitest 76 tests verts ; `npm run check` 0 erreur ; `npm run lint` propre ; `vite build` vert. Contre un vrai agent (même montage que `scripts/e2e.sh`) : le parcours unique passe, et le parcours jetable de la tâche 8 (non commité) passe : masquage, révélation, flux en direct, recherche, pause puis reprise sans doublon ni trou, téléchargement, conteneur arrêté, 390 px sans défilement horizontal.
 > - **Revérifié après la revue 1** (même méthode : copie reconstruite depuis les blocs du plan `df000d7`, un commit par étape, corrections R1 à R9 appliquées en correctifs de la tâche concernée, puis réappliquées sur une seconde copie propre : même arbre ; copies supprimées). `go vet` macOS et Linux, avec et sans `integration` ; `gofmt` vide ; `go test -race` macOS ; `scripts/test-linux.sh -race -tags integration -count=1 -v` : 375 PASS, le seul SKIP préexistant ; `go test -race -count=30 -run 'Logs|StreamSlots'` stable ; Vitest 76, `check`, `lint`, `build` verts ; parcours unique et parcours jetable rejoués contre un vrai agent (arrêt : 0 s, code 0). Rouge avant le code inchangé à chaque tâche (compilation pour 1 à 5). Mutations nouvelles, toutes attrapées : repli fermé de `Args` retiré → `TestArgs` (« FUITE : mysql -ps3cr3t --password ») ; contrôle de session retiré → `TestLogsSessionEnds` ; délai d'écriture retiré → `TestLogsWriteDeadline` ; éviction retirée → `TestStreamSlots`, `TestLogsEvictsOldest` ; garde « P n'est pas `/` » retirée → `TestCheckArchiveTmpfsJail` (« tar accepté dans une prison tmpfs ») ; `State.Error` non masqué → `TestContainerRadiography` (« FUITE : s3cr3t-err »).
+> - **Revérifié après la revue 2** (même méthode, copie reconstruite depuis `14845ec`, corrections R11 à R17 en correctifs de leur tâche, puis supprimée). `go vet` macOS et Linux, avec et sans `integration` ; `gofmt` vide ; `go test -race` macOS ; `-count=30` sur les logs ; `scripts/test-linux.sh -race -tags integration -count=1 -v` vert (376 PASS, le seul SKIP préexistant) ; Vitest 77, `check`, `lint`, `build` ; parcours jetable rejoué. Le cas Codex et les contrôles de I1 sont dans le même `TestArgs` et passent ensemble. Mutations nouvelles, attrapées : test de fuite rendu global (`strings.Contains(s[loc[1]:], Mask)`) → `TestArgs` (« FUITE : echo --password=••••••(cat /f) … ») ; exemption des chemins retirée → `TestArgs` (`--cert=/etc/ssl/private/x.pem` masqué).
 > - **Non vérifié** : les VM `hk-ubuntu` et `hk-fedora` (tâche 9).
 
 **Goal:** Depuis la page d'un conteneur, l'utilisateur suit ses logs en direct (stdout et stderr, recherche, pause, téléchargement, reprise après coupure, logs passés d'un conteneur arrêté) et lit sa radiographie (image, état, redémarrages, commande, variables d'environnement aux secrets masqués par l'agent et révélables une à une avec journal, ports, réseaux, montages). En préalable, un `--tmpfs` placé sous un lien ne bloque plus toute écriture dans le conteneur.
@@ -35,6 +36,17 @@ Revue du plan, premier tour (relecteur Opus et Codex, « Prêt avec réserves »
 - **R8 (Opus Minor 1) :** `tarFS.CheckWriteRoot` résout une destination tmpfs aussi loin qu'elle existe, puis y recolle le reste (`index.walk`, tiré de `resolve`) : `/dangling/x`, avec `/dangling → ../real` absent, donne `/real/x`, là où runc le créera. → Tâche 1 ; Q25.
 - **R9 (Opus Minor 3, 4, 8) :** `TestLogsClientGone` ne prouve plus la libération du créneau par une seconde ouverture (instable sous charge, et sans objet avec l'éviction) : `TestStreamSlots` la prouve. Le lien de téléchargement des logs disparaît quand le flux est en erreur (sinon le navigateur enregistrait le JSON d'erreur). `State.Error` passe par `secrets.Line` (un message de Docker peut citer la commande). → Tâches 3, 5, 7.
 - **R10 (Opus Minor 2, 5, 6, 7), non retenus :** `readRaw` est gardé (testé, mutation attrapée) ; les limites de reprise sont écrites (Q30, §13) ; la surface en plus de la radiographie (MAC, passerelle, alias, utilisateur) reste, elle est petite et utile au diagnostic ; pas de test Go de l'arrêt de l'agent : `run` crée son propre client Docker et ne peut pas tenir un flux ouvert sans démon, l'arrêt reste mesuré par le script jetable de la tâche 8.
+
+Second tour (relecteur Opus et Codex, « Prêt avec réserves ») :
+
+- **R11 (Opus I1) :** le repli fermé masquait en entier des commandes banales, sans révélation possible : `/opt/keycloak/bin/kc.sh`, un `sh -c` qui lit `/run/secrets/db_password`, `ssh-keyscan`, `echo 'reset your password'`, `keydb-server`, `--cert=/etc/ssl/private/x.pem`, `passwd root`, et `State.Error` dès qu'il contenait « key ». Un mot de §7 n'est plus suspect que dans son propre mot (sans blanc ni guillemet) : s'il s'agit d'un drapeau, ou si le mot contient `=` ou `:` après lui ; dans un chemin (`/` avant lui) ou un mot ordinaire, il reste lisible. Ces cas sont écrits d'abord, en contrôles de `TestArgs` et de `TestLine`. → Tâche 4 ; Q27.
+- **R12 (Codex) :** le test de fuite de `Line` acceptait un masque n'importe où après le mot : un masque d'URL plus loin couvrait une valeur restée visible. Le lien est désormais **local** : la valeur de ce mot-là doit être masquée dans son propre mot (masque en fin de mot, suivi au plus de ponctuation), ou être le mot suivant d'un drapeau. Cas gardés : `echo --password=$SECRET postgres://u:p@db` (valeur masquée) et `echo --password=$(cat /f) postgres://u:p@db` (masqué en entier : le masque est suivi de `(cat`). Testés avec les contrôles de R11, dans le même `TestArgs`. → Tâche 4 ; Q27.
+- **R13 (Opus I2) :** `REDIS_ARGS=--requirepass x`, la forme documentée de redis-stack, sortait en clair. `Masked = SecretName(name) || maskText(value) != value` : la valeur suit les trois règles de la commande (URL, affectation, drapeau), sans le repli fermé. Témoins visibles : `JAVA_OPTS=-Xmx512m -Dfile.encoding=UTF-8`, `NODE_OPTIONS=--max-old-space-size=4096`, `PATH=/usr/local/keycloak/bin:/usr/bin`, `PWD=/srv/app`. → Tâches 4, 9 ; Q36.
+- **R14 (Opus Minor 1) :** `postgres -c ssl_passphrase_command=echo X` fuyait : tout argument après `-c` était lu comme du shell. Une ligne de shell est désormais l'argument qui suit le `-c` (ou `-lc`, `-ec`…) d'un shell (`sh`, `bash`, `ash`, `dash`, `zsh`, `ksh`) ; ailleurs, `nom=valeur` masque tout le reste. Cas `postgres` et `bash -lc` dans `TestArgs`. → Tâche 4.
+- **R15 (Opus Minor 2 et 5, Codex Minor) :** après `--nom=` vide, l'argument suivant est toujours masqué, même s'il commence par `-` ; la frontière gauche d'une affectation est tout ce qui ne peut pas faire partie d'un nom (`:`, `/`, `{`, `[` compris) ; `Pwd=` (ODBC, .NET) est une clé secrète dans une affectation, jamais comme nom de variable (`PWD` est le dossier courant) ; `\=` compte comme `=` (`-DDB_PASSWORD\=x`) ; une valeur d'environnement est jugée aussi décodée de ses `%XX` (`?pass%77ord=x`). Limites écrites en §13 : `--nom -valeur`, `$(…)` suivi de texte, `password = …` avec des blancs, une variable nommée `DB_PWD`. → Tâches 4, 9.
+- **R16 (Opus Minor 3 et 7) :** le téléchargement des logs pose aussi un délai d'écriture de 30 s (`timedWriter`, sous le `bufio`) : il n'est jamais évincé, un client parti sans FIN ne doit pas garder son créneau ; `TestLogsWriteDeadline` le couvre. La décision de fin de flux est extraite de `LogsView` en fonction pure, `streamEnd` (`end`, `failure`, `unauthorized` → connexion, `evicted` → pas de reconnexion), testée par Vitest. → Tâches 3, 7.
+- **R17 (Opus Minor 4 et 6), non retenus :** le délai d'écriture reste une constante, et aucun test ne prouve qu'un client qui ne lit plus est coupé : il faudrait remplir le tampon d'envoi du noyau (taille variable selon le système), ce qui donne un test lent et instable, pour vérifier `SetWriteDeadline` de la bibliothèque standard ; le test garde la preuve que le délai est posé. `$(…)` suivi de texte n'est pas pris dans la valeur (rare, écrit en §13).
+- **Arbitrage du contrôleur (Codex, éviction entre sessions) :** l'éviction de flux entre sessions (Codex) n'est pas retenue. La v0.1 n'a qu'un utilisateur (spec §2), avec une session exigée et un cookie `SameSite=Strict`, et un onglet évincé ne se reconnecte pas. Opus juge aussi qu'elle n'est pas exploitable. Une ligne en §13 (tâche 9) : à revoir si l'agent devient multi-utilisateur (v0.2).
 
 ## Ce que les plans précédents ont préparé
 
@@ -68,7 +80,7 @@ Le plan suit la recommandation de chaque question ; une réponse différente cha
 - **Q26 — URL avec identifiants.** §7 dit `://user:pass@`. Formes courantes sans `:` ou sans utilisateur : `https://<jeton>@github.com`, `redis://:motdepasse@cache`.
   - *Recommandation (retenue) :* masquer toute valeur où `://` est suivi, avant tout blanc, d'un `@` (règle gourmande, jusqu'au dernier `@` du mot). Faux positifs acceptés (`https://example.com/a@b`) : la valeur se révèle d'un clic. → Tâche 4.
 - **Q27 — Secrets dans la commande et le point d'entrée.** §7 ne masque que l'environnement, mais F7 montre la commande, et `redis-server --requirepass …`, `mysqld --password=…`, `sh -c "PGPASSWORD=… psql postgres://u:p@h"` sont courants.
-  - *Recommandation (retenue, revue 1 : R1) :* masquer partie par partie, en remplaçant par `••••••` : les identifiants d'une URL ; la valeur de `NOM=valeur` ou `--nom=valeur`, guillemets compris, et, hors d'une ligne de shell (argument qui ne suit pas `-c`), tout le reste de l'argument ; une affectation cachée dans la valeur d'une autre (`--env=DB_PASSWORD=x`) ; le mot ou l'argument qui suit un drapeau `--nom` ou `--nom=`, sauf s'il est lui-même un drapeau ; `nom` selon la règle des noms de §7. Puis **échec fermé** : un mot de §7 resté sans rien de masqué après lui masque l'argument entier (faux positifs acceptés : `passwd root` devient `•••••• root`). `commandMasked: true` le dit à l'interface. Le message d'erreur de l'état suit la même règle (`secrets.Line`). Pas de révélation de la commande en v0.1 (`docker inspect` reste là) ; limites écrites en §13 (`mysql -pX`, un secret dans un script). Autres options : montrer la commande telle quelle (lettre de §7), ou la masquer en entier dès qu'un mot suspect y paraît (illisible). → Tâches 4, 5, 8.
+  - *Recommandation (retenue, revues 1 et 2 : R1, R11, R12, R14, R15) :* masquer partie par partie, en remplaçant par `••••••` : les identifiants d'une URL ; la valeur de `NOM=valeur`, `--nom=valeur` ou `NOM\=valeur`, guillemets compris, et, hors d'une ligne de shell (l'argument qui suit le `-c` d'un shell), tout le reste de l'argument ; une affectation cachée dans la valeur d'une autre (`--env=DB_PASSWORD=x`) ; l'argument qui suit `--nom=` vide, ou le mot ou l'argument qui suit `--nom` s'il n'est pas lui-même un drapeau ; `nom` selon la règle des noms de §7, ou `Pwd` dans une affectation. Puis **échec fermé, local** : un mot de §7 dont la valeur, dans son propre mot, n'est pas masquée (le mot est un drapeau, ou contient `=` ou `:` après lui) masque l'argument entier ; un mot de §7 dans un chemin ou un mot ordinaire reste lisible (`/opt/keycloak/bin/kc.sh`, `ssh-keyscan`, `passwd root`). `commandMasked: true` le dit à l'interface. Le message d'erreur de l'état suit la même règle (`secrets.Line`). Pas de révélation de la commande en v0.1 (`docker inspect` reste là) ; limites écrites en §13 (`mysql -pX`, un secret dans un script). Autres options : montrer la commande telle quelle (lettre de §7), ou la masquer en entier dès qu'un mot suspect y paraît (illisible). → Tâches 4, 5, 8.
 - **Q28 — Révélation : ce qui est journalisé et permis.** §6 dit « journalisé » sans plus.
   - *Recommandation (retenue) :* ligne `{action: "env.reveal", container: <ID complet>, path: <nom>, result: "ok"}` écrite **avant** l'envoi ; la valeur n'est jamais journalisée ; un journal qui ne s'écrit pas → `500 internal`, rien n'est révélé (même règle que l'intention d'une écriture). Les refus (Origin, corps invalide, nom inconnu, casse différente) ne sont pas journalisés : rien n'a été révélé. Toute variable peut être demandée, masquée ou non. Permis en `--read-only` : c'est une lecture (§7 applique la lecture seule dans `files` seulement). → Tâches 5, 8, 9.
 - **Q29 — Erreurs d'un flux SSE.** `EventSource` ne lit ni le statut ni le corps d'une réponse autre que 200 : un `404 not_found` ou `503 docker_unavailable` y serait muet.
@@ -86,7 +98,7 @@ Le plan suit la recommandation de chaque question ; une réponse différente cha
 - **Q35 — Parcours Playwright.** §10 fixe un seul parcours (connexion → liste → fichier → diff) et ne demande rien pour F6 et F7.
   - *Recommandation (retenue) :* ne pas l'étendre ; F6 et F7 sont couverts de bout en bout côté API par la tâche 6 (§10 : « F1 à F7 de bout en bout côté API ») et l'interface par un parcours jetable, non commité (tâche 8). Si l'utilisateur le veut : trois étapes de plus dans le parcours unique (onglet Logs du conteneur arrêté, onglet Radiographie avec une variable masquée), et `scripts/e2e.sh` crée le conteneur avec un secret. → Tâche 8.
 - **Q36 — Secret dans la valeur d'une variable au nom neutre** (revue 1, I2). §7 juge le nom et les URL ; une chaîne de connexion .NET (`ConnectionStrings__Default=Server=db;Password=…;`), une URL JDBC (`…?user=u&password=…`), `JAVA_OPTS=-D…Password=…` passaient en clair.
-  - *Recommandation (retenue) :* masquer aussi la variable dont la valeur contient une affectation `NOM=…` au nom secret, après un début, un blanc, `;`, `&`, `?`, `,`, `=` ou un guillemet (même expression que la commande, R1). Témoins testés : `JAVA_OPTS=-Xmx512m -Dfile.encoding=UTF-8` et `NODE_OPTIONS=--max-old-space-size=4096` restent visibles. Restent en clair (§13) : JSON (`"token":"…"`), `user:motdepasse@hôte` sans `://`. Autre option : la lettre de §7, et ces valeurs sortent. → Tâches 4, 5, 9.
+  - *Recommandation (retenue, revue 2 : R13, R15) :* masquer aussi la variable dont la valeur, telle quelle ou décodée de ses `%XX`, contient quelque chose que les trois règles de la commande masqueraient (`Masked = SecretName(name) || maskText(value) != value`) : URL avec identifiants, affectation secrète (`…;Password=…;`, `…;Pwd=…;`, `?password=…`, `-D…Password\=…`), drapeau secret suivi d'une valeur (`REDIS_ARGS=--requirepass …`, forme documentée de redis-stack). Sans le repli fermé : une valeur au nom neutre qui contient seulement un mot de §7 reste visible. Témoins testés : `JAVA_OPTS=-Xmx512m -Dfile.encoding=UTF-8`, `NODE_OPTIONS=--max-old-space-size=4096`, `PATH=/usr/local/keycloak/bin:/usr/bin`, `PWD=/srv/app`. Restent en clair (§13) : JSON (`"token":"…"`), `user:motdepasse@hôte` sans `://`, `password = …` avec des blancs, une variable nommée `DB_PWD`. Autre option : la lettre de §7, et ces valeurs sortent. → Tâches 4, 5, 9.
 - **Q37 — Fin d'un flux SSE** (revue 1, I3, I4). Un flux ne finissait qu'avec le client ou le conteneur : il survivait à la déconnexion et à l'expiration de la session, et un client parti sans FIN gardait son créneau environ 15 min.
   - *Recommandation (retenue) :* trois fins de plus. (1) Session : vérifiée à chaque battement (15 s), `failure` `unauthorized` puis fermeture, l'interface renvoie à la connexion. (2) Éviction : quand les 8 créneaux sont pris, le flux le plus ancien reçoit `evicted` et ferme ; l'interface ne se reconnecte pas et propose « Recharger » (un neuvième onglet ouvert ferme donc le plus ancien, et le dit). (3) Délai d'écriture de 30 s : un client qui ne lit plus ne bloque pas la goroutine. Autres options : vérifier la session à chaque ligne (coût sur un flux bavard, pour gagner au plus 15 s), ou refuser le nouveau flux au lieu d'évincer (les créneaux zombies bloquent alors l'utilisateur légitime). → Tâches 3, 7, 9.
 - **Q38 — Le tmpfs retrouvé vaut-il pour le tar d'un dossier ?** (revue 1, I5). `LocateMounts` sert à l'écriture (`CheckWriteRoot`) et au tar (`CheckArchive`, §5.4 b) ; un `--mount type=tmpfs` (dans `Inspect.Mounts`) sous un lien faisait refuser tout tar du conteneur.
@@ -151,10 +163,10 @@ internal/api/logs.go (+ test)                GET /logs (SSE) et /logs/download, 
 internal/api/container.go (+ test)           GET /api/containers/{id}, POST /env/reveal
 internal/api/server.go, fserr.go             routes, créneaux des flux, logs_unavailable
 internal/api/integration_observation_test.go F6 et F7 sur un vrai Docker (portable)
-internal/secrets/secrets.go (+ test)         SecretName, URLCredentials, Masked, Env, Lookup, Line, Args, Mask
+internal/secrets/secrets.go (+ test)         SecretName, URLCredentials, Masked, Env, Lookup, Line (fuite jugée localement), Args, Mask
 cmd/hublot/main.go                           arrêt : contexte des requêtes annulé
 web/src/lib/api.ts (+ test)                  logsUrl, logsDownloadUrl, LogLine ; Radiography, getContainer, revealEnv
-web/src/lib/logs.ts (+ test)                 parseLine, parseCount, parseFailure, appendLines, filterLines, formatTs
+web/src/lib/logs.ts (+ test)                 parseLine, parseCount, parseFailure, streamEnd, appendLines, filterLines, formatTs
 web/src/lib/xray.ts (+ test)                 commandLine, portLabel, mountLabel, restartLabel, shortId, envValue
 web/src/lib/i18n/fr.ts, en.ts, index.ts      clés logs.*, xray.*, error.logs_unavailable
 web/src/lib/components/LogsView.svelte       onglet Logs (EventSource)
@@ -1817,7 +1829,7 @@ diff --git a/internal/api/logs_test.go b/internal/api/logs_test.go
 new file mode 100644
 --- /dev/null
 +++ b/internal/api/logs_test.go
-@@ -0,0 +1,633 @@
+@@ -0,0 +1,638 @@
 +package api
 +
 +// Tests of the logs routes (F6, spec §6), written before the code. The fake
@@ -2327,8 +2339,8 @@ new file mode 100644
 +
 +func (d deadlineWriter) Unwrap() http.ResponseWriter { return d.ResponseWriter }
 +
-+// Review I4: every write of a stream has a deadline: a client that no
-+// longer reads cannot hold the goroutine.
++// Review I4: every write of a stream, and of a download, has a deadline: a
++// client that no longer reads cannot hold the goroutine nor the slot.
 +func TestLogsWriteDeadline(t *testing.T) {
 +	f, c := logsFixture(t)
 +	n := new(atomic.Int32)
@@ -2337,6 +2349,11 @@ new file mode 100644
 +	events := openSSE(t, f, "/api/containers/web/logs", c, nil).all(t)
 +	if len(events) != 4 || n.Load() < int32(len(events)) {
 +		t.Fatalf("%d délais pour %d événements", n.Load(), len(events))
++	}
++	// Review 2, Minor 3: the download too (it is never evicted).
++	n.Store(0)
++	if rec := f.do("GET", "/api/containers/web/logs/download", "", c); rec.Code != http.StatusOK || n.Load() == 0 {
++		t.Fatalf("téléchargement : %d, %d délais", rec.Code, n.Load())
 +	}
 +}
 +
@@ -2500,7 +2517,7 @@ diff --git a/internal/api/logs.go b/internal/api/logs.go
 new file mode 100644
 --- /dev/null
 +++ b/internal/api/logs.go
-@@ -0,0 +1,396 @@
+@@ -0,0 +1,409 @@
 +package api
 +
 +import (
@@ -2851,6 +2868,19 @@ new file mode 100644
 +	}
 +}
 +
++// timedWriter puts a write deadline before each write of a download
++// (review 2, Minor 3): a download is never evicted, a client gone without
++// FIN must not keep its slot for ~15 min.
++type timedWriter struct {
++	w http.ResponseWriter
++	c *http.ResponseController
++}
++
++func (t timedWriter) Write(p []byte) (int, error) {
++	t.c.SetWriteDeadline(time.Now().Add(sseWriteTimeout))
++	return t.w.Write(p)
++}
++
 +// safeName keeps [A-Za-z0-9_.-] of a container name, for a file name.
 +var unsafeName = regexp.MustCompile(`[^A-Za-z0-9_.-]`)
 +
@@ -2879,7 +2909,7 @@ new file mode 100644
 +	h := w.Header()
 +	h.Set("Content-Type", "application/octet-stream")
 +	h.Set("Content-Disposition", `attachment; filename="`+name+`"`)
-+	bw := bufio.NewWriterSize(w, 64<<10)
++	bw := bufio.NewWriterSize(timedWriter{w, http.NewResponseController(w)}, 64<<10)
 +	err = dockerx.ReadLogs(rc, info.Tty, maxDownloadLine, func(l dockerx.LogLine) error {
 +		if !l.TS.IsZero() {
 +			bw.WriteString(l.TS.Format(time.RFC3339Nano) + " ")
@@ -2957,9 +2987,9 @@ EOF
 
 **Interfaces:**
 - Consumes: rien (bibliothèque standard).
-- Produces: `const Mask = "••••••"` ; `SecretName(name string) bool` ; `URLCredentials(v string) bool` ; `Masked(name, value string) bool` (nom, URL, ou affectation secrète dans la valeur, Q36) ; `Line(s string) string` (un texte : ligne de shell, message de Docker) ; `type Var struct{ Name string; Value *string; Masked bool }` (JSON `{"name","value","masked"}`, `value` `null` si masquée) ; `Env(env []string) []Var` ; `Lookup(env []string, name string) (string, bool)` ; `Args(args []string) (out []string, masked bool)`.
+- Produces: `const Mask = "••••••"` ; `SecretName(name string) bool` ; `URLCredentials(v string) bool` ; `Masked(name, value string) bool` (nom secret, ou valeur où les règles de la commande trouvent un secret, Q36) ; `Line(s string) string` (un texte : ligne de shell, message de Docker) ; `type Var struct{ Name string; Value *string; Masked bool }` (JSON `{"name","value","masked"}`, `value` `null` si masquée) ; `Env(env []string) []Var` ; `Lookup(env []string, name string) (string, bool)` ; `Args(args []string) (out []string, masked bool)`.
 
-> **À comprendre :** §7 masque une variable dont le **nom** contient l'un de neuf mots (sans tenir compte de la casse) ou dont la **valeur** contient une URL avec identifiants. La règle est une sous-chaîne : `KEYBOARD` et `COMPASS` sont masqués aussi, et c'est voulu (côté sûr ; la valeur se révèle). `Env` ne copie jamais une valeur masquée : `Value` reste `nil`, donc le JSON n'a rien à fuir. `Args` (Q27) travaille sur une copie et ne masque que des morceaux (`--password=••••••`, `postgres://••••••@db`), pour que la commande reste lisible ; une valeur peut être entre guillemets, ou cacher une autre affectation (`--env=DB_PASSWORD=x`). Les règles sont des heuristiques : d'où le repli fermé de `Line` (R1), qui masque l'argument entier dès qu'un mot de §7 y reste sans rien de masqué après lui.
+> **À comprendre :** §7 masque une variable dont le **nom** contient l'un de neuf mots (sans tenir compte de la casse) ou dont la **valeur** contient une URL avec identifiants. La règle est une sous-chaîne : `KEYBOARD` et `COMPASS` sont masqués aussi, et c'est voulu (côté sûr ; la valeur se révèle). `Env` ne copie jamais une valeur masquée : `Value` reste `nil`, donc le JSON n'a rien à fuir. `Args` (Q27) travaille sur une copie et ne masque que des morceaux (`--password=••••••`, `postgres://••••••@db`), pour que la commande reste lisible ; une valeur peut être entre guillemets, ou cacher une autre affectation (`--env=DB_PASSWORD=x`). Les règles sont des heuristiques : d'où le repli fermé de `Line` (R1), jugé **localement** (R11, R12) : un mot de §7 dont la valeur, dans son propre mot, n'est pas masquée (drapeau, ou `=`/`:` après lui) masque l'argument entier ; un masque ailleurs dans la ligne ne compte pas ; un mot de §7 dans un chemin ou un mot ordinaire reste lisible, sinon la commande de Keycloak ou un `sh -c` qui lit `/run/secrets/…` disparaîtraient.
 
 - [ ] **Step 1: Tests qui échouent**
 
@@ -2968,7 +2998,7 @@ diff --git a/internal/secrets/secrets_test.go b/internal/secrets/secrets_test.go
 new file mode 100644
 --- /dev/null
 +++ b/internal/secrets/secrets_test.go
-@@ -0,0 +1,171 @@
+@@ -0,0 +1,212 @@
 +package secrets
 +
 +// Tests of the masking of spec §7, written before the code (CLAUDE.md:
@@ -3048,12 +3078,18 @@ new file mode 100644
 +
 +// The whole JSON of Env never carries a secret value.
 +func TestEnvNeverLeaks(t *testing.T) {
-+	secrets := []string{"s3cr3t-1", "s3cr3t-2", "s3cr3t-3", "s3cr3t-4", "s3cr3t-5", "s3cr3t-6", "s3cr3t-7"}
++	secrets := []string{"s3cr3t-1", "s3cr3t-2", "s3cr3t-3", "s3cr3t-4", "s3cr3t-5", "s3cr3t-6", "s3cr3t-7", "s3cr3t-8", "s3cr3t-9", "s3cr3t-A", "s3cr3t-B"}
 +	env := []string{"MYSQL_PASSWORD=" + secrets[0], "GH_TOKEN=" + secrets[1], "URL=https://bot:" + secrets[2] + "@x.io", "ssh_private_key=" + secrets[3],
 +		// Q36: a secret assignment inside the value of a neutral name.
 +		"ConnectionStrings__Default=Server=db;User Id=sa;Password=" + secrets[4] + ";",
 +		"SPRING_DATASOURCE_URL=jdbc:postgresql://db/x?user=u&password=" + secrets[5],
 +		"JAVA_OPTS=-Xmx512m -Djavax.net.ssl.keyStorePassword=" + secrets[6],
++		// Review 2: the three rules of the command (redis-stack's REDIS_ARGS),
++		// ODBC's Pwd=, an escaped "\=", a percent-encoded name.
++		"REDIS_ARGS=--requirepass " + secrets[7],
++		"ODBC=Driver={x};Server=db;Uid=u;Pwd=" + secrets[8] + ";",
++		`JAVA_TOOL_OPTIONS=-DDB_PASSWORD\=` + secrets[9],
++		"CALLBACK=https://x.io/cb?pass%77ord=" + secrets[10],
 +	}
 +	b, _ := json.Marshal(Env(env))
 +	for _, s := range secrets {
@@ -3062,7 +3098,7 @@ new file mode 100644
 +		}
 +	}
 +	// Controls: neutral values stay shown.
-+	for _, kv := range []string{"JAVA_OPTS=-Xmx512m -Dfile.encoding=UTF-8", "NODE_OPTIONS=--max-old-space-size=4096"} {
++	for _, kv := range []string{"JAVA_OPTS=-Xmx512m -Dfile.encoding=UTF-8", "NODE_OPTIONS=--max-old-space-size=4096", "PATH=/usr/local/keycloak/bin:/usr/bin", "PWD=/srv/app"} {
 +		if Env([]string{kv})[0].Masked {
 +			t.Errorf("%s : masqué à tort", kv)
 +		}
@@ -3116,7 +3152,29 @@ new file mode 100644
 +		// argument masks the whole argument (false positives accepted).
 +		{[]string{"sh", "-c", "mysql -ps3cr3t --password"}, []string{"sh", "-c", Mask}, true},
 +		{[]string{"sh", "-c", "x --api-key -v"}, []string{"sh", "-c", Mask}, true},
-+		{[]string{"passwd", "root"}, []string{Mask, "root"}, true},
++		// Review 2, Codex: the link is local. The value of this very word must be
++		// masked; a mask elsewhere in the line (the URL) does not cover it.
++		{[]string{"sh", "-c", "echo --password=$SECRET postgres://u:p@db"},
++			[]string{"sh", "-c", "echo --password=" + Mask + " postgres://" + Mask + "@db"}, true},
++		{[]string{"sh", "-c", "echo --password=$(cat /f) postgres://u:p@db"}, []string{"sh", "-c", Mask}, true},
++		// Review 2, Minor 1: "-c" is a shell line only after a shell.
++		{[]string{"postgres", "-c", "ssl_passphrase_command=echo s3cr3t"}, []string{"postgres", "-c", "ssl_passphrase_command=" + Mask}, true},
++		{[]string{"/bin/bash", "-lc", "redis-server --requirepass s3cr3t"}, []string{"/bin/bash", "-lc", "redis-server --requirepass " + Mask}, true},
++		// Review 2, Minor 2 and 5, Codex Minor: a value after "--x=" that starts
++		// with "-"; left boundaries ":" "{" "/"; an escaped "\=".
++		{[]string{"app", "--api-key=", "-s3cr3t"}, []string{"app", "--api-key=", Mask}, true},
++		{[]string{"sh", "-c", "x:password=s3cr3t {token=s3cr3t} /x/secret=s3cr3t"},
++			[]string{"sh", "-c", "x:password=" + Mask + " {token=" + Mask + " /x/secret=" + Mask}, true},
++		{[]string{"java", `-DDB_PASSWORD\=s3cr3t`, "-jar", "app.jar"}, []string{"java", `-DDB_PASSWORD\=` + Mask, "-jar", "app.jar"}, true},
++		// Review 2, I1: a word of §7 in a path, or in a plain word, is not a
++		// secret; these stay readable (controls of the fail-closed rule).
++		{[]string{"/opt/keycloak/bin/kc.sh", "start"}, []string{"/opt/keycloak/bin/kc.sh", "start"}, false},
++		{[]string{"sh", "-c", "cat /run/secrets/db_password > /tmp/p && exec app"}, []string{"sh", "-c", "cat /run/secrets/db_password > /tmp/p && exec app"}, false},
++		{[]string{"sh", "-c", "ssh-keyscan github.com >> ~/.ssh/known_hosts && exec app"}, []string{"sh", "-c", "ssh-keyscan github.com >> ~/.ssh/known_hosts && exec app"}, false},
++		{[]string{"sh", "-c", "echo 'reset your password' && exec app"}, []string{"sh", "-c", "echo 'reset your password' && exec app"}, false},
++		{[]string{"keydb-server", "/etc/keydb.conf"}, []string{"keydb-server", "/etc/keydb.conf"}, false},
++		{[]string{"app", "--cert=/etc/ssl/private/x.pem"}, []string{"app", "--cert=/etc/ssl/private/x.pem"}, false},
++		{[]string{"passwd", "root"}, []string{"passwd", "root"}, false},
 +		{[]string{"app", "-api-key", "-v"}, []string{"app", "-api-key", "-v"}, false}, // a flag follows: no value
 +		{[]string{"app", "--token"}, []string{"app", "--token"}, false},
 +		{[]string{"nginx", "-g", "daemon off;"}, []string{"nginx", "-g", "daemon off;"}, false},
@@ -3129,7 +3187,7 @@ new file mode 100644
 +			t.Errorf("%q : %q %v, attendu %q %v", k.in, got, masked, k.want, k.masked)
 +		}
 +		for _, a := range got {
-+			if strings.Contains(a, "cr3t") || strings.Contains(a, ":pw@") || strings.Contains(a, "=abc") {
++			if strings.Contains(a, "cr3t") || strings.Contains(a, ":pw@") || strings.Contains(a, "=abc") || strings.Contains(a, "(cat") {
 +				t.Errorf("FUITE : %q", a)
 +			}
 +		}
@@ -3138,6 +3196,19 @@ new file mode 100644
 +	Args(in)
 +	if in[1] != "--password=s3cr3t" {
 +		t.Error("Args ne doit pas modifier son entrée")
++	}
++}
++
++// Review 2, I1: Docker's messages stay readable when a word of §7 is only a
++// word or a path; a secret value in them is masked.
++func TestLine(t *testing.T) {
++	for _, m := range []string{`exec: "/opt/keycloak/bin/kc.sh": permission denied`, "unable to read key file", ""} {
++		if got := Line(m); got != m {
++			t.Errorf("%q : %q, attendu inchangé", m, got)
++		}
++	}
++	if got := Line(`exec: "--password=s3cr3t": unknown`); strings.Contains(got, "cr3t") {
++		t.Errorf("FUITE : %q", got)
 +	}
 +}
 ```
@@ -3154,14 +3225,17 @@ diff --git a/internal/secrets/secrets.go b/internal/secrets/secrets.go
 new file mode 100644
 --- /dev/null
 +++ b/internal/secrets/secrets.go
-@@ -0,0 +1,189 @@
+@@ -0,0 +1,236 @@
 +// Package secrets masks the values the radiography shows (F7, spec §7): an
 +// environment variable whose name says it is a secret, or whose value is a
 +// URL with user information, never leaves the agent unless revealed.
 +package secrets
 +
 +import (
++	"net/url"
++	"path"
 +	"regexp"
++	"slices"
 +	"strings"
 +)
 +
@@ -3198,22 +3272,17 @@ new file mode 100644
 +	Masked bool    `json:"masked"`
 +}
 +
-+// Masked: the variable must not be shown as is (spec §7): a secret name, a
-+// URL with user information, or a secret assignment inside the value
-+// (plan Observation, Q36: "…;Password=…;", "?password=…",
-+// "-D…Password=…").
++// Masked: the variable must not be shown as is (spec §7): a secret name,
++// or a value in which the rules of the command find something to mask
++// (plan Observation, Q36: a URL with user information, "…;Pwd=…;",
++// "?password=…", "-D…Password\=…", "--requirepass …"), the value read as
++// is and percent-decoded ("?pass%77ord=…").
 +func Masked(name, value string) bool {
-+	return SecretName(name) || URLCredentials(value) || secretAssignment(value)
-+}
-+
-+// secretAssignment: value holds NAME=… whose NAME is a secret name.
-+func secretAssignment(value string) bool {
-+	for _, m := range assignment.FindAllStringSubmatch(value, -1) {
-+		if SecretName(m[2]) {
-+			return true
-+		}
++	if SecretName(name) || maskText(value) != value {
++		return true
 +	}
-+	return false
++	d, err := url.PathUnescape(value)
++	return err == nil && d != value && maskText(d) != d
 +}
 +
 +// Env masks a Config.Env ("NAME=value"; "NAME" alone has an empty value),
@@ -3248,8 +3317,18 @@ new file mode 100644
 +const value = `(?:"[^"]*"?|'[^']*'?|[^\s;&|"'()])+`
 +
 +// assignment: NAME=value or --name=value inside a text (a shell line, a
-+// connection string), after a blank, a shell or URL separator, or "=".
-+var assignment = regexp.MustCompile(`(^|[\s;&|"'(=?,])(-{0,2}[A-Za-z0-9_.-]+)=(` + value + `)`)
++// connection string), after anything that cannot be part of a name (review
++// 2, Minor 5: ":", "/", "{", "[" too); "\=" (an escaped "=", Java
++// properties) counts.
++var assignment = regexp.MustCompile(`(^|[^A-Za-z0-9_.-])(-{0,2}[A-Za-z0-9_.-]+)(\\?=)(` + value + `)`)
++
++// pwd: Pwd=, the password key of ODBC and .NET connection strings. Only
++// as an assignment inside a text: the variable PWD is the working
++// directory, not a secret.
++var pwd = regexp.MustCompile(`(?i)pwd`)
++
++// secretKey: the name of an assignment whose value is a secret.
++func secretKey(name string) bool { return SecretName(name) || pwd.MatchString(name) }
 +
 +// flagValue: a flag, blanks, then a word that is not a flag, inside a shell
 +// line (sh -c "… --requirepass x …").
@@ -3258,6 +3337,13 @@ new file mode 100644
 +// flag: an argument that is only a flag ("--password", or "--password="
 +// whose value is the next argument).
 +var flag = regexp.MustCompile(`^-{1,2}[A-Za-z0-9_.-]+=?$`)
++
++// shells and shellFlag: "sh -c", "bash -lc", "ash -ec": the next argument is
++// a shell line (review 2, Minor 1: "postgres -c name=value" is not one).
++var (
++	shells    = []string{"sh", "bash", "ash", "dash", "zsh", "ksh"}
++	shellFlag = regexp.MustCompile(`^-[A-Za-z]*c$`)
++)
 +
 +// whole: an argument NAME=value or --name=value, outside a shell line: the
 +// value is the whole rest of the argument, blanks included.
@@ -3273,10 +3359,10 @@ new file mode 100644
 +	s = userinfo.ReplaceAllString(s, "://"+Mask+"@")
 +	s = assignment.ReplaceAllStringFunc(s, func(m string) string {
 +		sub := assignment.FindStringSubmatch(m)
-+		if SecretName(sub[2]) {
-+			return sub[1] + sub[2] + "=" + Mask
++		if secretKey(sub[2]) {
++			return sub[1] + sub[2] + sub[3] + Mask
 +		}
-+		return sub[1] + sub[2] + "=" + maskText(sub[3])
++		return sub[1] + sub[2] + sub[3] + maskText(sub[4])
 +	})
 +	return flagValue.ReplaceAllStringFunc(s, func(m string) string {
 +		sub := flagValue.FindStringSubmatch(m)
@@ -3287,14 +3373,45 @@ new file mode 100644
 +	})
 +}
 +
-+// leaks: a word of §7 with nothing masked after it, outside a bare flag
-+// (review I1: fail closed when the rules above did not see the value).
++// blank: what ends a token for leaks.
++const blank = " \t\r\n\"'"
++
++// alnum: a letter or a digit.
++var alnum = regexp.MustCompile(`[A-Za-z0-9]`)
++
++// leaks: a word of §7 whose own value is not masked (review 2: the link is
++// local, a mask elsewhere in the text does not cover it). In its token (a
++// run without blank or quote), a word is
++//   - covered when the token ends with a mask after it (only punctuation
++//     may follow: "--password=••••••;"), or when the token is a flag and
++//     the next token is a mask ("--requirepass ••••••");
++//   - harmless in a path ("/" before it in the token, no "=" or ":" after
++//     it) or in a plain word ("ssh-keyscan", "reset your password");
++//   - a leak when the token is a flag or holds "=" or ":" after the word.
++//
++// An argument that is only a flag holds no value: never a leak.
 +func leaks(s string) bool {
 +	if flag.MatchString(s) {
 +		return false
 +	}
 +	for _, loc := range word.FindAllStringIndex(s, -1) {
-+		if !strings.Contains(s[loc[1]:], Mask) {
++		st := strings.LastIndexAny(s[:loc[0]], blank) + 1
++		en := len(s)
++		if i := strings.IndexAny(s[loc[1]:], blank); i >= 0 {
++			en = loc[1] + i
++		}
++		tok, before, after := s[st:en], s[st:loc[0]], s[loc[1]:en]
++		if i := strings.LastIndex(after, Mask); i >= 0 && !alnum.MatchString(after[i+len(Mask):]) {
++			continue
++		}
++		isFlag, bound := strings.HasPrefix(tok, "-"), strings.ContainsAny(after, "=:")
++		if isFlag && !bound && strings.HasPrefix(strings.TrimLeft(s[en:], " \t"), Mask) {
++			continue
++		}
++		if strings.Contains(before, "/") && !bound {
++			continue
++		}
++		if isFlag || bound {
 +			return true
 +		}
 +	}
@@ -3311,12 +3428,13 @@ new file mode 100644
 +}
 +
 +// Args masks a command or an entrypoint (plan Observation, Q27), in a copy.
-+// An argument after a secret flag ("--requirepass", "--password=") is
-+// masked whole, unless it is a flag itself. An argument after "-c" is a
-+// shell line: Line. Any other argument NAME=value or --name=value keeps its
-+// name and masks its whole value if the name is secret (blanks included),
-+// else the value goes through the rules of Line. masked tells whether
-+// anything was hidden.
++// The argument after a secret flag is masked whole: always after
++// "--password=", unless it is a flag itself after "--requirepass". The
++// argument after the "-c" of a shell (sh -c, bash -lc…) is a shell line:
++// Line. Any other argument NAME=value or --name=value keeps its name and
++// masks its whole value if the name is secret (blanks included), else the
++// value goes through the rules of Line. masked tells whether anything was
++// hidden.
 +func Args(args []string) (out []string, masked bool) {
 +	if args == nil {
 +		return nil, false
@@ -3328,9 +3446,9 @@ new file mode 100644
 +			prev = args[i-1]
 +		}
 +		switch w := whole.FindStringSubmatch(a); {
-+		case flag.MatchString(prev) && SecretName(prev) && !strings.HasPrefix(a, "-"):
-+			out[i] = Mask
-+		case prev == "-c" || w == nil:
++		case flag.MatchString(prev) && SecretName(prev) && (strings.HasSuffix(prev, "=") || !strings.HasPrefix(a, "-")):
++			out[i] = Mask // "--password=" then any value; "--password" then a non-flag
++		case i > 0 && shellFlag.MatchString(prev) && slices.Contains(shells, path.Base(args[0])), w == nil:
 +			out[i] = Line(a)
 +		case SecretName(w[1]):
 +			out[i] = w[1] + "=" + Mask
@@ -3349,7 +3467,7 @@ new file mode 100644
 - [ ] **Step 4: Vérifier**
 
 Run: `go test -race ./internal/secrets/ 2>&1 | tail -n 3`
-Expected: `ok`. Mutations : `Masked` réduit à `SecretName(name)` → `TestEnv` et `TestEnvNeverLeaks` (« FUITE : s3cr3t-3 ») échouent ; `leaks` qui rend toujours `false` → `TestArgs` (« FUITE : "mysql -ps3cr3t --password" »).
+Expected: `ok`. Mutations : `Masked` réduit à `SecretName(name)` → `TestEnv` et `TestEnvNeverLeaks` (« FUITE : s3cr3t-3 ») échouent ; `leaks` qui rend toujours `false` → `TestArgs` (« FUITE : "mysql -ps3cr3t --password" ») ; test de fuite global (`strings.Contains(s[loc[1]:], Mask)` au lieu du masque en fin de mot) → `TestArgs` (« FUITE : "echo --password=••••••(cat /f) …" ») ; exemption des chemins neutralisée → `TestArgs` (`--cert=/etc/ssl/private/x.pem` masqué à tort).
 
 - [ ] **Step 5: Commit**
 
@@ -4259,7 +4377,7 @@ EOF
 
 **Interfaces:**
 - Consumes: `GET /api/containers/{id}/logs` (événements de la tâche 3), `GET /logs/download`, `getMeta`, `ApiError`, `errorMessage`, `goto`.
-- Produces: `type LogLine = { ts?: string; stream: 'stdout' | 'stderr'; line: string; truncated?: boolean }` ; `logsUrl(id, { tail?, after? })`, `logsDownloadUrl(id)` ; dans `logs.ts` : `MAX_LINES = 5000`, `ShownLine`, `parseLine`, `parseCount`, `parseFailure`, `appendLines(lines, batch, max?) → { lines, removed }`, `filterLines(lines, { query, stdout, stderr })`, `formatTs(ts, timeZone?)` ; `LogsView` (`{ id }`) ; onglet `?tab=logs` ; code `logs_unavailable` dans `API_ERROR_CODES` et ses traductions ; clé `logs.evicted`.
+- Produces: `type LogLine = { ts?: string; stream: 'stdout' | 'stderr'; line: string; truncated?: boolean }` ; `logsUrl(id, { tail?, after? })`, `logsDownloadUrl(id)` ; dans `logs.ts` : `MAX_LINES = 5000`, `ShownLine`, `parseLine`, `parseCount`, `parseFailure`, `streamEnd(name: 'end' | 'failure' | 'evicted', data?) → { status, code?, login? }` (R16), `appendLines(lines, batch, max?) → { lines, removed }`, `filterLines(lines, { query, stdout, stderr })`, `formatTs(ts, timeZone?)` ; `LogsView` (`{ id }`) ; onglet `?tab=logs` ; code `logs_unavailable` dans `API_ERROR_CODES` et ses traductions ; clé `logs.evicted`.
 
 > **À comprendre :** `EventSource` rappelle `onmessage` pour chaque ligne (événement sans nom) et `addEventListener(nom)` pour `end`, `dropped`, `failure`. Son `onerror` sert à deux choses : `readyState === CONNECTING`, le navigateur se reconnecte seul (avec `Last-Event-ID`) ; `CLOSED`, une réponse non SSE (session expirée) : on demande `/api/meta` pour savoir si c'est un `401`. Les lignes arrivent par centaines : elles attendent dans `pending` et rejoignent `lines` une fois par image (`requestAnimationFrame`), sinon Svelte rendrait la liste à chaque ligne. La pause ferme le flux et garde `lastId` ; reprendre rouvre avec `after` (Q30). `failure` `unauthorized` (session finie) renvoie à la connexion ; `evicted` ferme le flux sans reconnexion et propose « Recharger » (Q37). Le lien de téléchargement disparaît quand le flux est en erreur : le navigateur enregistrerait sinon le JSON de l'erreur dans un `.log` (R9). L'effet ne lit pas `status` (il l'écrit) : sinon chaque changement d'état rouvrirait le flux.
 
@@ -4309,10 +4427,10 @@ diff --git a/web/src/lib/logs.test.ts b/web/src/lib/logs.test.ts
 new file mode 100644
 --- /dev/null
 +++ b/web/src/lib/logs.test.ts
-@@ -0,0 +1,50 @@
+@@ -0,0 +1,59 @@
 +import { describe, expect, it } from 'vitest';
 +import type { LogLine } from './api';
-+import { appendLines, filterLines, formatTs, MAX_LINES, parseCount, parseFailure, parseLine } from './logs';
++import { appendLines, filterLines, formatTs, MAX_LINES, parseCount, parseFailure, parseLine, streamEnd } from './logs';
 +
 +const line = (text: string, stream: 'stdout' | 'stderr' = 'stdout'): LogLine => ({ ts: '2026-10-10T07:14:22.769046552Z', stream, line: text });
 +
@@ -4359,6 +4477,15 @@ new file mode 100644
 +		expect(formatTs(undefined, 'UTC')).toBe('');
 +		expect(formatTs('garbage', 'UTC')).toBe('');
 +	});
++
++	// Q37: how each end of a stream is handled; none reconnects.
++	it('decides what an end of stream does', () => {
++		expect(streamEnd('end')).toEqual({ status: 'ended' });
++		expect(streamEnd('failure', '{"error":"unauthorized","detail":"session terminée"}')).toEqual({ status: 'error', code: 'unauthorized', login: true });
++		expect(streamEnd('failure', '{"error":"logs_unavailable"}')).toEqual({ status: 'error', code: 'logs_unavailable' });
++		expect(streamEnd('failure', 'garbage')).toEqual({ status: 'error', code: 'unknown' });
++		expect(streamEnd('evicted', '{"error":"internal"}')).toEqual({ status: 'error', code: 'evicted' });
++	});
 +});
 ```
 
@@ -4395,12 +4522,12 @@ diff --git a/web/src/lib/components/LogsView.svelte b/web/src/lib/components/Log
 new file mode 100644
 --- /dev/null
 +++ b/web/src/lib/components/LogsView.svelte
-@@ -0,0 +1,181 @@
+@@ -0,0 +1,178 @@
 +<script lang="ts">
 +	import { goto } from '$app/navigation';
 +	import { ApiError, getMeta, logsDownloadUrl, logsUrl, type LogLine } from '#lib/api.ts';
 +	import { errorMessage, t } from '#lib/i18n/index.ts';
-+	import { appendLines, filterLines, formatTs, parseCount, parseFailure, parseLine, type ShownLine } from '#lib/logs.ts';
++	import { appendLines, filterLines, formatTs, parseCount, parseLine, streamEnd, type ShownLine } from '#lib/logs.ts';
 +
 +	let { id }: { id: string } = $props();
 +
@@ -4460,17 +4587,14 @@ new file mode 100644
 +		es.addEventListener('dropped', (e) => {
 +			dropped += parseCount((e as MessageEvent<string>).data);
 +		});
-+		es.addEventListener('end', () => stop('ended'));
-+		es.addEventListener('failure', (e) => {
-+			stop('error');
-+			const code = parseFailure((e as MessageEvent<string>).data);
-+			if (code === 'unauthorized') goto('/login').catch(() => {}); // logout or expiry (Q37)
-+			error = errorMessage(code);
-+		});
-+		es.addEventListener('evicted', () => {
-+			stop('error'); // a newer stream took the slot (Q37): no reconnection
-+			error = t('logs.evicted');
-+		});
++		for (const name of ['end', 'failure', 'evicted'] as const) {
++			es.addEventListener(name, (e) => {
++				const r = streamEnd(name, (e as MessageEvent<string>).data);
++				stop(r.status);
++				if (r.login) goto('/login').catch(() => {});
++				if (r.code) error = r.code === 'evicted' ? t('logs.evicted') : errorMessage(r.code);
++			});
++		}
 +		es.onerror = () => {
 +			if (es.readyState === EventSource.CONNECTING) {
 +				status = 'reconnecting'; // the browser retries with Last-Event-ID
@@ -4653,7 +4777,7 @@ diff --git a/web/src/lib/logs.ts b/web/src/lib/logs.ts
 new file mode 100644
 --- /dev/null
 +++ b/web/src/lib/logs.ts
-@@ -0,0 +1,68 @@
+@@ -0,0 +1,83 @@
 +import type { LogLine } from './api.ts';
 +
 +/** Lines kept by the view; older ones leave it (the download has them all). */
@@ -4697,6 +4821,21 @@ new file mode 100644
 +	} catch {
 +		return 'unknown';
 +	}
++}
++
++/** What the view does at an end of stream (Q29, Q37): never reconnect. */
++export type StreamEnd = { status: 'ended' | 'error'; code?: string; login?: boolean };
++
++/**
++ * "end": the container's stream ended. "failure": an error of §6;
++ * "unauthorized" (logout, expiry) sends to the login page. "evicted": a
++ * newer stream took the slot.
++ */
++export function streamEnd(name: 'end' | 'failure' | 'evicted', data = ''): StreamEnd {
++	if (name === 'end') return { status: 'ended' };
++	if (name === 'evicted') return { status: 'error', code: 'evicted' };
++	const code = parseFailure(data);
++	return code === 'unauthorized' ? { status: 'error', code, login: true } : { status: 'error', code };
 +}
 +
 +/** Appends a batch, keeps the newest max lines; removed counts the others. */
@@ -4763,7 +4902,7 @@ diff --git a/web/src/routes/c/[id]/+page.svelte b/web/src/routes/c/[id]/+page.sv
 - [ ] **Step 4: Vérifier**
 
 Run: `cd web && npx vitest run 2>&1 | tail -n 4 && npm run check 2>&1 | tail -n 2 && npm run lint 2>&1 | tail -n 4`
-Expected: tous les tests verts ; `0 ERRORS 0 WARNINGS` ; `lint` sans message.
+Expected: 77 tests verts une fois la tâche 8 faite (70 ici, dont `decides what an end of stream does`) ; `0 ERRORS 0 WARNINGS` ; `lint` sans message.
 
 - [ ] **Step 5: Commit**
 
@@ -5330,7 +5469,7 @@ diff --git a/web/src/routes/c/[id]/+page.svelte b/web/src/routes/c/[id]/+page.sv
 - [ ] **Step 4: Vérifier**
 
 Run: `cd web && npx vitest run 2>&1 | tail -n 4 && npm run check 2>&1 | tail -n 2 && npm run lint 2>&1 | tail -n 4 && npm run build 2>&1 | tail -n 3`
-Expected: 76 tests verts ; `0 ERRORS 0 WARNINGS` ; `lint` sans message ; `✔ done`.
+Expected: 77 tests verts ; `0 ERRORS 0 WARNINGS` ; `lint` sans message ; `✔ done`.
 
 - [ ] **Step 5: Parcours jetable contre un vrai agent (non commité)** — créer `web/e2e/obs-jetable.e2e.ts` et `scripts/e2e-obs-jetable.sh`, les lancer, puis les supprimer :
 
@@ -5578,7 +5717,7 @@ EOF
    par :
 
    ```text
-   ou si sa valeur contient une URL avec identifiants (`://` puis un `@` avant tout blanc : mot de passe, ou jeton seul en nom d'utilisateur). Valeur masquée renvoyée : `null` avec `masked: true`. Une valeur est masquée aussi si elle contient une affectation `NOM=…` dont le nom suit la même règle (`…;Password=…;`, `?password=…`, `-D…Password=…`). La commande, le point d'entrée et le message d'erreur de l'état sont masqués partie par partie (`••••••`) : identifiants d'une URL ; valeur de `NOM=valeur` ou `--nom=valeur`, guillemets compris, et tout le reste de l'argument hors d'une ligne de shell ; argument ou mot qui suit un drapeau `--nom` ou `--nom=` ; quand le nom suit la même règle. Un mot de la liste qui reste dans un argument sans rien de masqué après lui fait masquer l'argument entier. Une valeur se révèle une à une (`env/reveal`, journalisé) ; la commande ne se révèle pas en v0.1.
+   ou si sa valeur contient une URL avec identifiants (`://` puis un `@` avant tout blanc : mot de passe, ou jeton seul en nom d'utilisateur). Valeur masquée renvoyée : `null` avec `masked: true`. Une valeur est masquée aussi quand les règles de la commande y trouvent un secret, telle quelle ou décodée de ses `%XX` (`…;Password=…;`, `…;Pwd=…;`, `?password=…`, `-D…Password\=…`, `--requirepass …`). La commande, le point d'entrée et le message d'erreur de l'état sont masqués partie par partie (`••••••`) : identifiants d'une URL ; valeur de `NOM=valeur` ou `--nom=valeur` (ou `\=`), guillemets compris, et tout le reste de l'argument hors d'une ligne de shell (l'argument qui suit le `-c` d'un shell) ; argument ou mot qui suit un drapeau `--nom` (ou tout argument après `--nom=`) ; quand le nom suit la même règle, ou vaut `Pwd` dans une affectation. Un mot de la liste dont la valeur, dans son propre mot, n'est pas masquée (drapeau, ou mot qui contient `=` ou `:` après lui) fait masquer l'argument entier ; dans un chemin ou un mot ordinaire (`/opt/keycloak`, `ssh-keyscan`), il reste lisible. Une valeur se révèle une à une (`env/reveal`, journalisé) ; la commande ne se révèle pas en v0.1.
    ```
 
 11. §7, journal d'audit (Q28) — remplacer :
@@ -5611,7 +5750,9 @@ EOF
    | Client parti sans FIN (veille, changement de réseau) : sa connexion reste ouverte côté agent environ 15 min | chaque écriture du flux a un délai de 30 s ; quand les 8 créneaux sont pris, le flux le plus ancien cède le sien (`evicted`) ; un autre onglet encore ouvert peut ainsi être fermé, il le dit |
    | Déconnexion ou expiration de la session pendant un flux | le flux s'arrête au battement suivant (15 s au plus) par `failure` `unauthorized` |
    | Reprise d'un flux : lignes de même horodatage coupées par `tail`, ou lignes annoncées `dropped` | une reprise peut rejouer quelques lignes du groupe coupé (horodatages mesurés distincts : rare) ; les lignes `dropped` reviennent à la reprise, comptées deux fois par l'interface |
-   | Secret d'environnement hors des formes reconnues : JSON (`"token":"…"`), `user:motdepasse@hôte` sans `://` | non masqué en v0.1 ; la règle est celle de §7 |
+   | Secret d'environnement hors des formes reconnues : JSON (`"token":"…"`), `user:motdepasse@hôte` sans `://`, `password = …` avec des blancs, variable nommée `DB_PWD` | non masqué en v0.1 ; la règle est celle de §7 |
+   | Secret de commande hors des formes reconnues : `--password -s3cr3t` (valeur qui commence par `-` après un drapeau sans `=`), `PASSWORD=$(cat f)s3cr3t` (fin après une substitution) | non masqué en v0.1 (§7) |
+   | Éviction d'un flux de logs par un autre : les créneaux sont communs à toutes les sessions | la v0.1 n'a qu'un utilisateur (§2), avec une session exigée et un cookie `SameSite=Strict`, et un onglet évincé ne se reconnecte pas : non exploitable ; à revoir si l'agent devient multi-utilisateur (v0.2) |
    ```
 
 - [ ] **Step 2: Suite complète sur les deux VM**
