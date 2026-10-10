@@ -2,7 +2,8 @@ export class ApiError extends Error {
 	constructor(
 		public status: number,
 		public code: string,
-		public detail?: string
+		public detail?: string,
+		public progress?: number
 	) {
 		super(code);
 	}
@@ -10,7 +11,8 @@ export class ApiError extends Error {
 
 async function errorOf(res: Response): Promise<ApiError> {
 	const body = await res.json().catch(() => null);
-	return new ApiError(res.status, body?.error ?? 'unknown', body?.detail);
+	const progress = typeof body?.progress === 'number' ? body.progress : undefined;
+	return new ApiError(res.status, body?.error ?? 'unknown', body?.detail, progress);
 }
 
 export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
@@ -24,6 +26,8 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
 	} catch {
 		throw new ApiError(0, 'network');
 	}
+	// 202 is res.ok but never a result: the index is being built (spec §6).
+	if (res.status === 202) throw await errorOf(res);
 	if (res.status === 204) return undefined as T;
 	if (!res.ok) throw await errorOf(res);
 	return (await res.json().catch(() => null)) as T;
@@ -79,7 +83,7 @@ async function get(url: string, signal?: AbortSignal): Promise<Response> {
 	} catch {
 		throw new ApiError(0, 'network');
 	}
-	if (!res.ok) throw await errorOf(res);
+	if (res.status === 202 || !res.ok) throw await errorOf(res);
 	return res;
 }
 
@@ -98,3 +102,6 @@ export async function previewFile(id: string, path: string): Promise<Preview> {
 export async function checkDownload(url: string): Promise<void> {
 	await get(`${url}&check=1`);
 }
+
+export type Change = { path: string; kind: 'added' | 'modified' | 'deleted' };
+export const listChanges = (id: string) => api<Change[]>(`/containers/${encodeURIComponent(id)}/changes`);

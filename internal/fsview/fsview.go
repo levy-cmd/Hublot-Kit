@@ -6,6 +6,7 @@ package fsview
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"path"
@@ -33,6 +34,13 @@ type Entry struct {
 
 // MaxEntries caps a listing (spec §5.1 step 7).
 const MaxEntries = 10_000
+
+// OpenChecker is implemented by a view that can run every check of Open
+// without reading: a view that would have to ask Docker implements it (spec
+// §5.4, &check=1).
+type OpenChecker interface {
+	CheckOpen(ctx context.Context, path string) error
+}
 
 // FS is a read view of a container's tree. Paths are container paths;
 // List, Stat and Open follow symbolic links, never out of the container root.
@@ -65,9 +73,7 @@ var (
 	ErrLinkInPath       = errors.New("lien symbolique dans le chemin")
 	ErrContainerChanged = errors.New("le conteneur a changé")
 	ErrTooLarge         = errors.New("trop volumineux")
-	// ErrStopped is temporary: the explorer of stopped containers (tarindex)
-	// arrives with plan Explorateur 2, which removes this error.
-	ErrStopped = errors.New("conteneur arrêté : explorateur pas encore disponible")
+	ErrIndexing         = errors.New("indexation en cours")
 )
 
 // CleanPath returns the absolute, lexically cleaned form of a container path.
@@ -112,3 +118,13 @@ func UnixPerm(m fs.FileMode) uint32 {
 	}
 	return p
 }
+
+// IndexingError: the index of a stopped container is being built (spec §5.2
+// step 2, §6 202 indexing). Progress goes from 0 to 0.99.
+type IndexingError struct{ Progress float64 }
+
+func (e *IndexingError) Error() string {
+	return fmt.Sprintf("%v (%d %%)", ErrIndexing, int(e.Progress*100))
+}
+
+func (e *IndexingError) Unwrap() error { return ErrIndexing }

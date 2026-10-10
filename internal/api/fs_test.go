@@ -105,10 +105,6 @@ func TestFSListErrors(t *testing.T) {
 		}
 	}
 	f := newFixture(t, false)
-	f.openErr = fmt.Errorf("%w : web", fsview.ErrStopped)
-	if rec := f.do("GET", "/api/containers/web/fs?path=/", "", f.session(t)); rec.Code != http.StatusNotImplemented || errCode(t, rec) != "internal" {
-		t.Errorf("conteneur arrêté : %d %s", rec.Code, rec.Body)
-	}
 	if rec := f.do("GET", "/api/containers/nope/fs?path=/", "", f.session(t)); rec.Code != http.StatusNotFound || errCode(t, rec) != "not_found" {
 		t.Errorf("conteneur inconnu : %d %s", rec.Code, rec.Body)
 	}

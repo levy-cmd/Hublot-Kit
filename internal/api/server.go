@@ -19,8 +19,11 @@ import (
 
 type Deps struct {
 	Docker dockerx.Client
+	// Views is the cache of the indexes of stopped containers; nil:
+	// fsview.NewViews(Docker, fsview.DefaultOptions()).
+	Views *fsview.Views
 	// OpenFS opens the file view of a container by full ID; nil means
-	// fsview.For on Docker. API tests give an in-memory view.
+	// Views.For. API tests give an in-memory view.
 	OpenFS       func(ctx context.Context, id string) (fsview.FS, error)
 	Verifier     *auth.Verifier
 	Sessions     *auth.Sessions
@@ -81,9 +84,11 @@ const (
 )
 
 func New(d Deps) http.Handler {
+	if d.Views == nil {
+		d.Views = fsview.NewViews(d.Docker, fsview.DefaultOptions())
+	}
 	if d.OpenFS == nil {
-		docker := d.Docker
-		d.OpenFS = func(ctx context.Context, id string) (fsview.FS, error) { return fsview.For(ctx, docker, id) }
+		d.OpenFS = d.Views.For
 	}
 	s := &server{
 		d:        d,
@@ -100,6 +105,7 @@ func New(d Deps) http.Handler {
 	mux.Handle("GET /api/containers/{id}/fs", session(s.fsList))
 	mux.Handle("GET /api/containers/{id}/fs/file", session(s.fsFile))
 	mux.Handle("GET /api/containers/{id}/fs/download", session(s.fsDownload))
+	mux.Handle("GET /api/containers/{id}/changes", session(s.changes))
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "not_found", "")
 	})

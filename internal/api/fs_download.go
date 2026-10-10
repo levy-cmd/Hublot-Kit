@@ -36,6 +36,9 @@ func (s *server) fsDownload(w http.ResponseWriter, r *http.Request) {
 			return opened{}, err
 		}
 		if e.Type != fsview.TypeDir {
+			if oc, ok := fsys.(fsview.OpenChecker); check && ok {
+				return opened{}, oc.CheckOpen(ctx, p)
+			}
 			rc, err := fsys.Open(ctx, p)
 			if err != nil {
 				return opened{}, err

@@ -25,16 +25,15 @@ func TestDownloadMountCheckThroughTheRealView(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { cmd.Process.Kill(); cmd.Wait() })
-	t.Cleanup(fsview.SetCgroupReaderForTests(func(int) ([]byte, error) {
-		return []byte("0::/docker/" + webID + "\n"), nil
-	}))
 	fake := &dockerx.Fake{Infos: map[string]dockerx.ContainerInfo{}, Archives: map[string][]byte{},
 		Volumes: map[string]map[string]string{}}
 	setMounts := func(mounts ...dockerx.Mount) {
 		info := dockerx.ContainerInfo{ID: webID, Name: "web", Running: true, Pid: cmd.Process.Pid, Mounts: mounts}
 		fake.Infos["web"], fake.Infos[webID] = info, info
 	}
-	f := &fixture{docker: fake}
+	f := &fixture{docker: fake, views: fsview.NewViews(fake, fsview.Options{ReadCgroup: func(int) ([]byte, error) {
+		return []byte("0::/docker/" + webID + "\n"), nil
+	}})}
 	f.init(t, false, fake, nil) // nil: the real fsview.For
 	c := f.session(t)
 

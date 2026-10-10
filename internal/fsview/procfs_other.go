@@ -11,6 +11,6 @@ import (
 // The agent reads /proc/<pid>/root: Linux only. On macOS, run it in a
 // container (scripts/dev-agent.sh); the tests that need Linux run through
 // scripts/test-linux.sh.
-func openProcFS(dockerx.Client, dockerx.ContainerInfo) (FS, error) {
+func openProcFS(dockerx.Client, dockerx.ContainerInfo, func(int) ([]byte, error)) (FS, error) {
 	return nil, errors.New("explorateur : Linux uniquement (sur macOS, lancez l'agent dans un conteneur)")
 }

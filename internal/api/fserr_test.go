@@ -35,7 +35,7 @@ func TestFSErrorStatus(t *testing.T) {
 		{wrapped(fsview.ErrNotDir), http.StatusNotFound, "not_found"},
 		{&fs.PathError{Op: "openat2", Path: "/m/etc", Err: syscall.ELOOP}, http.StatusNotFound, "not_found"},
 		{fmt.Errorf("%w : /lien", fsview.ErrLinkInPath), http.StatusUnprocessableEntity, "link_in_path"},
-		{wrapped(fsview.ErrStopped), http.StatusNotImplemented, "internal"},
+		{&fsview.IndexingError{Progress: 0.5}, http.StatusAccepted, "indexing"},
 		{errors.New("autre"), http.StatusInternalServerError, "internal"},
 	}
 	for _, c := range cases {

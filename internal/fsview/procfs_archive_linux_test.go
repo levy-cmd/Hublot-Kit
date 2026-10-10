@@ -12,6 +12,8 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -107,13 +109,11 @@ func TestCheckArchiveWithoutProcessFailsClosed(t *testing.T) {
 func TestForWiresMountsIntoCheckArchive(t *testing.T) {
 	cmd := startChild(t)
 	id := strings.Repeat("ab", 32)
-	restore := SetCgroupReaderForTests(func(int) ([]byte, error) { return []byte("0::/docker/" + id + "\n"), nil })
-	t.Cleanup(restore)
 	docker := &dockerx.Fake{Infos: map[string]dockerx.ContainerInfo{"c": {
 		ID: id, Name: "c", Running: true, Pid: cmd.Process.Pid,
 		Mounts: []dockerx.Mount{{Type: "bind", Source: "/proc", Destination: "/host/proc"}},
 	}}}
-	fsys, err := For(context.Background(), docker, "c")
+	fsys, err := NewViews(docker, Options{ReadCgroup: func(int) ([]byte, error) { return []byte("0::/docker/" + id + "\n"), nil }}).For(context.Background(), "c")
 	must(t, err)
 	defer fsys.Close()
 	err = fsys.CheckArchive(ctx, "/etc")
@@ -130,5 +130,47 @@ func TestCheckArchiveDestinationNotVisible(t *testing.T) {
 	err := p.CheckArchive(ctx, "/etc")
 	if !errors.Is(err, ErrForbiddenPath) || !strings.Contains(err.Error(), "ne montre pas la destination /link/m") {
 		t.Fatalf("destination invisible : %v", err)
+	}
+}
+
+// Deferred issue (a) of plan 1.
+func TestCheckArchiveDestinationUnderSymlink(t *testing.T) {
+	p, cmd := childView(t)
+	// Control first: under a symlink but not a mount, still refused.
+	dir := t.TempDir()
+	must(t, os.Mkdir(filepath.Join(dir, "real"), 0o755))
+	must(t, os.WriteFile(filepath.Join(dir, "real", "f"), nil, 0o644))
+	must(t, os.Symlink("real", filepath.Join(dir, "link")))
+	p.mounts = []dockerx.Mount{{Type: "bind", Source: "/x/f", Destination: filepath.Join(dir, "link", "f")}}
+	if err := p.CheckArchive(ctx, "/etc"); !errors.Is(err, ErrForbiddenPath) || !strings.Contains(err.Error(), "ne montre pas la destination") {
+		t.Fatalf("lien sans montage : %v", err)
+	}
+	// The real case: scripts/test-linux.sh mounts the Docker socket at
+	// /var/run/docker.sock, and /var/run -> /run in the golang image. Its
+	// Source is the mount's root as mountinfo shows it (host layouts differ).
+	mi, err := os.ReadFile(fmt.Sprintf("/proc/%d/mountinfo", cmd.Process.Pid))
+	must(t, err)
+	root := ""
+	for _, line := range strings.Split(string(mi), "\n") {
+		if f := strings.Fields(line); len(f) > 4 && f[4] == "/run/docker.sock" {
+			root = f[3]
+		}
+	}
+	target, err := os.Readlink("/var/run")
+	if err != nil && !errors.Is(err, os.ErrNotExist) && !errors.Is(err, unix.EINVAL) {
+		t.Fatalf("readlink /var/run : %v", err) // not the exact precondition: fail
+	}
+	if err == nil && !path.IsAbs(target) {
+		target = path.Join("/var", target)
+	}
+	if err != nil || path.Clean(target) != "/run" {
+		t.Skipf("précondition absente : /var/run n'est pas un lien vers /run (%q, %v) ; lancer par scripts/test-linux.sh", target, err)
+	}
+	if root == "" || root == "/" {
+		t.Skipf("précondition absente : /run/docker.sock absent de mountinfo ou racine de montage %q ; lancer par scripts/test-linux.sh", root)
+	}
+	p.mounts = []dockerx.Mount{{Type: "bind", Source: root, Destination: "/var/run/docker.sock"}}
+	if err := p.CheckArchive(ctx, "/etc"); err != nil {
+		t.Fatalf("socket Docker sous /var/run -> /run : %v", err)
 	}
 }

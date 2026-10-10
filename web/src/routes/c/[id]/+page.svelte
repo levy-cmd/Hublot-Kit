@@ -4,12 +4,14 @@
 	import { ApiError, listContainers, type Container } from '#lib/api.ts';
 	import { stateLabel } from '#lib/containers.ts';
 	import { errorMessage, t } from '#lib/i18n/index.ts';
+	import ChangesList from '#lib/components/ChangesList.svelte';
 	import FileBrowser from '#lib/components/FileBrowser.svelte';
 
 	let id = $derived(page.params.id ?? '');
 	let container = $state<Container | null>(null);
 	let error = $state('');
 	let reloads = $state(0); // bumped by the Reload button
+	let tab = $derived(page.url.searchParams.get('tab') === 'changes' ? 'changes' : 'files');
 
 	// The list gives the name, image and state; GET /api/containers/{id}
 	// arrives with the X-ray tab (phase Observation).
@@ -49,16 +51,15 @@
 		<h1>{container.name} <small class="state {container.state}">{stateLabel(container.state)}</small></h1>
 		<p class="image">{container.image}</p>
 		<nav class="tabs">
-			<span class="tab active" aria-current="page">{t('container.tab.files')}</span>
-			<span class="tab soon">{t('container.tab.changes')} ({t('container.soon')})</span>
+			<a class="tab" class:active={tab === 'files'} aria-current={tab === 'files' ? 'page' : undefined} href="?">{t('container.tab.files')}</a>
+			<a class="tab" class:active={tab === 'changes'} aria-current={tab === 'changes' ? 'page' : undefined} href="?tab=changes">{t('container.tab.changes')}</a>
 			<span class="tab soon">{t('container.tab.logs')} ({t('container.soon')})</span>
 			<span class="tab soon">{t('container.tab.xray')} ({t('container.soon')})</span>
 		</nav>
-		{#if container.state === 'running' || container.state === 'paused'}
-			<FileBrowser id={container.id} />
+		{#if tab === 'changes'}
+			<ChangesList id={container.id} />
 		{:else}
-			<p>{t('container.stoppedSoon')}</p>
-			<button type="button" onclick={() => reloads++}>{t('files.reload')}</button>
+			<FileBrowser id={container.id} stopped={container.state !== 'running' && container.state !== 'paused'} />
 		{/if}
 	{/if}
 </main>

@@ -1,14 +1,15 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import { ApiError, checkDownload, downloadUrl, previewFile, type Entry, type Preview } from '#lib/api.ts';
-	import { baseName, downloadErrorMessage, formatMode, formatSize } from '#lib/files.ts';
-	import { errorMessage, t } from '#lib/i18n/index.ts';
+	import { baseName, downloadErrorMessage, formatMode, formatSize, fsErrorMessage, indexingPercent } from '#lib/files.ts';
+	import { t } from '#lib/i18n/index.ts';
 
-	let { id, path, entry }: { id: string; path: string; entry?: Entry } = $props();
+	let { id, path, entry, stopped = false }: { id: string; path: string; entry?: Entry; stopped?: boolean } = $props();
 
 	let preview = $state<Preview | null>(null);
 	let imageUrl = $state('');
 	let error = $state('');
+	let indexing = $state<number | null>(null); // percent while the index is built
 	let loading = $state(false);
 	let downloadError = $state('');
 	let reloads = $state(0); // bumped by the Reload button: same path, new request
@@ -18,6 +19,7 @@
 		void reloads; // dependency: the Reload button re-runs this effect
 		let current = true;
 		let url = '';
+		let retry: ReturnType<typeof setTimeout> | undefined;
 		preview = null;
 		imageUrl = '';
 		error = '';
@@ -26,6 +28,7 @@
 		previewFile(id, wanted)
 			.then((p) => {
 				if (!current) return;
+				indexing = null;
 				preview = p;
 				if (p.kind === 'image') imageUrl = url = URL.createObjectURL(p.blob);
 			})
@@ -35,19 +38,24 @@
 					goto('/login').catch(() => {});
 					return;
 				}
+				if (e instanceof ApiError && e.code === 'indexing') {
+					indexing = indexingPercent(e.progress);
+					retry = setTimeout(() => reloads++, 1000); // ask again until the index is ready
+					return;
+				}
+				indexing = null;
 				const code = e instanceof ApiError ? e.code : 'unknown';
 				error =
-						e instanceof ApiError && e.status === 501
-							? t('container.stoppedSoon')
-							: code === 'too_large'
-								? t('files.tooLarge')
-								: errorMessage(code);
+					code === 'too_large'
+						? t('files.tooLarge')
+						: fsErrorMessage(code, e instanceof ApiError ? e.detail : undefined, stopped);
 			})
 			.finally(() => {
 				if (current) loading = false;
 			});
 		return () => {
 			current = false;
+			clearTimeout(retry);
 			if (url) URL.revokeObjectURL(url);
 		};
 	});
@@ -77,7 +85,11 @@
 	{#if downloadError}<p role="alert">{downloadError}</p>{/if}
 </header>
 
-{#if loading}
+{#if indexing !== null}
+	<p role="status">{t('files.indexing')} : {indexing} %</p>
+	<progress max="100" value={indexing}></progress>
+	<p class="note">{t('files.indexingHint')}</p>
+{:else if loading}
 	<p>{t('files.loading')}</p>
 {:else if error}
 	<p role="alert">{error}</p>
@@ -96,5 +108,6 @@
 	.meta { margin: 0; opacity: 0.8; font-size: 0.9rem; }
 	pre { overflow: auto; max-height: 70vh; padding: 0.75rem; background: #f6f6f6; border-radius: 0.25rem; white-space: pre; }
 	img { max-width: 100%; height: auto; }
+	.note { font-style: italic; }
 	[role='alert'] { color: #b00020; }
 </style>

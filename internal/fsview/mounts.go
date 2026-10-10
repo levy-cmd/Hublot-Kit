@@ -90,11 +90,18 @@ func dangerousFSType(t string) bool {
 	return slices.Contains(pseudoFSNames, t) || t == "fuse" || t == "fuseblk" || strings.HasPrefix(t, "fuse.") || strings.HasPrefix(t, "fuseblk.")
 }
 
+// mountLine is the part of a mountinfo line the checks use: fields 1, 4 and 5
+// (unescaped) and the filesystem type.
+type mountLine struct {
+	ID                  uint64
+	Root, Point, FSType string
+}
+
 // scanMountinfo parses /proc/<pid>/mountinfo (mount points relative to the
-// process's root) once, for every check. visit gets each unescaped mount point
-// and fs type and returns true to stop. A line that cannot be parsed, or with
-// an invalid escape, stops the scan too: fail closed.
-func scanMountinfo(mountinfo string, visit func(mountPoint, fsType string) bool) (mountPoint, fsType string, stopped bool) {
+// process's root) once, for every check. visit gets each line and returns true
+// to stop. A line that cannot be parsed, with an unreadable ID or an invalid
+// escape, stops the scan too: fail closed.
+func scanMountinfo(mountinfo string, visit func(mountLine) bool) (mountPoint, fsType string, stopped bool) {
 	for _, line := range strings.Split(mountinfo, "\n") {
 		if strings.TrimSpace(line) == "" {
 			continue
@@ -105,11 +112,19 @@ func scanMountinfo(mountinfo string, visit func(mountPoint, fsType string) bool)
 		if len(f) < 7 || sep < 6 || sep+1 >= len(f) {
 			return line, "ligne de mountinfo illisible", true
 		}
+		id, err := strconv.ParseUint(f[0], 10, 64)
+		if err != nil {
+			return f[0], "identifiant de montage illisible", true
+		}
+		root, ok := unescapeMountinfo(f[3])
+		if !ok {
+			return f[3], "échappement de mountinfo invalide", true
+		}
 		mp, ok := unescapeMountinfo(f[4])
 		if !ok {
 			return f[4], "échappement de mountinfo invalide", true
 		}
-		if visit(mp, f[sep+1]) {
+		if visit(mountLine{ID: id, Root: root, Point: mp, FSType: f[sep+1]}) {
 			return mp, f[sep+1], true
 		}
 	}
@@ -119,18 +134,19 @@ func scanMountinfo(mountinfo string, visit func(mountPoint, fsType string) bool)
 // dangerousMount returns the first mount of a dangerous type whose mount point
 // matches. Stacked mounts are all read.
 func dangerousMount(mountinfo string, match func(mountPoint string) bool) (mountPoint, fsType string, found bool) {
-	return scanMountinfo(mountinfo, func(mp, typ string) bool { return dangerousFSType(typ) && match(mp) })
+	return scanMountinfo(mountinfo, func(l mountLine) bool { return dangerousFSType(l.FSType) && match(l.Point) })
 }
 
 // CheckVisibleMounts verifies that the mount table describes the container in
 // the coordinates dockerd uses: it must have a "/" mount (else the process's
 // root was moved and mounts outside it vanished), and every Docker mount
 // destination must appear verbatim as a mount point (else a symlink in the
-// path, or a moved root, hides it). Otherwise the other checks could miss a
+// path, or a moved root, hides it; LocateMounts may have moved it to the mount
+// point it proved to be the same Docker mount). Otherwise the other checks could miss a
 // dangerous mount: fail closed.
 func CheckVisibleMounts(mountinfo string, mounts []dockerx.Mount) error {
 	points := map[string]bool{}
-	if mp, typ, bad := scanMountinfo(mountinfo, func(mp, _ string) bool { points[mp] = true; return false }); bad {
+	if mp, typ, bad := scanMountinfo(mountinfo, func(l mountLine) bool { points[l.Point] = true; return false }); bad {
 		return fmt.Errorf("%w : %s : %s", ErrForbiddenPath, typ, mp)
 	}
 	if !points["/"] {
@@ -190,4 +206,68 @@ func unescapeMountinfo(s string) (string, bool) {
 		i += 3
 	}
 	return b.String(), true
+}
+
+// MountIdent is what a container path resolves to: the mount it is on
+// (statx STATX_MNT_ID, mountinfo field 1), its device and inode.
+type MountIdent struct{ MountID, Dev, Ino uint64 }
+
+// LocateMounts returns a copy of mounts where each destination the mount
+// table does not show verbatim is replaced by the mount point P of the very
+// same mount, when all of this holds; otherwise it stays, and
+// CheckVisibleMounts refuses it (fail closed):
+//   - the destination, resolved in the container (ident: pathrs, links
+//     followed, never out of the root), is on mount n; P resolves to mount
+//     n with the same device and inode;
+//   - review I4: mount n is this Docker mount (sameMount), so links planted
+//     after a chroot cannot map it onto another mount;
+//   - P is not "/", and no other Docker mount shows, or is mapped to, P.
+func LocateMounts(mountinfo string, mounts []dockerx.Mount, ident func(p string) (MountIdent, error)) []dockerx.Mount {
+	lines := map[uint64]mountLine{}
+	points := map[string]bool{}
+	if _, _, bad := scanMountinfo(mountinfo, func(l mountLine) bool {
+		lines[l.ID], points[l.Point] = l, true
+		return false
+	}); bad {
+		return mounts
+	}
+	taken := map[string]bool{}
+	for _, m := range mounts {
+		if d := CleanPath(m.Destination); points[d] {
+			taken[d] = true
+		}
+	}
+	out := slices.Clone(mounts)
+	for i, m := range out {
+		dst := CleanPath(m.Destination)
+		if points[dst] {
+			continue
+		}
+		want, err := ident(dst)
+		if err != nil {
+			continue
+		}
+		l, ok := lines[want.MountID]
+		if !ok || l.Point == "/" || taken[l.Point] || !sameMount(m, l.Root) {
+			continue
+		}
+		if got, err := ident(l.Point); err != nil || got != want {
+			continue
+		}
+		out[i].Destination, taken[l.Point] = l.Point, true
+	}
+	return out
+}
+
+// sameMount ties a mountinfo root (field 4) to a Docker mount: the end of a
+// bind's Source, or the data directory of a named volume. Anything else
+// (tmpfs, a bind of a host mount root shown as "/") cannot be tied: false.
+func sameMount(m dockerx.Mount, root string) bool {
+	switch m.Type {
+	case "bind":
+		return root != "/" && strings.HasSuffix(CleanPath(m.Source), root)
+	case "volume":
+		return m.Name != "" && strings.HasSuffix(root, "/"+m.Name+"/_data")
+	}
+	return false
 }

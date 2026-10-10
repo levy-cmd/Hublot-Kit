@@ -78,3 +78,22 @@ export function downloadErrorMessage(code: string, detail?: string): string {
 	if (code === 'forbidden_path') return detail ? `${t('files.archiveForbidden')} (${detail})` : t('files.archiveForbidden');
 	return errorMessage(code);
 }
+
+/** Percent shown while a stopped container is indexed: never 100 before the end. */
+export function indexingPercent(progress?: number): number {
+	return Math.min(99, Math.max(0, Math.floor((progress ?? 0) * 100)));
+}
+
+/**
+ * Message for a failed listing or preview. A stopped container whose mounts
+ * expose the host is refused whole (spec §5.2 step 7): the detail names the
+ * mount, shown as text (escaped by Svelte).
+ */
+export function fsErrorMessage(code: string, detail: string | undefined, stopped: boolean): string {
+	if (code === 'forbidden_path') {
+		if (!stopped) return t('files.inaccessible');
+		return detail ? `${t('files.stoppedUnavailable')} (${detail})` : t('files.stoppedUnavailable');
+	}
+	if (code === 'too_large' && stopped) return t('files.stoppedTooLarge');
+	return errorMessage(code);
+}

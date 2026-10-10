@@ -36,8 +36,13 @@ export const fr = {
 	'container.tab.logs': 'Logs',
 	'container.tab.xray': 'Radiographie',
 	'container.soon': 'bientôt',
-	'container.stoppedSoon':
-		"Conteneur arrêté : l'explorateur des conteneurs arrêtés arrive à l'étape suivante. Démarrez-le pour explorer ses fichiers.",
+	'files.indexing': 'Indexation du conteneur arrêté',
+	'files.indexingHint':
+		"Première ouverture : l'agent lit les en-têtes de l'archive du conteneur. Les suivantes sont immédiates.",
+	'files.stoppedUnavailable':
+		"Explorateur indisponible pour ce conteneur arrêté : un de ses montages pourrait exposer l'hôte. Les changements restent consultables.",
+	'files.stoppedTooLarge':
+		"Conteneur trop volumineux pour être indexé (au plus 4 Gio, volumes compris, 5 minutes ou 1 000 000 d'entrées). Démarrez-le pour l'explorer.",
 	'files.path': 'Chemin',
 	'files.parent': 'Dossier parent',
 	'files.loading': 'Chargement…',
@@ -79,6 +84,14 @@ export const fr = {
 	'error.link_in_path': 'Le chemin contient un lien symbolique.',
 	'error.docker_unavailable': "Docker ne répond pas. Vérifiez que le démon tourne et que l'agent accède au socket.",
 	'error.internal': "Erreur interne de l'agent.",
+	'changes.hint': "Différences avec l'image, calculées par Docker (hors volumes).",
+	'changes.empty': "Aucun changement par rapport à l'image.",
+	'changes.added': 'ajouté',
+	'changes.modified': 'modifié',
+	'changes.deleted': 'supprimé',
+	'changes.more': 'changements de plus, non affichés',
+	'changes.deletedHere': "supprimé(s) dans ce dossier depuis l'image :",
+	'changes.andMore': '…et {n} autres',
 	'error.network': "L'agent ne répond pas.",
 	'error.unknown': 'Erreur inattendue.'
 } as const;

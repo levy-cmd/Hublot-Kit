@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/netip"
 	"reflect"
+	"slices"
 	"testing"
 	"time"
 
@@ -137,5 +138,46 @@ func TestFakeInspectAndArchive(t *testing.T) {
 	}
 	if _, err := f.VolumeOptions(context.Background(), "nope"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("absent volume: %v", err)
+	}
+}
+
+func TestFromInspectFinishedAt(t *testing.T) {
+	got := fromInspect(container.InspectResponse{ID: "x", State: &container.State{FinishedAt: "2026-10-09T10:00:00Z"}})
+	if got.FinishedAt != "2026-10-09T10:00:00Z" {
+		t.Fatalf("FinishedAt : %q", got.FinishedAt)
+	}
+}
+
+func TestFromChanges(t *testing.T) {
+	got, err := fromChanges([]container.FilesystemChange{
+		{Kind: container.ChangeAdd, Path: "/a"}, {Kind: container.ChangeModify, Path: "/b"}, {Kind: container.ChangeDelete, Path: "/c"},
+	})
+	want := []Change{{"/a", "added"}, {"/b", "modified"}, {"/c", "deleted"}}
+	if err != nil || !reflect.DeepEqual(got, want) {
+		t.Fatalf("%+v %v", got, err)
+	}
+	if _, err := fromChanges([]container.FilesystemChange{{Kind: 9, Path: "/x"}}); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("type inconnu : %v", err)
+	}
+	if got, err := fromChanges(nil); err != nil || got == nil || len(got) != 0 {
+		t.Fatalf("aucun changement : %#v %v (attendu un tableau vide, pas nil)", got, err)
+	}
+}
+
+func TestFakeSizesDiffsCalls(t *testing.T) {
+	f := &Fake{Sizes: map[string]int64{"full": 42}, Diffs: map[string][]Change{"web": {{"/a", "added"}}},
+		Archives: map[string][]byte{"full:/": []byte("T")}}
+	if n, err := f.SizeRootFs(context.Background(), "full"); err != nil || n != 42 {
+		t.Fatalf("taille : %d %v", n, err)
+	}
+	if cs, err := f.Changes(context.Background(), "web"); err != nil || len(cs) != 1 {
+		t.Fatalf("diff : %v %v", cs, err)
+	}
+	if _, err := f.Changes(context.Background(), "nope"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("diff inconnu : %v", err)
+	}
+	f.GetArchive(context.Background(), "full", "/")
+	if c := f.Calls(); !slices.Equal(c, []string{"full:/"}) {
+		t.Fatalf("appels : %v", c)
 	}
 }

@@ -14,6 +14,7 @@ import (
 	"io/fs"
 	"os"
 	"os/exec"
+	"path"
 	"strings"
 	"testing"
 	"time"
@@ -62,7 +63,7 @@ func openFor(t *testing.T, id string) FS {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	fsys, err := For(ctx, dc, id)
+	fsys, err := NewViews(dc, Options{}).For(ctx, id)
 	if err != nil {
 		t.Fatalf("For(%s) : %v", id, err)
 	}
@@ -154,20 +155,14 @@ func TestIntegrationProcFSAfterRestart(t *testing.T) {
 	}
 }
 
-func TestIntegrationForStoppedContainer(t *testing.T) {
-	needRoot(t)
-	id := runTarget(t, "hublot-it-fs-stopped", "alpine:3", "true")
-	docker(t, "wait", id)
+func TestIntegrationForAbsentContainer(t *testing.T) {
 	dc, err := dockerx.New()
 	if err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	if _, err := For(ctx, dc, id); !errors.Is(err, ErrStopped) {
-		t.Fatalf("conteneur arrêté : %v", err)
-	}
-	if _, err := For(ctx, dc, "hublot-it-absent"); !errors.Is(err, dockerx.ErrNotFound) {
+	if _, err := NewViews(dc, Options{}).For(ctx, "hublot-it-absent"); !errors.Is(err, dockerx.ErrNotFound) {
 		t.Fatalf("conteneur absent : %v", err)
 	}
 }
@@ -261,5 +256,45 @@ func TestIntegrationMeasureOwnProcInArchive(t *testing.T) {
 		t.Logf("MESURE : GET /archive ne voit pas le /proc propre du conteneur (%v)", err)
 	default:
 		t.Logf("MESURE : non concluante (%v)", err)
+	}
+}
+
+func TestIntegrationDockerSocketUnderVarRun(t *testing.T) {
+	needRoot(t)
+	name := "hublot-it-sock"
+	id := runTarget(t, name, "-v", "/var/run/docker.sock:/var/run/docker.sock", "alpine:3", "sleep", "300")
+	// "|| true": an empty output means "not a link" (the exact precondition
+	// we skip on); any other failure (stopped container, daemon error) fails.
+	l := docker(t, "exec", name, "sh", "-c", "readlink /var/run || true")
+	if l == "" {
+		t.Skip("précondition absente : /var/run n'est pas un lien dans alpine:3 (readlink vide)")
+	}
+	if !path.IsAbs(l) {
+		l = path.Join("/var", l)
+	}
+	if path.Clean(l) != "/run" {
+		t.Skipf("précondition absente : /var/run n'est pas un lien vers /run dans alpine:3 (%q)", l)
+	}
+	// Docker Desktop shows a proxy socket whose mount root (mountinfo field 4)
+	// does not end the Source: spec §5.4 (b) refuses it on purpose. Skip on
+	// exactly that, naming both values; anywhere else the tar must pass.
+	const source = "/var/run/docker.sock"
+	root := ""
+	for _, line := range strings.Split(docker(t, "exec", name, "cat", "/proc/1/mountinfo"), "\n") {
+		if f := strings.Fields(line); len(f) > 4 && f[4] == "/run/docker.sock" {
+			root = f[3]
+		}
+	}
+	if root == "" {
+		t.Fatal("/run/docker.sock absent de mountinfo dans le conteneur")
+	}
+	if root == "/" || !strings.HasSuffix(source, root) {
+		if !strings.HasPrefix(root, "/host-services/") {
+			t.Fatalf("racine du montage %q : ne termine pas la Source %q et n'est pas un socket mandataire de Docker Desktop (/host-services/)", root, source)
+		}
+		t.Skipf("précondition absente : la racine du montage (%q) ne termine pas la Source (%q), socket mandataire de Docker Desktop (spec §5.4 b : refus voulu)", root, source)
+	}
+	if err := openFor(t, id).CheckArchive(context.Background(), "/etc"); err != nil {
+		t.Fatalf("tar de /etc refusé à cause du socket Docker : %v", err)
 	}
 }
