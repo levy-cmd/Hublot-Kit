@@ -161,6 +161,19 @@ func CheckRootMount(mountinfo string) error {
 	return nil
 }
 
+// rootMountIDs: the mount IDs of the lines mounted on "/" (stacked mounts
+// give several).
+func rootMountIDs(mountinfo string) []uint64 {
+	var ids []uint64
+	scanMountinfo(mountinfo, func(l mountLine) bool {
+		if l.Point == "/" {
+			ids = append(ids, l.ID)
+		}
+		return false
+	})
+	return ids
+}
+
 // CheckVisibleMounts verifies that the mount table describes the container in
 // the coordinates dockerd uses: it must have a "/" mount (else the process's
 // root was moved and mounts outside it vanished), and every Docker mount

@@ -29,6 +29,7 @@ type procFS struct {
 	pidfd  int
 	docker dockerx.Client
 	mounts []dockerx.Mount
+	tmpfs  []string // --tmpfs destinations of Inspect (not in mounts)
 }
 
 // NewProcFS serves the tree under root, a descriptor on a root directory

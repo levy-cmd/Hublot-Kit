@@ -197,3 +197,47 @@ func TestCheckWriteRoot(t *testing.T) {
 		t.Fatal("mountinfo illisible : doit échouer fermé")
 	}
 }
+
+// Review re-I1: a PID 1 chrooted into a volume or a tmpfs of the container
+// (CAP_SYS_CHROOT is enough) shows a "/" line, but the destination declared by
+// Inspect (/jail) is gone from the table: the write is refused. The mount
+// tables are faked (a real jail needs a binary inside it, and the mount IDs
+// are those of the real root of the view).
+func TestCheckWriteRootJail(t *testing.T) {
+	p, _ := childView(t)
+	st, err := statxMountID(int(p.root.Fd()), 0, 0)
+	must(t, err)
+	table := func(rootID uint64, dests ...string) func(int) ([]byte, error) {
+		s := fmt.Sprintf("%d 1 8:1 / / rw - ext4 /dev/sda1 rw\n", rootID)
+		for i, d := range dests {
+			s += fmt.Sprintf("%d %d 0:50 / %s rw - tmpfs tmpfs rw\n", 900+i, rootID, d)
+		}
+		return func(int) ([]byte, error) { return []byte(s), nil }
+	}
+	old := readMountinfo
+	t.Cleanup(func() { readMountinfo = old })
+	p.mounts = []dockerx.Mount{{Type: "volume", Destination: "/data"}, {Type: "volume", Destination: "/jail"}}
+	p.tmpfs = []string{"/run"}
+
+	readMountinfo = table(st.Mnt_id, "/data", "/jail", "/run")
+	if err := p.CheckWriteRoot(ctx); err != nil {
+		t.Fatalf("conteneur ordinaire, tout est visible : %v", err)
+	}
+	readMountinfo = table(st.Mnt_id, "/data", "/run") // chroot /jail in a volume
+	if err := p.CheckWriteRoot(ctx); !errors.Is(err, ErrForbiddenPath) || !strings.Contains(err.Error(), "/jail") {
+		t.Fatalf("prison dans un volume : %v, attendu ErrForbiddenPath nommant /jail", err)
+	}
+	p.mounts = []dockerx.Mount{{Type: "volume", Destination: "/data"}}
+	p.tmpfs = []string{"/jail"}
+	readMountinfo = table(st.Mnt_id, "/data") // chroot /jail in a tmpfs
+	if err := p.CheckWriteRoot(ctx); !errors.Is(err, ErrForbiddenPath) || !strings.Contains(err.Error(), "/jail") {
+		t.Fatalf("prison dans un tmpfs : %v, attendu ErrForbiddenPath nommant /jail", err)
+	}
+	// The root pinned when the view was opened is not the root of the table
+	// any more (chroot after the open).
+	p.tmpfs = nil
+	readMountinfo = table(st.Mnt_id+1000, "/data")
+	if err := p.CheckWriteRoot(ctx); !errors.Is(err, ErrForbiddenPath) || !strings.Contains(err.Error(), "racine épinglée") {
+		t.Fatalf("racine épinglée différente : %v, attendu ErrForbiddenPath", err)
+	}
+}

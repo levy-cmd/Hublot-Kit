@@ -112,5 +112,5 @@ func openProcFS(docker dockerx.Client, info dockerx.ContainerInfo, read func(int
 	if err != nil {
 		return nil, err
 	}
-	return &procFS{root: root, pid: info.Pid, pidfd: pidfd, docker: docker, mounts: info.Mounts}, nil
+	return &procFS{root: root, pid: info.Pid, pidfd: pidfd, docker: docker, mounts: info.Mounts, tmpfs: info.Tmpfs}, nil
 }
