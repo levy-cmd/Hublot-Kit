@@ -38,7 +38,17 @@ type Fake struct {
 	// failed ones included (read them with PutCalls).
 	PutErr error
 	puts   []Put
-	Err    error
+	// LogStreams answers Logs with these raw bytes, by id as given (absent:
+	// ErrNotFound). LogsErr, when set, is returned instead.
+	LogStreams map[string][]byte
+	LogsErr    error
+	// LogsGate, when not nil, holds every logs stream after its bytes (a
+	// container that keeps running) until it is closed (end of stream) or
+	// the context ends (ctx.Err()).
+	LogsGate   chan struct{}
+	LogsCloses atomic.Int32
+	logsCalls  []LogsOptions
+	Err        error
 }
 
 // Put is one PutArchive call: the tar is read whole.
@@ -117,6 +127,54 @@ func (f *Fake) PutArchive(_ context.Context, id, dir string, content io.Reader) 
 	}
 	return f.PutErr
 }
+
+func (f *Fake) Logs(ctx context.Context, id string, opt LogsOptions) (io.ReadCloser, error) {
+	f.mu.Lock()
+	f.logsCalls = append(f.logsCalls, opt)
+	f.mu.Unlock()
+	if f.Err != nil {
+		return nil, f.Err
+	}
+	if f.LogsErr != nil {
+		return nil, f.LogsErr
+	}
+	b, ok := f.LogStreams[id]
+	if !ok {
+		return nil, fmt.Errorf("%w : %s", ErrNotFound, id)
+	}
+	return &logsStream{Reader: bytes.NewReader(b), ctx: ctx, gate: f.LogsGate, closes: &f.LogsCloses}, nil
+}
+
+// LogsCalls returns a copy of the options of every Logs call.
+func (f *Fake) LogsCalls() []LogsOptions {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.logsCalls)
+}
+
+// logsStream serves its bytes, then waits at the gate, if any.
+type logsStream struct {
+	*bytes.Reader
+	ctx    context.Context
+	gate   chan struct{}
+	closes *atomic.Int32
+}
+
+func (s *logsStream) Read(p []byte) (int, error) {
+	if s.Reader.Len() > 0 {
+		return s.Reader.Read(p)
+	}
+	if s.gate != nil {
+		select {
+		case <-s.gate:
+		case <-s.ctx.Done():
+			return 0, s.ctx.Err()
+		}
+	}
+	return 0, io.EOF
+}
+
+func (s *logsStream) Close() error { s.closes.Add(1); return nil }
 
 // PutCalls returns a copy of the PutArchive calls, read under the lock.
 func (f *Fake) PutCalls() []Put {

@@ -45,6 +45,10 @@ type ContainerInfo struct {
 	// Tmpfs: destinations of --tmpfs (HostConfig.Tmpfs), sorted. Absent from
 	// Mounts; Docker never writes into them (plan Explorateur 3, Q21).
 	Tmpfs []string
+	// Tty: the logs come as one raw stream, not multiplexed (F6).
+	Tty bool
+	// LogDriver: HostConfig.LogConfig.Type ("json-file", "local", "none"…).
+	LogDriver string
 }
 
 // Change is one entry of GET /containers/{id}/changes (F5).
@@ -99,6 +103,11 @@ type Client interface {
 	// Docker never replaces a directory by a file (noOverwriteDirNonDir) and
 	// keeps the UID/GID of the tar headers (no copyUIDGID).
 	PutArchive(ctx context.Context, id, dir string, content io.Reader) error
+	// Logs is GET /containers/{id}/logs with stdout, stderr and timestamps
+	// (F6): the raw stream, multiplexed unless the container has a TTY; read
+	// it with ReadLogs. The caller closes it; it also ends with ctx.
+	// ErrNoLogs when the logging driver cannot be read.
+	Logs(ctx context.Context, id string, opt LogsOptions) (io.ReadCloser, error)
 }
 
 type engine struct{ c *client.Client }
@@ -197,7 +206,11 @@ func fromInspect(c container.InspectResponse) ContainerInfo {
 			Type: string(m.Type), Name: m.Name, Source: m.Source, Destination: m.Destination, Driver: m.Driver,
 		})
 	}
+	if c.Config != nil {
+		info.Tty = c.Config.Tty
+	}
 	if c.HostConfig != nil {
+		info.LogDriver = c.HostConfig.LogConfig.Type
 		for d := range c.HostConfig.Tmpfs {
 			info.Tmpfs = append(info.Tmpfs, d)
 		}
