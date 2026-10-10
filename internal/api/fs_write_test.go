@@ -6,7 +6,9 @@ package api
 import (
 	"archive/tar"
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"mime/multipart"
@@ -16,6 +18,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/levy-cmd/hublot-kit/internal/dockerx"
 	"github.com/levy-cmd/hublot-kit/internal/files"
@@ -300,5 +303,51 @@ func TestWriteTooLargeBodies(t *testing.T) {
 	}
 	if n := f.auditWrites(t); n != 0 {
 		t.Errorf("%d ligne(s) file.write", n)
+	}
+}
+
+// Two parts "file": refused (ambiguous name), nothing written or audited.
+func TestUploadSecondFilePartRefused(t *testing.T) {
+	f, c := writeFixture(t, false)
+	var b bytes.Buffer
+	mw := multipart.NewWriter(&b)
+	for _, n := range []string{"a.txt", "b.txt"} {
+		p, _ := mw.CreateFormFile("file", n)
+		p.Write([]byte("x"))
+	}
+	mw.Close()
+	rec := f.send("POST", "/api/containers/web/fs/upload?dir=/etc", b.Bytes(), c, map[string]string{"Content-Type": mw.FormDataContentType(), "If-None-Match": "*"})
+	if rec.Code != http.StatusBadRequest || errCode(t, rec) != "invalid_name" {
+		t.Fatalf("deux champs file : %d %s", rec.Code, rec.Body)
+	}
+	if n := len(f.docker.PutCalls()); n != 0 {
+		t.Fatalf("PutArchive appelé %d fois", n)
+	}
+	if n := f.auditWrites(t); n != 0 {
+		t.Fatalf("%d ligne(s) file.write", n)
+	}
+}
+
+// A write that outlives the guard's timeout says it may still succeed.
+func TestWriteTimeoutDetail(t *testing.T) {
+	f, c := writeFixture(t, false)
+	block := make(chan struct{})
+	defer close(block)
+	s := &server{
+		d:     Deps{Docker: f.docker},
+		guard: newFSGuard(1, 20*time.Millisecond),
+		files: &files.Writer{Docker: f.docker, Open: func(ctx context.Context, id string) (fsview.FS, error) {
+			<-block
+			return nil, errors.New("unreachable")
+		}},
+	}
+	_ = c
+	r := httptest.NewRequest("PUT", "/api/containers/web/fs/file?path=/etc/app.conf", strings.NewReader("x"))
+	r.SetPathValue("id", "web")
+	r.Header.Set("If-Match", files.ETag([]byte("port=80\n")))
+	rec := httptest.NewRecorder()
+	s.fsEdit(rec, r)
+	if rec.Code != http.StatusGatewayTimeout || !strings.Contains(rec.Body.String(), "peut encore aboutir") {
+		t.Fatalf("délai de la garde : %d %s", rec.Code, rec.Body)
 	}
 }

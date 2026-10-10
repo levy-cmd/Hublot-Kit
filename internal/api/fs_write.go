@@ -37,7 +37,7 @@ func (s *server) fsEdit(w http.ResponseWriter, r *http.Request) {
 	}, nil)
 	release()
 	if err != nil {
-		writeFSError(w, err)
+		writeGuardError(w, err)
 		return
 	}
 	w.Header().Set("ETag", tag)
@@ -67,7 +67,7 @@ func (s *server) fsUpload(w http.ResponseWriter, r *http.Request) {
 	}, nil)
 	release()
 	if err != nil {
-		writeFSError(w, err)
+		writeGuardError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, map[string]string{"path": written, "etag": files.ETag(content)})
@@ -85,10 +85,13 @@ func readUpload(r *http.Request) (string, []byte, error) {
 	if err != nil {
 		return "", nil, fmt.Errorf("%w : corps multipart attendu (%v)", files.ErrInvalidName, err)
 	}
+	var name string
+	var content []byte
+	found := false
 	for {
 		part, err := mr.NextPart()
 		if err == io.EOF {
-			return "", nil, fmt.Errorf("%w : aucun champ file", files.ErrInvalidName)
+			break
 		}
 		if err != nil {
 			return "", nil, err
@@ -97,16 +100,35 @@ func readUpload(r *http.Request) (string, []byte, error) {
 			part.Close()
 			continue
 		}
+		if found { // a second "file": the name would be ambiguous
+			part.Close()
+			return "", nil, fmt.Errorf("%w : plusieurs champs file", files.ErrInvalidName)
+		}
 		_, params, err := mime.ParseMediaType(part.Header.Get("Content-Disposition"))
 		if err != nil {
+			part.Close()
 			return "", nil, fmt.Errorf("%w : %v", files.ErrInvalidName, err)
 		}
 		b, err := io.ReadAll(io.LimitReader(part, files.MaxUploadBytes+1))
+		part.Close()
 		if err != nil {
 			return "", nil, err
 		}
-		return params["filename"], b, nil
+		name, content, found = params["filename"], b, true
 	}
+	if !found {
+		return "", nil, fmt.Errorf("%w : aucun champ file", files.ErrInvalidName)
+	}
+	return name, content, nil
+}
+
+// writeGuardError answers a failed guarded write. On a timeout or an
+// abandoned request the write goes on in the background: say so.
+func writeGuardError(w http.ResponseWriter, err error) {
+	if errors.Is(err, errTimeout) {
+		err = fmt.Errorf("%w ; l'écriture peut encore aboutir : rechargez le fichier pour le vérifier", err)
+	}
+	writeFSError(w, err)
 }
 
 // isTooLarge: the body went past http.MaxBytesReader.
