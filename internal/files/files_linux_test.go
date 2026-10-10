@@ -87,9 +87,17 @@ func TestProcLinksRefused(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(root, "evil", "MARKER")); err != nil {
 		t.Fatalf("contrôle : le lien /evil devait mener à l'hôte : %v", err)
 	}
+	// The If-Match matches what a followed link would reach, so the trap
+	// goes as far as PutArchive.
+	tagOf := func(p string) string {
+		if p == "/evil/MARKER" {
+			return ETag([]byte("HOST-SECRET"))
+		}
+		return xTag
+	}
 	edits := []string{"/lf", "/ld/f.txt", "/evil/MARKER", "/d/dangling"}
 	for _, p := range edits {
-		if _, err := w.Edit(ctx, ctr, p, []byte("y"), xTag); !errors.Is(err, fsview.ErrLinkInPath) {
+		if _, err := w.Edit(ctx, ctr, p, []byte("y"), tagOf(p)); !errors.Is(err, fsview.ErrLinkInPath) {
 			t.Errorf("édition %s : %v, attendu ErrLinkInPath", p, err)
 		}
 	}

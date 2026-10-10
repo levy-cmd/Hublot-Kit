@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -104,7 +105,7 @@ func newRig(t *testing.T, readOnly bool) *rig {
 			}
 			return r.mem, nil
 		},
-		Forget: func(id string) { r.forgot = append(r.forgot, id) },
+		Forget: func(id string) { r.forgot = append(r.forgot, id); r.j.record("forget:" + id) },
 	}
 	return r
 }
@@ -186,8 +187,8 @@ func TestEditOrderAndTar(t *testing.T) {
 	if got != ETag([]byte("10.0.0.1 db\n")) {
 		t.Errorf("nouvel ETag : %s", got)
 	}
-	if s := r.j.Steps(); !slices.Equal(s, []string{"audit:intent", "put:/etc", "audit:ok"}) {
-		t.Fatalf("ordre : %v, attendu audit → écriture → audit", s)
+	if s := r.j.Steps(); !slices.Equal(s, []string{"audit:intent", "put:/etc", "forget:" + cid, "audit:ok"}) {
+		t.Fatalf("ordre : %v, attendu audit → écriture → oubli de l'index → audit", s)
 	}
 	for _, e := range r.j.events {
 		if e.Action != "file.write" || e.Container != cid || e.Path != "/etc/app.conf" {
@@ -216,11 +217,14 @@ func TestUploadOrderAndTar(t *testing.T) {
 	if err != nil || got != "/etc/new.conf" {
 		t.Fatalf("Upload : %q %v", got, err)
 	}
-	if s := r.j.Steps(); !slices.Equal(s, []string{"audit:intent", "put:/etc", "audit:ok"}) {
-		t.Fatalf("ordre : %v", s)
+	if s := r.j.Steps(); !slices.Equal(s, []string{"audit:intent", "put:/etc", "forget:" + cid, "audit:ok"}) {
+		t.Fatalf("ordre : %v, attendu audit → écriture → oubli de l'index → audit", s)
 	}
 	if e := r.j.events[0]; e.Action != "file.upload" || e.Path != "/etc/new.conf" {
 		t.Errorf("événement : %+v", e)
+	}
+	if !slices.Equal(r.forgot, []string{cid}) {
+		t.Errorf("Forget après un envoi : %v", r.forgot)
 	}
 	h, body := entryOf(t, r.fake.PutCalls()[0].Tar)
 	if h.Name != "new.conf" || body != "port=80\n" || h.Mode != 0o644 || h.Uid != 7 || h.Gid != 8 {
@@ -236,7 +240,9 @@ func TestUploadOrderAndTar(t *testing.T) {
 func TestUploadInvalidName(t *testing.T) {
 	for _, n := range []string{"", ".", "..", "a/b", "/x", "x/", "a\x00b", strings.Repeat("n", 256),
 		`a\b`, "a\nb", "a\x7fb", "a\u0085b", "\xffx", // backslash, C0, DEL, C1, not UTF-8
-		"txt.\u202eexe", "a\u2028b", "a\u2029b", "a\u200bb"} { // bidi override, line and paragraph separators, zero width
+		"txt.\u202eexe", "a\u2028b", "a\u2029b", "a\u200bb", // bidi override, line and paragraph separators, zero width
+		"a\u2066b", "a\u2067b", "a\u2068b", "a\u2069b", "a\u200eb", "a\u061cb", "a\tb", // bidi isolates, marks, tab
+		strings.Repeat("é", 128)} { // 256 bytes in 128 runes
 		r := newRig(t, false)
 		if _, err := r.w.Upload(ctx, ctr, "/etc", n, []byte("x"), "*"); !errors.Is(err, ErrInvalidName) {
 			t.Errorf("nom %q : %v, attendu ErrInvalidName", n, err)
@@ -246,7 +252,7 @@ func TestUploadInvalidName(t *testing.T) {
 		}
 		r.nothingWritten(t)
 	}
-	for _, n := range []string{strings.Repeat("n", 255), "été 2026.txt", "-x"} {
+	for _, n := range []string{strings.Repeat("n", 255), strings.Repeat("é", 127), "été 2026.txt", "-x"} {
 		r := newRig(t, false)
 		if _, err := r.w.Upload(ctx, ctr, "/etc", n, nil, "*"); err != nil {
 			t.Errorf("nom %q : %v", n, err)
@@ -265,11 +271,22 @@ func TestUploadNeverReplaces(t *testing.T) {
 	if _, err := r.w.Upload(ctx, ctr, "/etc", "conf.d", []byte("x"), "*"); !errors.Is(err, ErrConflict) {
 		t.Fatalf("dossier existant : %v, attendu ErrConflict", err)
 	}
-	r = newRig(t, false)
-	if _, err := r.w.Upload(ctx, ctr, "/etc", "new", []byte("x"), ""); !errors.Is(err, ErrConflict) {
-		t.Fatalf("sans If-None-Match: * : %v, attendu ErrConflict", err)
-	}
 	r.nothingWritten(t)
+	// The name is absent: only the precondition refuses, and the same name
+	// with "*" is created.
+	r = newRig(t, false)
+	for _, h := range []string{"", `"*"`, "W/*"} {
+		if _, err := r.w.Upload(ctx, ctr, "/etc", "new", []byte("x"), h); !errors.Is(err, ErrConflict) {
+			t.Fatalf("nom absent, If-None-Match %q : %v, attendu ErrConflict", h, err)
+		}
+		r.nothingWritten(t)
+	}
+	if got, err := r.w.Upload(ctx, ctr, "/etc", "new", []byte("x"), "*"); err != nil || got != "/etc/new" {
+		t.Fatalf("même nom avec * : %q %v, attendu la création", got, err)
+	}
+	if n := len(r.fake.PutCalls()); n != 1 {
+		t.Fatalf("%d appels à PutArchive, attendu 1", n)
+	}
 }
 
 func TestLinksRefused(t *testing.T) {
@@ -369,8 +386,8 @@ func TestPutFailureIsAudited(t *testing.T) {
 	if _, err := r.w.Edit(ctx, ctr, "/etc/app.conf", []byte("x"), confTag); !errors.Is(err, dockerx.ErrRefused) {
 		t.Fatalf("Edit : %v", err)
 	}
-	if s := r.j.Steps(); !slices.Equal(s, []string{"audit:intent", "put:/etc", "audit:error"}) {
-		t.Fatalf("ordre : %v", s)
+	if s := r.j.Steps(); !slices.Equal(s, []string{"audit:intent", "put:/etc", "forget:" + cid, "audit:error"}) {
+		t.Fatalf("ordre : %v, attendu audit → écriture (échouée) → oubli de l'index → audit", s)
 	}
 	if e := r.j.events[1]; !strings.Contains(e.Error, "refusé") {
 		t.Errorf("résultat : %+v", e)
@@ -396,6 +413,9 @@ func TestPutSurvivesRequestEnd(t *testing.T) {
 	}
 	if r.put.ctxErr != nil {
 		t.Fatalf("PutArchive a reçu un contexte annulé : %v", r.put.ctxErr)
+	}
+	if s := r.j.Steps(); !slices.Equal(s, []string{"audit:intent", "put:/etc", "forget:" + cid, "audit:ok"}) {
+		t.Fatalf("la requête finie, l'écriture et son résultat suivent : %v", s)
 	}
 }
 
@@ -532,6 +552,9 @@ func TestRefusesWhereDockerDoesNotWrite(t *testing.T) {
 		{"/dev", func(r *rig) error { _, err := r.w.Upload(ctx, c, "/dev/shm", "n", []byte("x"), "*"); return err }},
 		{"/proc", func(r *rig) error { _, err := r.w.Upload(ctx, c, "/proc", "n", []byte("x"), "*"); return err }},
 		{"/sys", func(r *rig) error { _, err := r.w.Upload(ctx, c, "/sys/x", "n", []byte("x"), "*"); return err }},
+		{"--tmpfs, chemin non nettoyé", func(r *rig) error { _, err := r.w.Upload(ctx, c, "/scratch/./sub/", "n", []byte("x"), "*"); return err }},
+		{"/proc, chemin non nettoyé", func(r *rig) error { _, err := r.w.Upload(ctx, c, "//proc/", "n", []byte("x"), "*"); return err }},
+		{"/etc/hosts, chemin non nettoyé", func(r *rig) error { _, err := r.w.Edit(ctx, c, "/etc//hosts", []byte("x"), confTag); return err }},
 	}
 	for _, k := range cases {
 		r := newRig(t, false)
@@ -549,6 +572,14 @@ func TestRefusesWhereDockerDoesNotWrite(t *testing.T) {
 	r.mem.AddDir("/etc/conf.d")
 	if _, err := r.w.Upload(ctx, c, "/etc/conf.d", "n", []byte("x"), "*"); err != nil {
 		t.Errorf("dossier monté : %v", err)
+	}
+	// Negative controls: a longer name is not the forbidden prefix.
+	r = newRig(t, false)
+	r.mem.AddDir("/procx").AddDir("/etc/hosts.d").AddDir("/scratch2")
+	for _, dir := range []string{"/procx", "/etc/hosts.d", "/scratch2"} {
+		if _, err := r.w.Upload(ctx, c, dir, "n", []byte("x"), "*"); err != nil {
+			t.Errorf("%s : %v, la règle ne vise que le dossier et ce qu'il contient", dir, err)
+		}
 	}
 }
 
@@ -574,6 +605,8 @@ func TestLockWaitAbandoned(t *testing.T) {
 	r := newRig(t, false)
 	g := &gatedPutter{Fake: r.fake, entered: make(chan struct{}, 2), gate: make(chan struct{}), apply: func(string, []byte) {}}
 	r.w.Docker = g
+	var opens atomic.Int32
+	r.w.Open = func(context.Context, string) (fsview.FS, error) { opens.Add(1); return r.mem, nil }
 	first := make(chan error, 1)
 	go func() {
 		_, err := r.w.Edit(ctx, ctr, "/etc/app.conf", []byte("v2\n"), confTag)
@@ -586,7 +619,17 @@ func TestLockWaitAbandoned(t *testing.T) {
 		_, err := r.w.Upload(c, ctr, "/etc", "n", []byte("x"), "*")
 		waiting <- err
 	}()
-	cancel() // the lock is taken: whenever the upload reaches it, only ctx.Done is ready
+	// The upload really waits for the lock (its context is still alive):
+	// it neither returns nor opens the view. Only then does the request end.
+	select {
+	case err := <-waiting:
+		t.Fatalf("l'envoi devait attendre le verrou : %v", err)
+	case <-time.After(150 * time.Millisecond):
+	}
+	if n := opens.Load(); n != 1 {
+		t.Fatalf("%d ouverture(s) de la vue, attendu 1 (celle de l'écriture en cours)", n)
+	}
+	cancel() // only ctx.Done can free the waiting upload
 	select {
 	case err := <-waiting:
 		if !errors.Is(err, context.Canceled) {
@@ -601,6 +644,9 @@ func TestLockWaitAbandoned(t *testing.T) {
 	}
 	if n := len(r.fake.PutCalls()); n != 1 {
 		t.Fatalf("%d appels à PutArchive, attendu 1 (l'envoi abandonné n'écrit rien)", n)
+	}
+	if n := opens.Load(); n != 1 {
+		t.Fatalf("%d ouverture(s) de la vue, l'envoi abandonné n'a rien à ouvrir", n)
 	}
 	r.w.Docker = r.put
 	if _, err := r.w.Upload(ctx, ctr, "/etc", "n2", []byte("x"), "*"); err != nil {
@@ -687,10 +733,19 @@ func TestWritesAreSerialized(t *testing.T) {
 		r := newRig(t, false)
 		g := &gatedPutter{Fake: r.fake, entered: make(chan struct{}, 2), gate: make(chan struct{}),
 			apply: func(dir string, tarball []byte) {
-				h, body := entryOf(t, tarball)
-				r.mem.AddFile(dir+"/"+h.Name, []byte(body))
+				// Not entryOf: t.Fatalf must not run outside the test goroutine.
+				tr := tar.NewReader(bytes.NewReader(tarball))
+				h, err := tr.Next()
+				if err != nil {
+					t.Errorf("tar : %v", err)
+					return
+				}
+				body, _ := io.ReadAll(tr)
+				r.mem.AddFile(dir+"/"+h.Name, body)
 			}}
 		r.w.Docker = g
+		var opens atomic.Int32
+		r.w.Open = func(context.Context, string) (fsview.FS, error) { opens.Add(1); return r.mem, nil }
 		errs := make(chan error, 2)
 		go func() { errs <- k.write(r.w) }()
 		<-g.entered // the first write is inside PutArchive
@@ -699,6 +754,11 @@ func TestWritesAreSerialized(t *testing.T) {
 		case <-g.entered:
 			t.Fatalf("%s : la seconde écriture a passé ses contrôles pendant la première", k.name)
 		case <-time.After(200 * time.Millisecond):
+		}
+		// The lock comes before the view: a second request that opened it (or
+		// read the file) now would work on a view older than the first write.
+		if n := opens.Load(); n != 1 {
+			t.Fatalf("%s : %d ouverture(s) de la vue pendant la première écriture, attendu 1 : verrou pris trop tard", k.name, n)
 		}
 		close(g.gate)
 		e1, e2 := <-errs, <-errs
