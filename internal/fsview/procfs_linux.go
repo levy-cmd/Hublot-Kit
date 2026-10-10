@@ -136,17 +136,27 @@ func (p *procFS) Open(_ context.Context, name string) (io.ReadCloser, error) {
 	return f, nil
 }
 
-func (p *procFS) StatNoLinks(_ context.Context, name string) (Entry, error) {
-	clean := CleanPath(name)
+// openNoLinks opens the clean path with O_PATH, no symbolic link followed
+// anywhere (ErrLinkInPath), never out of the root. The caller closes fd.
+func (p *procFS) openNoLinks(clean string) (int, error) {
 	fd, err := unix.Openat2(int(p.root.Fd()), clean, &unix.OpenHow{
 		Flags:   unix.O_PATH | unix.O_CLOEXEC,
 		Resolve: unix.RESOLVE_IN_ROOT | unix.RESOLVE_NO_SYMLINKS | unix.RESOLVE_NO_MAGICLINKS,
 	})
 	if errors.Is(err, unix.ELOOP) {
-		return Entry{}, fmt.Errorf("%w : %s", ErrLinkInPath, clean)
+		return -1, fmt.Errorf("%w : %s", ErrLinkInPath, clean)
 	}
 	if err != nil {
-		return Entry{}, &fs.PathError{Op: "openat2", Path: clean, Err: err}
+		return -1, &fs.PathError{Op: "openat2", Path: clean, Err: err}
+	}
+	return fd, nil
+}
+
+func (p *procFS) StatNoLinks(_ context.Context, name string) (Entry, error) {
+	clean := CleanPath(name)
+	fd, err := p.openNoLinks(clean)
+	if err != nil {
+		return Entry{}, err
 	}
 	defer unix.Close(fd)
 	if err := checkNotPseudo(fd, clean); err != nil {

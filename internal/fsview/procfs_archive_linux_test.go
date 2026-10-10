@@ -174,3 +174,26 @@ func TestCheckArchiveDestinationUnderSymlink(t *testing.T) {
 		t.Fatalf("socket Docker sous /var/run -> /run : %v", err)
 	}
 }
+
+// Review I1 (plan 3): a write needs the view's root to be the container's
+// root. A mount table without "/" (process chrooted) refuses it. The mount
+// table is faked: a real chrooted child needs a binary inside the jail.
+func TestCheckWriteRoot(t *testing.T) {
+	p, _ := childView(t)
+	if err := p.CheckWriteRoot(ctx); err != nil {
+		t.Fatalf("process non chrooté : %v", err)
+	}
+	old := readMountinfo
+	t.Cleanup(func() { readMountinfo = old })
+	readMountinfo = func(int) ([]byte, error) {
+		return []byte("36 35 8:1 / /etc rw - ext4 /dev/sda1 rw\n"), nil
+	}
+	err := p.CheckWriteRoot(ctx)
+	if !errors.Is(err, ErrForbiddenPath) || !strings.Contains(err.Error(), "racine") {
+		t.Fatalf("racine déplacée : %v, attendu ErrForbiddenPath", err)
+	}
+	readMountinfo = func(int) ([]byte, error) { return nil, errors.New("illisible") }
+	if err := p.CheckWriteRoot(ctx); err == nil {
+		t.Fatal("mountinfo illisible : doit échouer fermé")
+	}
+}

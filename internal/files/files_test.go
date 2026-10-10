@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"slices"
@@ -794,5 +795,36 @@ func TestEditRefusesMountPoint(t *testing.T) {
 	r.w.Open = func(context.Context, string) (fsview.FS, error) { return view, nil }
 	if _, err := r.w.Edit(ctx, ctr, "/etc/app.conf", []byte("x"), confTag); err != nil {
 		t.Fatalf("contrôle, fichier ordinaire : %v", err)
+	}
+}
+
+// rootView is MemFS plus the root check of a running container
+// (fsview.WriteRootChecker, implemented by procfs).
+type rootView struct {
+	*fsview.MemFS
+	err error
+}
+
+func (v rootView) CheckWriteRoot(context.Context) error { return v.err }
+
+// Review I1: with a chrooted PID 1 the view shows another tree than the one
+// Docker writes in. The view says so: no edit, no upload, no audit line, no
+// PutArchive. A view that vouches for its root writes as usual.
+func TestWriteRefusedWhenRootIsNotContainerRoot(t *testing.T) {
+	r := newRig(t, false)
+	view := rootView{MemFS: r.mem, err: fmt.Errorf("%w : racine du process déplacée", fsview.ErrForbiddenPath)}
+	r.w.Open = func(context.Context, string) (fsview.FS, error) { return view, nil }
+	if _, err := r.w.Edit(ctx, ctr, "/etc/app.conf", []byte("x"), confTag); !errors.Is(err, fsview.ErrForbiddenPath) {
+		t.Fatalf("édition, racine déplacée : %v, attendu ErrForbiddenPath", err)
+	}
+	r.nothingWritten(t)
+	if _, err := r.w.Upload(ctx, ctr, "/etc", "new.conf", []byte("x"), "*"); !errors.Is(err, fsview.ErrForbiddenPath) {
+		t.Fatalf("envoi, racine déplacée : %v, attendu ErrForbiddenPath", err)
+	}
+	r.nothingWritten(t)
+	view.err = nil
+	r.w.Open = func(context.Context, string) (fsview.FS, error) { return view, nil }
+	if _, err := r.w.Edit(ctx, ctr, "/etc/app.conf", []byte("x"), confTag); err != nil {
+		t.Fatalf("contrôle, racine du conteneur : %v", err)
 	}
 }

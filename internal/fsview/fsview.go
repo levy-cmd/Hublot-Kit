@@ -50,6 +50,14 @@ type MountPointChecker interface {
 	IsMountPoint(ctx context.Context, path string) (bool, error)
 }
 
+// WriteRootChecker is implemented by a view that can prove its root is the
+// container's root (procfs: the mount table of the pinned process shows "/").
+// With a chrooted PID 1 the view shows another tree than the one Docker
+// writes in: package files refuses every write then (review I1, plan 3).
+type WriteRootChecker interface {
+	CheckWriteRoot(ctx context.Context) error
+}
+
 // FS is a read view of a container's tree. Paths are container paths;
 // List, Stat and Open follow symbolic links, never out of the container root.
 type FS interface {

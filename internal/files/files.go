@@ -109,6 +109,9 @@ func (w *Writer) Edit(ctx context.Context, c dockerx.ContainerInfo, p string, co
 		return "", err
 	}
 	defer fsys.Close()
+	if err := checkRoot(ctx, fsys); err != nil {
+		return "", err
+	}
 	e, err := fsys.StatNoLinks(ctx, target)
 	if err != nil {
 		return "", err
@@ -179,6 +182,9 @@ func (w *Writer) Upload(ctx context.Context, c dockerx.ContainerInfo, dir, name 
 		return "", err
 	}
 	defer fsys.Close()
+	if err := checkRoot(ctx, fsys); err != nil {
+		return "", err
+	}
 	d, err := fsys.StatNoLinks(ctx, parent)
 	if err != nil {
 		return "", err
@@ -235,6 +241,15 @@ func (w *Writer) put(ctx context.Context, action, id, target string, tarball []b
 		slog.Error("audit write", "err", aerr, "action", action, "path", target)
 	}
 	return err
+}
+
+// checkRoot: the view must show the container's own root, else it checks a
+// tree Docker does not write in (a chrooted PID 1; review I1).
+func checkRoot(ctx context.Context, fsys fsview.FS) error {
+	if rc, ok := fsys.(fsview.WriteRootChecker); ok {
+		return rc.CheckWriteRoot(ctx)
+	}
+	return nil
 }
 
 // readCapped reads the current file through the view (regular files only),

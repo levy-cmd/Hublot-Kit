@@ -33,23 +33,17 @@ func (p *procFS) IsMountPoint(_ context.Context, name string) (bool, error) {
 }
 
 func (p *procFS) mountIDNoLinks(clean string) (uint64, error) {
-	fd, err := unix.Openat2(int(p.root.Fd()), clean, &unix.OpenHow{
-		Flags:   unix.O_PATH | unix.O_CLOEXEC,
-		Resolve: unix.RESOLVE_IN_ROOT | unix.RESOLVE_NO_SYMLINKS | unix.RESOLVE_NO_MAGICLINKS,
-	})
-	if errors.Is(err, unix.ELOOP) {
-		return 0, fmt.Errorf("%w : %s", ErrLinkInPath, clean)
-	}
+	fd, err := p.openNoLinks(clean)
 	if err != nil {
-		return 0, &fs.PathError{Op: "openat2", Path: clean, Err: err}
+		return 0, err
 	}
 	defer unix.Close(fd)
-	var st unix.Statx_t
-	if err := unix.Statx(fd, "", unix.AT_EMPTY_PATH, unix.STATX_MNT_ID, &st); err != nil {
-		return 0, &fs.PathError{Op: "statx", Path: clean, Err: err}
+	st, err := statxMountID(fd, 0, 0)
+	if errors.Is(err, errNoMountID) {
+		return 0, fmt.Errorf("%w : point de montage indécidable", err)
 	}
-	if st.Mask&unix.STATX_MNT_ID == 0 {
-		return 0, errors.New("statx sans STATX_MNT_ID (noyau antérieur à 5.8) : point de montage indécidable")
+	if err != nil {
+		return 0, &fs.PathError{Op: "statx", Path: clean, Err: err}
 	}
 	return st.Mnt_id, nil
 }
