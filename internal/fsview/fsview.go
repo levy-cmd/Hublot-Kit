@@ -42,6 +42,14 @@ type OpenChecker interface {
 	CheckOpen(ctx context.Context, path string) error
 }
 
+// MountPointChecker is implemented by a view that can tell whether a path
+// is a mount point of the running container (procfs: STATX_MNT_ID of the
+// path and of its parent, no link followed). Package files refuses to edit
+// one: Docker writes in its own view of the mounts (plan Explorateur 3, Q21).
+type MountPointChecker interface {
+	IsMountPoint(ctx context.Context, path string) (bool, error)
+}
+
 // FS is a read view of a container's tree. Paths are container paths;
 // List, Stat and Open follow symbolic links, never out of the container root.
 type FS interface {
