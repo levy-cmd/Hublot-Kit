@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestSecretName(t *testing.T) {
@@ -17,6 +18,9 @@ func TestSecretName(t *testing.T) {
 		"GITHUB_TOKEN", "api_key", "AWS_SECRET_ACCESS_KEY", "SECRET", "GOOGLE_APPLICATION_CREDENTIALS",
 		"PRIVATE_KEY_PATH", "SENTRY_DSN", "dsn",
 		"KEYBOARD", "COMPASS", // false positives the substring rule accepts (spec §7)
+		// Fix round 1, Codex: format characters are dropped, then a name with a
+		// non-ASCII letter is suspect (fail closed).
+		"DB_PA\u200bSSWORD", "DB_P\u0410SSWORD", "\uff30\uff21\uff33\uff33",
 	} {
 		if !SecretName(n) {
 			t.Errorf("%s : non masqué", n)
@@ -179,6 +183,23 @@ func TestArgs(t *testing.T) {
 		{[]string{"nginx", "-g", "daemon off;"}, []string{"nginx", "-g", "daemon off;"}, false},
 		{[]string{"env", "API_TOKEN=abc", "run"}, []string{"env", "API_TOKEN=" + Mask, "run"}, true},
 		{nil, nil, false},
+		// Fix round 1, I2: the mask must follow THE word's own separator; the mask
+		// of another key in the same word does not cover it.
+		{[]string{"app", "--opts=password:s3cr3t,token=abc"}, []string{"app", Mask}, true},
+		{[]string{"sh", "-c", "app password:s3cr3t,token=abc"}, []string{"sh", "-c", Mask}, true},
+		{[]string{"app", "-Dauth=password:s3cr3t;key=abc"}, []string{"app", Mask}, true},
+		// Fix round 1, I3 (Q27): Pwd is a secret key in an assignment too.
+		{[]string{"app", "--pwd=s3cr3t"}, []string{"app", "--pwd=" + Mask}, true},
+		{[]string{"app", "Pwd=s3cr3t"}, []string{"app", "Pwd=" + Mask}, true},
+		// Fix round 1, Minor: JSON, an escaped blank, a bearer token.
+		{[]string{"curl", "-d", `{"password":"s3cr3t"}`, "http://x"}, []string{"curl", "-d", Mask, "http://x"}, true},
+		{[]string{"sh", "-c", `curl -d '{"user":"a","password":"s3cr3t"}' http://x`}, []string{"sh", "-c", Mask}, true},
+		{[]string{"sh", "-c", `PGPASSWORD=s3\ cr3t psql`}, []string{"sh", "-c", "PGPASSWORD=" + Mask + " psql"}, true},
+		{[]string{"sh", "-c", `app --password s3\ cr3t --x`}, []string{"sh", "-c", "app --password " + Mask + " --x"}, true},
+		{[]string{"curl", "-H", "Authorization: Bearer s3cr3t", "http://x"}, []string{"curl", "-H", "Authorization: Bearer " + Mask, "http://x"}, true},
+		{[]string{"sh", "-c", "curl -H 'Authorization: Basic s3cr3t' http://x"}, []string{"sh", "-c", "curl -H 'Authorization: Basic " + Mask + "' http://x"}, true},
+		// Over the cap: masked whole (fail closed).
+		{[]string{"app", strings.Repeat("a", maxLen+1)}, []string{"app", Mask}, true},
 	}
 	for _, k := range cases {
 		got, masked := Args(k.in)
@@ -209,4 +230,58 @@ func TestLine(t *testing.T) {
 	if got := Line(`exec: "--password=s3cr3t": unknown`); strings.Contains(got, "cr3t") {
 		t.Errorf("FUITE : %q", got)
 	}
+	// Fix round 1: JSON, and the cap.
+	if got := Line(`{"password":"s3cr3t"}`); got != Mask {
+		t.Errorf("JSON : %q", got)
+	}
+	if got := Line(strings.Repeat("a", maxLen+1)); got != Mask {
+		t.Errorf("au-dessus du plafond : %.20q", got)
+	}
+}
+
+func TestEnvUnicodeAndBearer(t *testing.T) {
+	for _, kv := range []string{"DB_PA\u200bSSWORD=s3cr3t", "DB_P\u0410SSWORD=s3cr3t", "HEALTH=curl -H 'Authorization: Bearer s3cr3t'"} {
+		if v := Env([]string{kv})[0]; !v.Masked || v.Value != nil {
+			t.Errorf("%q : non masqué", kv)
+		}
+	}
+}
+
+// within fails the test if f takes longer than d (f runs in a goroutine so
+// that a quadratic cost fails the test instead of hanging it).
+func within(t *testing.T, name string, d time.Duration, f func()) {
+	t.Helper()
+	done := make(chan struct{})
+	start := time.Now()
+	go func() { f(); close(done) }()
+	select {
+	case <-done:
+		if el := time.Since(start); el > d {
+			t.Errorf("%s : %v, plafond %v", name, el, d)
+		}
+	case <-time.After(5 * time.Second):
+		t.Errorf("%s : plus de 5 s, coût non linéaire", name)
+	}
+}
+
+// Fix round 1, I1: the cost of the masking is linear, and a value over the
+// cap is masked whole.
+func TestCost(t *testing.T) {
+	big := strings.Repeat("a=", 1<<16) // 128 KiB
+	within(t, "Masked 128 Kio", 100*time.Millisecond, func() {
+		if !Masked("X", big) {
+			t.Error("au-dessus du plafond : non masqué")
+		}
+	})
+	within(t, "Line 128 Kio", 100*time.Millisecond, func() { Line(strings.Repeat("key", 43690)) })
+	within(t, "Args 128 Kio", 100*time.Millisecond, func() {
+		if _, m := Args([]string{"app", "--x=" + big}); !m {
+			t.Error("au-dessus du plafond : non masqué")
+		}
+	})
+	// Just under the cap: the work itself must be linear.
+	within(t, "Masked a= sous le plafond", 250*time.Millisecond, func() { Masked("X", strings.Repeat("a=", maxLen/2-1)) })
+	within(t, "Masked k=v, sous le plafond", 250*time.Millisecond, func() { Masked("X", strings.Repeat("k=v,", maxLen/4-1)) })
+	within(t, "Line key sous le plafond", 250*time.Millisecond, func() { Line(strings.Repeat("key", maxLen/3-1)) })
+	within(t, "Args sous le plafond", 250*time.Millisecond, func() { Args([]string{"app", "--attrs=" + strings.Repeat("service.name=x,", 500)}) })
 }
