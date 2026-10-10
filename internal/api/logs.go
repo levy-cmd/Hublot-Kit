@@ -311,7 +311,10 @@ func (s *server) logsStream(w http.ResponseWriter, r *http.Request) {
 			}
 		case l, ok := <-lines:
 			if !ok {
-				if err := <-readErr; err != nil && r.Context().Err() == nil {
+				if r.Context().Err() != nil {
+					return // agent shutting down or client gone: stay silent, the UI reconnects
+				}
+				if err := <-readErr; err != nil {
 					flushDropped()
 					out.failure(err)
 					return
@@ -354,12 +357,21 @@ func (s *server) logsStream(w http.ResponseWriter, r *http.Request) {
 type timedWriter struct {
 	w http.ResponseWriter
 	c *http.ResponseController
+	n *int // bytes that reached the client
 }
 
 func (t timedWriter) Write(p []byte) (int, error) {
 	t.c.SetWriteDeadline(time.Now().Add(sseWriteTimeout))
-	return t.w.Write(p)
+	n, err := t.w.Write(p)
+	*t.n += n
+	return n, err
 }
+
+// downloadIdle: a download gives up when Docker sends no line for this long
+// (same order as files.PutTimeout). It is an idle limit, not a total one: a
+// huge journal may take long, a silent Docker may not hold the request and
+// its slot.
+var downloadIdle = time.Minute
 
 // safeName keeps [A-Za-z0-9_.-] of a container name, for a file name.
 var unsafeName = regexp.MustCompile(`[^A-Za-z0-9_.-]`)
@@ -379,7 +391,11 @@ func (s *server) logsDownload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer release()
-	rc, err := s.d.Docker.Logs(r.Context(), info.ID, dockerx.LogsOptions{Tail: "all"})
+	ctx, cancel := context.WithCancel(r.Context())
+	defer cancel()
+	idle := time.AfterFunc(downloadIdle, cancel)
+	defer idle.Stop()
+	rc, err := s.d.Docker.Logs(ctx, info.ID, dockerx.LogsOptions{Tail: "all"})
 	if err != nil {
 		writeFSError(w, err)
 		return
@@ -389,8 +405,10 @@ func (s *server) logsDownload(w http.ResponseWriter, r *http.Request) {
 	h := w.Header()
 	h.Set("Content-Type", "application/octet-stream")
 	h.Set("Content-Disposition", `attachment; filename="`+name+`"`)
-	bw := bufio.NewWriterSize(timedWriter{w, http.NewResponseController(w)}, 64<<10)
+	written := 0
+	bw := bufio.NewWriterSize(timedWriter{w, http.NewResponseController(w), &written}, 64<<10)
 	err = dockerx.ReadLogs(rc, info.Tty, maxDownloadLine, func(l dockerx.LogLine) error {
+		idle.Reset(downloadIdle)
 		if !l.TS.IsZero() {
 			bw.WriteString(l.TS.Format(time.RFC3339Nano) + " ")
 		}
@@ -405,5 +423,11 @@ func (s *server) logsDownload(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil && r.Context().Err() == nil {
 		slog.Warn("logs download cut", "container", info.ID, "err", err)
+		if written == 0 {
+			h.Del("Content-Disposition")
+			writeFSError(w, err)
+			return
+		}
+		panic(http.ErrAbortHandler) // cut the connection: the browser shows a failed download
 	}
 }
