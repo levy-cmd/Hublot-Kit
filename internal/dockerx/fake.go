@@ -14,7 +14,7 @@ import (
 // are safe: an index is built in a goroutine, so GetArchive may run while the
 // test reads Calls().
 type Fake struct {
-	mu         sync.Mutex // guards ArchiveCalls
+	mu         sync.Mutex // guards ArchiveCalls and the PutArchive calls
 	Containers []Container
 	// Infos answers Inspect, by full ID or by name (tests add both keys).
 	Infos map[string]ContainerInfo
@@ -30,7 +30,17 @@ type Fake struct {
 	ArchiveCloses atomic.Int32
 	// Volumes answers VolumeOptions, by volume name.
 	Volumes map[string]map[string]string
-	Err     error
+	// PutErr answers PutArchive (nil: success); every call is recorded,
+	// failed ones included (read them with PutCalls).
+	PutErr error
+	puts   []Put
+	Err    error
+}
+
+// Put is one PutArchive call: the tar is read whole.
+type Put struct {
+	ID, Dir string
+	Tar     []byte
 }
 
 func (f *Fake) ListContainers(context.Context) ([]Container, error) {
@@ -81,6 +91,27 @@ func (f *Fake) VolumeOptions(_ context.Context, name string) (map[string]string,
 		return opts, nil
 	}
 	return nil, fmt.Errorf("%w : volume %s", ErrNotFound, name)
+}
+
+func (f *Fake) PutArchive(_ context.Context, id, dir string, content io.Reader) error {
+	b, err := io.ReadAll(content)
+	if err != nil {
+		return err
+	}
+	f.mu.Lock()
+	f.puts = append(f.puts, Put{ID: id, Dir: dir, Tar: b})
+	f.mu.Unlock()
+	if f.Err != nil {
+		return f.Err
+	}
+	return f.PutErr
+}
+
+// PutCalls returns a copy of the PutArchive calls, read under the lock.
+func (f *Fake) PutCalls() []Put {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return slices.Clone(f.puts)
 }
 
 // Calls returns a copy of ArchiveCalls, read under the lock.

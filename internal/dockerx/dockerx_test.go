@@ -8,6 +8,7 @@ import (
 	"net/netip"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -179,5 +180,58 @@ func TestFakeSizesDiffsCalls(t *testing.T) {
 	f.GetArchive(context.Background(), "full", "/")
 	if c := f.Calls(); !slices.Equal(c, []string{"full:/"}) {
 		t.Fatalf("appels : %v", c)
+	}
+}
+
+// Q15: read_only only for the two read-only refusals Docker gives (measured
+// messages); any other InvalidArgument of PutArchive is ErrPutInvalid
+// (conflict: the path changed under us). On the read routes an
+// InvalidArgument stays docker_unavailable.
+func TestWrapPut(t *testing.T) {
+	invalid := func(msg string) error {
+		return fmt.Errorf("Error response from daemon: %s: %w", msg, cerrdefs.ErrInvalidArgument)
+	}
+	for _, msg := range []string{"container rootfs is marked read-only", "mounted volume is marked read-only"} {
+		if err := wrapPut(invalid(msg)); !errors.Is(err, ErrRefused) || errors.Is(err, ErrPutInvalid) || errors.Is(err, ErrUnavailable) {
+			t.Errorf("%s : %v, attendu ErrRefused", msg, err)
+		}
+	}
+	if err := wrapPut(invalid("extraction point is not a directory")); !errors.Is(err, ErrPutInvalid) || errors.Is(err, ErrRefused) {
+		t.Errorf("point d'extraction : %v, attendu ErrPutInvalid", err)
+	}
+	if err := wrapPut(fmt.Errorf("put: %w", cerrdefs.ErrNotFound)); !errors.Is(err, ErrNotFound) {
+		t.Errorf("introuvable : %v", err)
+	}
+	if err := wrap(invalid("container rootfs is marked read-only")); errors.Is(err, ErrRefused) || !errors.Is(err, ErrUnavailable) {
+		t.Errorf("hors PutArchive, InvalidArgument reste ErrUnavailable : %v", err)
+	}
+}
+
+// Q21: the --tmpfs destinations (HostConfig.Tmpfs), sorted.
+func TestFromInspectTmpfs(t *testing.T) {
+	got := fromInspect(container.InspectResponse{ID: "x", HostConfig: &container.HostConfig{Tmpfs: map[string]string{"/tmp": "", "/run": "size=1m"}}})
+	if !reflect.DeepEqual(got.Tmpfs, []string{"/run", "/tmp"}) {
+		t.Fatalf("Tmpfs : %v", got.Tmpfs)
+	}
+	if got := fromInspect(container.InspectResponse{ID: "x"}); got.Tmpfs != nil {
+		t.Fatalf("sans HostConfig : %v", got.Tmpfs)
+	}
+}
+
+func TestFakePutArchive(t *testing.T) {
+	f := &Fake{}
+	if err := f.PutArchive(context.Background(), "abc", "/etc", strings.NewReader("TAR")); err != nil {
+		t.Fatal(err)
+	}
+	puts := f.PutCalls()
+	if len(puts) != 1 || puts[0].ID != "abc" || puts[0].Dir != "/etc" || string(puts[0].Tar) != "TAR" {
+		t.Fatalf("appels : %+v", puts)
+	}
+	f.PutErr = ErrRefused
+	if err := f.PutArchive(context.Background(), "abc", "/etc", strings.NewReader("")); !errors.Is(err, ErrRefused) {
+		t.Fatalf("PutErr : %v", err)
+	}
+	if len(f.PutCalls()) != 2 {
+		t.Fatal("un appel en échec est enregistré aussi")
 	}
 }

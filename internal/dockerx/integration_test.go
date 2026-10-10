@@ -4,9 +4,13 @@ package dockerx
 
 import (
 	"archive/tar"
+	"bytes"
 	"context"
 	"errors"
+	"io"
 	"os/exec"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 )
@@ -135,4 +139,96 @@ func TestMeasureSizeRootFs(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Logf("MESURE : SizeRootFs = %d octets", size) // 0: the progress stays at 0 % (not an error)
+}
+
+// oneFileTar is the tar package files sends: one regular entry, base name.
+func oneFileTar(t *testing.T, name, body string, mode int64, uid, gid int) *bytes.Buffer {
+	t.Helper()
+	var b bytes.Buffer
+	tw := tar.NewWriter(&b)
+	if err := tw.WriteHeader(&tar.Header{Name: name, Typeflag: tar.TypeReg, Mode: mode, Uid: uid, Gid: gid,
+		Size: int64(len(body)), ModTime: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	io.WriteString(tw, body)
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return &b
+}
+
+// PutArchive on a running and on a stopped container: content, mode and
+// owner come from the tar header; the existing file is replaced by a new
+// inode (Docker removes, then creates); Docker's refusals are classified.
+func TestPutArchiveRealDocker(t *testing.T) {
+	run, stopped, ro, rov := "hublot-it-put", "hublot-it-put-stopped", "hublot-it-put-ro", "hublot-it-put-rov"
+	exec.Command("docker", "rm", "-f", run, stopped, ro, rov).Run()
+	for _, args := range [][]string{
+		{"run", "-d", "--name", run, "--tmpfs", "/scratch", "alpine:3", "sleep", "300"},
+		{"create", "--name", stopped, "alpine:3", "true"},
+		{"run", "-d", "--name", ro, "--read-only", "alpine:3", "sleep", "300"},
+		{"run", "-d", "--name", rov, "-v", "hublot-it-put-rov:/data:ro", "alpine:3", "sleep", "300"},
+	} {
+		if out, err := exec.Command("docker", args...).CombinedOutput(); err != nil {
+			t.Fatalf("docker %v : %v %s", args, err, out)
+		}
+	}
+	t.Cleanup(func() {
+		exec.Command("docker", "rm", "-f", run, stopped, ro, rov).Run()
+		exec.Command("docker", "volume", "rm", "hublot-it-put-rov").Run()
+	})
+	c, err := New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	inode := func() string {
+		out, _ := exec.Command("docker", "exec", run, "stat", "-c", "%i", "/etc/motd").Output()
+		return strings.TrimSpace(string(out))
+	}
+	before := inode()
+	if err := c.PutArchive(ctx, run, "/etc", oneFileTar(t, "motd", "bonjour\n", 0o640, 1000, 1001)); err != nil {
+		t.Fatalf("conteneur actif : %v", err)
+	}
+	out, err := exec.Command("docker", "exec", run, "stat", "-c", "%a %u %g %s", "/etc/motd").Output()
+	if err != nil || strings.TrimSpace(string(out)) != "640 1000 1001 8" {
+		t.Fatalf("mode et propriétaire : %q %v", out, err)
+	}
+	t.Logf("MESURE inode de /etc/motd : %s avant, %s après", before, inode())
+
+	if err := c.PutArchive(ctx, stopped, "/etc", oneFileTar(t, "hublot.txt", "arrêté\n", 0o644, 0, 0)); err != nil {
+		t.Fatalf("conteneur arrêté : %v", err)
+	}
+	rc, err := c.GetArchive(ctx, stopped, "/etc/hublot.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rc.Close()
+	tr := tar.NewReader(rc)
+	if _, err := tr.Next(); err != nil {
+		t.Fatal(err)
+	}
+	if b, _ := io.ReadAll(tr); string(b) != "arrêté\n" {
+		t.Fatalf("relu : %q", b)
+	}
+
+	if err := c.PutArchive(ctx, ro, "/etc", oneFileTar(t, "x", "x", 0o644, 0, 0)); !errors.Is(err, ErrRefused) {
+		t.Fatalf("rootfs en lecture seule : %v, attendu ErrRefused", err)
+	}
+	if err := c.PutArchive(ctx, rov, "/data", oneFileTar(t, "x", "x", 0o644, 0, 0)); !errors.Is(err, ErrRefused) {
+		t.Fatalf("volume :ro : %v, attendu ErrRefused", err)
+	}
+	// Q21: the --tmpfs destinations come from Inspect (they are not in Mounts).
+	if info, err := c.Inspect(ctx, run); err != nil || !slices.Equal(info.Tmpfs, []string{"/scratch"}) {
+		t.Fatalf("Tmpfs : %v %v", info.Tmpfs, err)
+	}
+	// A file where a directory was checked (the path changed under us).
+	if err := c.PutArchive(ctx, run, "/etc/motd", oneFileTar(t, "x", "x", 0o644, 0, 0)); !errors.Is(err, ErrPutInvalid) {
+		t.Fatalf("point d'extraction qui n'est pas un dossier : %v, attendu ErrPutInvalid", err)
+	}
+	if err := c.PutArchive(ctx, run, "/absent", oneFileTar(t, "x", "x", 0o644, 0, 0)); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("dossier absent : %v, attendu ErrNotFound", err)
+	}
 }
