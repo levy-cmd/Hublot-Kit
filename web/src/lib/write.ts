@@ -57,7 +57,8 @@ export function languageOf(path: string): Language {
  */
 export function writeErrorMessage(kind: 'edit' | 'upload', code: string, detail?: string, status?: number): string {
 	// A network error is the same case: the request may have reached the agent.
-	if (status === 504 || code === 'network') return t('write.maybeWritten');
+	if (status === 504) return t('write.maybeWritten');
+	if (code === 'network') return t('write.maybeWrittenNetwork');
 	switch (code) {
 		case 'conflict':
 			return t(kind === 'edit' ? 'write.conflictEdit' : 'write.conflictUpload');

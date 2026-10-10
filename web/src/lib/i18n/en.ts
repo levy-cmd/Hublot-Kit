@@ -88,6 +88,8 @@ export const en: Record<Key, string> = {
 	'write.forbidden':
 		'Write refused here: Docker does not write there (mounted file or tmpfs, /etc/hosts, /dev, /proc, /sys), or a mount of the container exposes the host',
 	'write.maybeWritten': 'The agent timed out, but the write may have happened. Reload the file before trying again.',
+	'write.maybeWrittenNetwork':
+		'Connection lost during the write: it may have happened. Reload to check before trying again.',
 	'confirm.edit': 'Save this file in the container?',
 	'confirm.upload': 'Upload this file to the container?',
 	'confirm.container': 'Container',

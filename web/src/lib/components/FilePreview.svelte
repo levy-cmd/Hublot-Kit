@@ -3,6 +3,7 @@
 	import { ApiError, checkDownload, downloadUrl, previewFile, saveFile, type Entry, type Preview } from '#lib/api.ts';
 	import { baseName, downloadErrorMessage, formatMode, formatSize, fsErrorMessage, indexingPercent } from '#lib/files.ts';
 	import { t } from '#lib/i18n/index.ts';
+	import { latest, lock } from '#lib/guard.ts';
 	import { EDIT_MAX, lineSeparatorOf, writeErrorMessage } from '#lib/write.ts';
 	import ConfirmDialog from '#lib/components/ConfirmDialog.svelte';
 	import FileEditor from '#lib/components/FileEditor.svelte';
@@ -25,7 +26,10 @@
 	let reloads = $state(0); // bumped by the Reload button: same path, new request
 	let editing = $state(false);
 	let editor = $state<FileEditor>();
-	let pending = $state<string | null>(null); // text waiting for the confirmation
+	// What the dialog names is exactly what save() sends: frozen when it opens.
+	let pending = $state<{ id: string; path: string; etag: string; text: string } | null>(null);
+	const writes = latest(); // stale-response guard: navigation cancels a write in flight
+	const saveLock = lock();
 	let saving = $state(false);
 	let writeError = $state('');
 	let saved = $state(false);
@@ -37,6 +41,7 @@
 
 	$effect(() => {
 		const wanted = path;
+		void id;
 		void reloads; // dependency: the Reload button re-runs this effect
 		let current = true;
 		let url = '';
@@ -47,6 +52,7 @@
 		downloadError = '';
 		editing = false;
 		pending = null;
+		writes.cancel();
 		writeError = '';
 		saved = false;
 		loading = true;
@@ -92,33 +98,35 @@
 			writeError = t('write.editTooLarge'); // the agent would refuse it: no confirmation
 			return;
 		}
-		pending = text;
+		pending = text !== null && preview?.kind === 'text' ? { id, path, etag: preview.etag, text } : null;
 	}
 
-	async function save() {
-		const text = pending;
-		const wanted = path;
+	function save() {
+		const p = pending;
 		pending = null;
-		if (text === null || preview?.kind !== 'text') return;
+		if (!p || preview?.kind !== 'text') return;
 		const current = preview;
-		saving = true;
-		try {
-			const etag = await saveFile(id, wanted, text, current.etag);
-			if (path !== wanted) return;
-			preview = { ...current, text, etag };
-			editing = false;
-			saved = true;
-		} catch (e) {
-			if (path !== wanted) return;
-			if (e instanceof ApiError && e.status === 401) {
-				goto('/login').catch(() => {});
-				return;
+		void saveLock.run(async () => {
+			const token = writes.begin();
+			saving = true;
+			try {
+				const etag = await saveFile(p.id, p.path, p.text, p.etag);
+				if (!writes.isCurrent(token)) return;
+				preview = { ...current, text: p.text, etag };
+				editing = false;
+				saved = true;
+			} catch (e) {
+				if (!writes.isCurrent(token)) return;
+				if (e instanceof ApiError && e.status === 401) {
+					goto('/login').catch(() => {});
+					return;
+				}
+				writeError =
+					e instanceof ApiError ? writeErrorMessage('edit', e.code, e.detail, e.status) : writeErrorMessage('edit', 'unknown');
+			} finally {
+				saving = false;
 			}
-			writeError =
-				e instanceof ApiError ? writeErrorMessage('edit', e.code, e.detail, e.status) : writeErrorMessage('edit', 'unknown');
-		} finally {
-			saving = false;
-		}
+		});
 	}
 
 	async function download() {
@@ -192,8 +200,8 @@
 {#if pending !== null}
 	<ConfirmDialog
 		title={t('confirm.edit')}
-		container={`${name} (${id.slice(0, 12)})`}
-		{path}
+		container={`${name} (${pending.id.slice(0, 12)})`}
+		path={pending.path}
 		details={stopped ? [t('confirm.stoppedNote')] : []}
 		onconfirm={save}
 		oncancel={() => (pending = null)}

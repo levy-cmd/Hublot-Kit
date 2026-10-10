@@ -54,7 +54,7 @@ describe('writeErrorMessage', () => {
 		expect(writeErrorMessage('edit', 'internal', 'délai dépassé', 504)).toBe(t('write.maybeWritten'));
 		expect(writeErrorMessage('edit', 'internal', undefined, 500)).toBe(t('error.internal'));
 		// Network error during the write: the request may have reached the agent.
-		expect(writeErrorMessage('edit', 'network', undefined, 0)).toBe(t('write.maybeWritten'));
-		expect(writeErrorMessage('upload', 'network')).toBe(t('write.maybeWritten'));
+		expect(writeErrorMessage('edit', 'network', undefined, 0)).toBe(t('write.maybeWrittenNetwork'));
+		expect(writeErrorMessage('upload', 'network')).toBe(t('write.maybeWrittenNetwork'));
 	});
 });

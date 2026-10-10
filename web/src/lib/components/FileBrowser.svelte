@@ -26,6 +26,7 @@
 		sortEntries
 	} from '#lib/files.ts';
 	import { errorMessage, t } from '#lib/i18n/index.ts';
+	import { latest, lock } from '#lib/guard.ts';
 	import { UPLOAD_MAX, writeErrorMessage } from '#lib/write.ts';
 	import ConfirmDialog from '#lib/components/ConfirmDialog.svelte';
 	import FilePreview from '#lib/components/FilePreview.svelte';
@@ -53,7 +54,14 @@
 	let selected = $derived(file ? entries.find((e) => joinPath(dir, e.name) === file) : undefined);
 
 	let picker = $state<HTMLInputElement>();
-	let toUpload = $state<{ file: File; dir: string } | null>(null); // waiting for the confirmation
+	let toUpload = $state<{ id: string; file: File; dir: string } | null>(null); // waiting for the confirmation
+	const uploads = latest(); // stale-response guard: another container cancels an upload in flight
+	const uploadLock = lock();
+	$effect(() => {
+		void id;
+		toUpload = null;
+		return () => uploads.cancel();
+	});
 	let uploading = $state(false);
 	let uploadError = $state('');
 
@@ -136,32 +144,37 @@
 			uploadError = t('write.uploadTooLarge');
 			return;
 		}
-		toUpload = { file: f, dir };
+		toUpload = { id, file: f, dir };
 	}
 
-	async function upload() {
+	function upload() {
 		const u = toUpload;
 		toUpload = null;
 		if (!u) return;
-		uploading = true;
-		try {
-			const res = await uploadFile(id, u.dir, u.file);
-			reloads++;
-			if (dir === u.dir) go(u.dir, res.path);
-		} catch (e) {
-			if (e instanceof ApiError && e.status === 401) {
-				goto('/login').catch(() => {});
-				return;
+		void uploadLock.run(async () => {
+			const token = uploads.begin();
+			uploading = true;
+			try {
+				const res = await uploadFile(u.id, u.dir, u.file);
+				if (!uploads.isCurrent(token)) return;
+				reloads++;
+				if (dir === u.dir) go(u.dir, res.path);
+			} catch (e) {
+				if (!uploads.isCurrent(token)) return;
+				if (e instanceof ApiError && e.status === 401) {
+					goto('/login').catch(() => {});
+					return;
+				}
+				uploadError =
+					e instanceof ApiError
+						? writeErrorMessage('upload', e.code, e.detail, e.status)
+						: writeErrorMessage('upload', 'unknown');
+				// The write may have happened (504, network): the listing is stale.
+				if (e instanceof ApiError && (e.status === 504 || e.code === 'network')) reloads++;
+			} finally {
+				uploading = false;
 			}
-			uploadError =
-				e instanceof ApiError
-					? writeErrorMessage('upload', e.code, e.detail, e.status)
-					: writeErrorMessage('upload', 'unknown');
-			// The write may have happened (504, network): the listing is stale.
-			if (e instanceof ApiError && (e.status === 504 || e.code === 'network')) reloads++;
-		} finally {
-			uploading = false;
-		}
+		});
 	}
 
 	async function downloadDir() {
@@ -268,7 +281,7 @@
 {#if toUpload}
 	<ConfirmDialog
 		title={t('confirm.upload')}
-		container={`${name} (${id.slice(0, 12)})`}
+		container={`${name} (${toUpload.id.slice(0, 12)})`}
 		path={joinPath(toUpload.dir, toUpload.file.name)}
 		details={[
 			`${t('confirm.size')} : ${formatSize(toUpload.file.size)}`,

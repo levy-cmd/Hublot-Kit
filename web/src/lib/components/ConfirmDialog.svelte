@@ -20,11 +20,23 @@
 	} = $props();
 
 	let dialog = $state<HTMLDialogElement>();
+	let busy = false; // set at the first click, before the parent reacts: one confirmation only
+
+	function confirm() {
+		if (busy) return;
+		busy = true;
+		onconfirm();
+	}
 
 	$effect(() => {
 		const d = dialog;
+		const opener = document.activeElement;
 		d?.showModal();
-		return () => d?.close();
+		return () => {
+			d?.close();
+			// The dialog leaves the DOM: give the focus back to the button that opened it.
+			if (opener instanceof HTMLElement && opener.isConnected) opener.focus();
+		};
 	});
 </script>
 
@@ -46,12 +58,12 @@
 	{#each details as d, i (i)}<p>{d}</p>{/each}
 	<div class="actions">
 		<button type="button" onclick={oncancel}>{t('confirm.cancel')}</button>
-		<button type="button" class="primary" onclick={onconfirm}>{t('confirm.ok')}</button>
+		<button type="button" class="primary" onclick={confirm}>{t('confirm.ok')}</button>
 	</div>
 </dialog>
 
 <style>
-	dialog { max-width: min(36rem, calc(100vw - 2rem)); }
+	dialog { box-sizing: border-box; max-width: min(36rem, calc(100vw - 2rem)); }
 	h2 { font-size: 1.1rem; margin-top: 0; }
 	dl { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 0.25rem 0.75rem; }
 	dd { margin: 0; overflow-wrap: anywhere; }

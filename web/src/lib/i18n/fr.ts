@@ -91,6 +91,8 @@ export const fr = {
 		"Écriture refusée à cet endroit : Docker n'y écrit pas (fichier ou tmpfs monté, /etc/hosts, /dev, /proc, /sys), ou un montage du conteneur expose l'hôte",
 	'write.maybeWritten':
 		"L'agent a dépassé son délai, mais l'écriture a peut-être eu lieu. Rechargez le fichier avant de réessayer.",
+	'write.maybeWrittenNetwork':
+		"Connexion perdue pendant l'écriture : elle a peut-être eu lieu. Rechargez pour vérifier avant de réessayer.",
 	'confirm.edit': 'Enregistrer ce fichier dans le conteneur ?',
 	'confirm.upload': 'Envoyer ce fichier dans le conteneur ?',
 	'confirm.container': 'Conteneur',
