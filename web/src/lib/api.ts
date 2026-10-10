@@ -115,6 +115,8 @@ export const listChanges = (id: string) => api<Change[]>(`/containers/${encodeUR
 
 // F4 (spec §5.3). The If-Match is the ETag of the preview, as received.
 export async function saveFile(id: string, path: string, text: string, etag: string): Promise<string> {
+	// No ETag, no condition: an empty If-Match would be an unconditional-looking write.
+	if (!etag) throw new ApiError(0, 'unknown');
 	const res = await api<{ etag: string }>(fsPath(id, '/file', path), {
 		method: 'PUT',
 		body: text,

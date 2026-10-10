@@ -1,10 +1,20 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
-	import { ApiError, checkDownload, downloadUrl, previewFile, type Entry, type Preview } from '#lib/api.ts';
+	import { ApiError, checkDownload, downloadUrl, previewFile, saveFile, type Entry, type Preview } from '#lib/api.ts';
 	import { baseName, downloadErrorMessage, formatMode, formatSize, fsErrorMessage, indexingPercent } from '#lib/files.ts';
 	import { t } from '#lib/i18n/index.ts';
+	import { EDIT_MAX, lineSeparatorOf, writeErrorMessage } from '#lib/write.ts';
+	import ConfirmDialog from '#lib/components/ConfirmDialog.svelte';
+	import FileEditor from '#lib/components/FileEditor.svelte';
 
-	let { id, path, entry, stopped = false }: { id: string; path: string; entry?: Entry; stopped?: boolean } = $props();
+	let {
+		id,
+		name,
+		path,
+		entry,
+		stopped = false,
+		readOnly = true
+	}: { id: string; name: string; path: string; entry?: Entry; stopped?: boolean; readOnly?: boolean } = $props();
 
 	let preview = $state<Preview | null>(null);
 	let imageUrl = $state('');
@@ -13,6 +23,17 @@
 	let loading = $state(false);
 	let downloadError = $state('');
 	let reloads = $state(0); // bumped by the Reload button: same path, new request
+	let editing = $state(false);
+	let editor = $state<FileEditor>();
+	let pending = $state<string | null>(null); // text waiting for the confirmation
+	let saving = $state(false);
+	let writeError = $state('');
+	let saved = $state(false);
+	// Editable: valid UTF-8, one kind of line ending (saving would change the bytes otherwise)
+	// and an ETag to condition the write on (never an empty If-Match).
+	let editable = $derived(
+		preview?.kind === 'text' && preview.utf8 && preview.etag !== '' && lineSeparatorOf(preview.text) !== null
+	);
 
 	$effect(() => {
 		const wanted = path;
@@ -24,6 +45,10 @@
 		imageUrl = '';
 		error = '';
 		downloadError = '';
+		editing = false;
+		pending = null;
+		writeError = '';
+		saved = false;
 		loading = true;
 		previewFile(id, wanted)
 			.then((p) => {
@@ -60,6 +85,42 @@
 		};
 	});
 
+	function askSave() {
+		const text = editor?.content() ?? null; // null while the editor loads: nothing to confirm
+		writeError = '';
+		if (text !== null && new TextEncoder().encode(text).length > EDIT_MAX) {
+			writeError = t('write.editTooLarge'); // the agent would refuse it: no confirmation
+			return;
+		}
+		pending = text;
+	}
+
+	async function save() {
+		const text = pending;
+		const wanted = path;
+		pending = null;
+		if (text === null || preview?.kind !== 'text') return;
+		const current = preview;
+		saving = true;
+		try {
+			const etag = await saveFile(id, wanted, text, current.etag);
+			if (path !== wanted) return;
+			preview = { ...current, text, etag };
+			editing = false;
+			saved = true;
+		} catch (e) {
+			if (path !== wanted) return;
+			if (e instanceof ApiError && e.status === 401) {
+				goto('/login').catch(() => {});
+				return;
+			}
+			writeError =
+				e instanceof ApiError ? writeErrorMessage('edit', e.code, e.detail, e.status) : writeErrorMessage('edit', 'unknown');
+		} finally {
+			saving = false;
+		}
+	}
+
 	async function download() {
 		downloadError = '';
 		const url = downloadUrl(id, path);
@@ -82,7 +143,17 @@
 		</p>
 	{/if}
 	<button type="button" onclick={download}>{t('files.download')}</button>
+	{#if !readOnly && editable && !editing}
+		<button
+			type="button"
+			onclick={() => {
+				editing = true;
+				saved = false;
+			}}>{t('write.edit')}</button
+		>
+	{/if}
 	{#if downloadError}<p role="alert">{downloadError}</p>{/if}
+	{#if saved}<p role="status">{t('write.saved')}</p>{/if}
 </header>
 
 {#if indexing !== null}
@@ -94,12 +165,39 @@
 {:else if error}
 	<p role="alert">{error}</p>
 	<button type="button" onclick={() => reloads++}>{t('files.reload')}</button>
+{:else if preview?.kind === 'text' && editing}
+	<FileEditor bind:this={editor} {path} text={preview.text} />
+	<div class="actions">
+		<button type="button" onclick={askSave} disabled={saving}>{saving ? t('write.saving') : t('write.save')}</button>
+		<button
+			type="button"
+			disabled={saving}
+			onclick={() => {
+				editing = false;
+				writeError = '';
+			}}>{t('write.cancel')}</button
+		>
+		{#if writeError}<button type="button" disabled={saving} onclick={() => reloads++}>{t('files.reload')}</button>{/if}
+	</div>
+	{#if writeError}<p role="alert">{writeError}</p>{/if}
 {:else if preview?.kind === 'text'}
 	<pre>{preview.text}</pre>
+	{#if !readOnly && !editable}<p class="note">{t('write.notEditable')}</p>{/if}
 {:else if preview?.kind === 'image' && imageUrl}
 	<img src={imageUrl} alt={baseName(path)} />
 {:else if preview?.kind === 'binary'}
 	<p>{t('files.binary')}</p>
+{/if}
+
+{#if pending !== null}
+	<ConfirmDialog
+		title={t('confirm.edit')}
+		container={`${name} (${id.slice(0, 12)})`}
+		{path}
+		details={stopped ? [t('confirm.stoppedNote')] : []}
+		onconfirm={save}
+		oncancel={() => (pending = null)}
+	/>
 {/if}
 
 <style>
@@ -109,5 +207,6 @@
 	pre { overflow: auto; max-height: 70vh; padding: 0.75rem; background: #f6f6f6; border-radius: 0.25rem; white-space: pre; }
 	img { max-width: 100%; height: auto; }
 	.note { font-style: italic; }
+	.actions { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.5rem; }
 	[role='alert'] { color: #b00020; }
 </style>

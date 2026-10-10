@@ -139,6 +139,13 @@ describe('writes (F4)', () => {
 		expect(h.has('Content-Type')).toBe(false); // the browser sets the multipart boundary
 	});
 
+	it('saveFile never sends an empty If-Match', async () => {
+		const fetchMock = vi.fn<typeof fetch>(async () => new Response('{}'));
+		vi.stubGlobal('fetch', fetchMock);
+		await expect(saveFile('web', '/f', 'x', '')).rejects.toMatchObject({ code: 'unknown' });
+		expect(fetchMock).not.toHaveBeenCalled();
+	});
+
 	it('maps a refused write', async () => {
 		stubFetch(async () => new Response(JSON.stringify({ error: 'conflict' }), { status: 409 }));
 		await expect(saveFile('web', '/f', 'x', '"a"')).rejects.toMatchObject({ status: 409, code: 'conflict' });

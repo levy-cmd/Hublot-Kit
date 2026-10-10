@@ -1,5 +1,6 @@
 <script lang="ts">
 	import favicon from '#lib/assets/favicon.svg';
+	import { setContext } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import { ApiError, getMeta, logout, type Meta } from '#lib/api.ts';
@@ -7,6 +8,9 @@
 
 	let { children } = $props();
 	let meta = $state<Meta | null>(null);
+	// Pages read it instead of asking /api/meta again; true until the answer
+	// arrives: write buttons never show by mistake (spec §9).
+	setContext('readOnly', () => meta?.readOnly ?? true);
 
 	// Re-checks the session on every navigation; an expired session sends back to /login.
 	$effect(() => {

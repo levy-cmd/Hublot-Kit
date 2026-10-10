@@ -53,10 +53,11 @@ export function languageOf(path: string): Language {
 /**
  * Message for a refused edit or upload. A read_only from Docker and a
  * forbidden_path name their cause in the detail (shown as text). A 504 means
- * the guard gave up while the agent may still write (Q17).
+ * the guard gave up while the agent may still write (Q17); so does a lost connection.
  */
 export function writeErrorMessage(kind: 'edit' | 'upload', code: string, detail?: string, status?: number): string {
-	if (status === 504) return t('write.maybeWritten');
+	// A network error is the same case: the request may have reached the agent.
+	if (status === 504 || code === 'network') return t('write.maybeWritten');
 	switch (code) {
 		case 'conflict':
 			return t(kind === 'edit' ? 'write.conflictEdit' : 'write.conflictUpload');
