@@ -7,6 +7,10 @@ describe('loadLanguage', () => {
 		for (const l of ['json', 'yaml', 'javascript', 'python', 'shell', 'text'] as const) {
 			await expect(loadLanguage(l)).resolves.toBeDefined();
 		}
+		// A real language is a non-empty extension; plain text adds nothing.
+		expect(await loadLanguage('json')).not.toEqual([]);
+		expect(await loadLanguage('shell')).not.toEqual([]);
+		expect(await loadLanguage('text')).toEqual([]);
 	});
 });
 

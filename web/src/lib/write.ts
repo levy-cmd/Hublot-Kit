@@ -45,7 +45,9 @@ export function languageOf(path: string): Language {
 	const name = (path.split('/').pop() ?? '').toLowerCase();
 	if (SHELL_NAMES.includes(name)) return 'shell';
 	const dot = name.lastIndexOf('.');
-	return (dot > 0 && BY_EXT[name.slice(dot + 1)]) || 'text';
+	const ext = name.slice(dot + 1);
+	// hasOwn: "x.constructor" must not read Object.prototype.
+	return dot > 0 && Object.hasOwn(BY_EXT, ext) ? BY_EXT[ext] : 'text';
 }
 
 /**

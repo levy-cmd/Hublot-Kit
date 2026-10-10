@@ -126,13 +126,14 @@ describe('writes (F4)', () => {
 	it('uploadFile posts multipart with If-None-Match: *, without a JSON Content-Type', async () => {
 		const fetchMock = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ path: '/etc/n', etag: '"e"' }), { status: 201 }));
 		vi.stubGlobal('fetch', fetchMock);
-		const file = new File(['abc'], 'n');
+		const file = new File(['abc'], 'é.txt');
 		await expect(uploadFile('web', '/etc', file)).resolves.toEqual({ path: '/etc/n', etag: '"e"' });
 		const [url, init] = fetchMock.mock.calls[0];
 		expect(url).toBe('/api/containers/web/fs/upload?dir=%2Fetc');
 		expect(init?.method).toBe('POST');
 		expect(init?.body).toBeInstanceOf(FormData);
 		expect((init?.body as FormData).get('file')).toBeInstanceOf(File);
+		expect(((init?.body as FormData).get('file') as File).name).toBe('é.txt');
 		const h = new Headers(init?.headers);
 		expect(h.get('If-None-Match')).toBe('*');
 		expect(h.has('Content-Type')).toBe(false); // the browser sets the multipart boundary

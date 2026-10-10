@@ -33,6 +33,8 @@ describe('languageOf', () => {
 		expect(languageOf('/etc/nginx/nginx.conf')).toBe('text');
 		expect(languageOf('/etc/hosts')).toBe('text');
 		expect(languageOf('/json')).toBe('text');
+		// Object.prototype keys are not extensions.
+		for (const ext of ['constructor', 'toString', '__proto__']) expect(languageOf(`/x.${ext}`)).toBe('text');
 	});
 });
 
