@@ -36,6 +36,8 @@ func TestIntegrationWriteRunning(t *testing.T) {
 	f.init(t, false, dc, nil)
 	c := f.session(t)
 	base := "/api/containers/" + name
+	// State before the refusals, read inside the container.
+	snap := "cat /etc/hosts; echo ==; cat /app/conf.yml; echo ==; sha256sum /sbin/docker-init; echo ==; cat /etc/app.conf"
 	rec := f.do("GET", base+"/fs/file?path=/etc/app.conf", "", c)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("aperçu : %d %s", rec.Code, rec.Body)
@@ -47,6 +49,7 @@ func TestIntegrationWriteRunning(t *testing.T) {
 	if got := dockerCLI(t, "exec", name, "sh", "-c", "cat /etc/app.conf; stat -c '%a %u %g' /etc/app.conf"); got != "v2\n640 1000 1001" {
 		t.Fatalf("contenu, mode et propriétaire gardés : %q", got)
 	}
+	before := dockerCLI(t, "exec", name, "sh", "-c", snap)
 	for _, k := range []struct {
 		label  string
 		rec    func() (int, string)
@@ -92,6 +95,14 @@ func TestIntegrationWriteRunning(t *testing.T) {
 		if status, code := k.rec(); status != k.status || code != k.code {
 			t.Errorf("%s : %d %s, attendu %d %s", k.label, status, code, k.status, k.code)
 		}
+	}
+	// Every refusal left the container untouched: read from inside, not
+	// through the agent.
+	if after := dockerCLI(t, "exec", name, "sh", "-c", snap); after != before || !strings.HasSuffix(after, "v2") {
+		t.Errorf("un refus a modifié le conteneur :\navant %q\naprès %q", before, after)
+	}
+	if got := dockerCLI(t, "exec", name, "sh", "-c", "test ! -e /proc/x && test ! -e /scratch/x && echo absent"); got != "absent" {
+		t.Errorf("fichier créé par un envoi refusé (/proc/x ou /scratch/x) : %q", got)
 	}
 	if rec := f.upload(t, c, name, "/tmp", "new.txt", []byte("n\n"), "*"); rec.Code != http.StatusCreated {
 		t.Fatalf("envoi : %d %s", rec.Code, rec.Body)

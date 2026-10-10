@@ -6,6 +6,9 @@ package api
 // real Views. Portable: Docker Desktop answers from macOS.
 
 import (
+	"archive/tar"
+	"bytes"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os/exec"
@@ -26,6 +29,41 @@ func whileIndexing(t *testing.T, do func() *httptest.ResponseRecorder) *httptest
 		t.Fatalf("indexation non terminée après 60 s : %s", rec.Body)
 	}
 	return rec
+}
+
+// cpRead reads a regular file of a container with docker cp (not through the
+// agent); found is false when the path does not exist.
+func cpRead(t *testing.T, ctr, path string) (content string, found bool) {
+	t.Helper()
+	out, err := exec.Command("docker", "cp", ctr+":"+path, "-").Output()
+	if err != nil {
+		if ee, ok := err.(*exec.ExitError); ok && bytes.Contains(ee.Stderr, []byte("Could not find the file")) {
+			return "", false
+		}
+		t.Fatalf("docker cp %s:%s : %v", ctr, path, err)
+	}
+	tr := tar.NewReader(bytes.NewReader(out))
+	if _, err := tr.Next(); err != nil {
+		t.Fatalf("docker cp %s:%s : tar illisible : %v", ctr, path, err)
+	}
+	b, _ := io.ReadAll(tr)
+	return string(b), true
+}
+
+// assertFile checks, outside the agent, that a refused write left the file as it was.
+func assertFile(t *testing.T, ctr, path, want string) {
+	t.Helper()
+	if got, found := cpRead(t, ctr, path); !found || got != want {
+		t.Errorf("%s:%s après le refus : trouvé=%v %q, attendu %q", ctr, path, found, got, want)
+	}
+}
+
+// assertAbsent checks, outside the agent, that a refused upload created nothing.
+func assertAbsent(t *testing.T, ctr, path string) {
+	t.Helper()
+	if got, found := cpRead(t, ctr, path); found {
+		t.Errorf("%s:%s existe après le refus : %q", ctr, path, got)
+	}
 }
 
 func TestIntegrationWriteStopped(t *testing.T) {
@@ -64,6 +102,7 @@ func TestIntegrationWriteStopped(t *testing.T) {
 	if rec := f.send("PUT", file+"/etc/app.conf", []byte("v3\n"), c, map[string]string{"If-Match": tag}); rec.Code != http.StatusConflict {
 		t.Fatalf("ancien If-Match : %d %s", rec.Code, rec.Body)
 	}
+	assertFile(t, name, "/etc/app.conf", "v2\n") // le 409 n'a rien écrit
 	rec = whileIndexing(t, func() *httptest.ResponseRecorder { return f.upload(t, c, name, "/etc", "new.conf", []byte("n\n"), "*") })
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("envoi : %d %s", rec.Code, rec.Body)
@@ -76,5 +115,6 @@ func TestIntegrationWriteStopped(t *testing.T) {
 	if rec.Code != http.StatusForbidden || errCode(t, rec) != "read_only" {
 		t.Fatalf("rootfs en lecture seule : %d %s", rec.Code, rec.Body)
 	}
+	assertAbsent(t, ro, "/etc/x") // le refus de Docker n'a rien créé
 	t.Logf("MESURE refus de Docker : %s", rec.Body)
 }
