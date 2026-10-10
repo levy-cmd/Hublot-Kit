@@ -14,7 +14,7 @@ import (
 // GetArchive) and answers 204: the UI asks first, then lets the browser
 // download.
 func (s *server) fsDownload(w http.ResponseWriter, r *http.Request) {
-	info, p, ok := s.fsRequest(w, r)
+	info, p, ok := s.fsRequest(w, r, "path")
 	if !ok {
 		return
 	}

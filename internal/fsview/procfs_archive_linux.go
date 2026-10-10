@@ -7,8 +7,10 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 
 	pathrs "github.com/cyphar/filepath-securejoin/pathrs-lite"
+	"github.com/levy-cmd/hublot-kit/internal/dockerx"
 	"golang.org/x/sys/unix"
 )
 
@@ -19,6 +21,22 @@ var readMountinfo = func(pid int) ([]byte, error) {
 	return os.ReadFile(fmt.Sprintf("/proc/%d/mountinfo", pid))
 }
 
+// errNoMountID: statx did not return STATX_MNT_ID (kernel before 5.8).
+var errNoMountID = errors.New("statx sans STATX_MNT_ID (noyau antérieur à 5.8)")
+
+// statxMountID is statx on the descriptor itself, asking for the mount ID
+// (and extra mask bits); errNoMountID when the kernel did not give it.
+func statxMountID(fd, flags int, extra int) (unix.Statx_t, error) {
+	var st unix.Statx_t
+	if err := unix.Statx(fd, "", unix.AT_EMPTY_PATH|flags, unix.STATX_MNT_ID|extra, &st); err != nil {
+		return st, err
+	}
+	if st.Mask&unix.STATX_MNT_ID == 0 {
+		return st, errNoMountID
+	}
+	return st, nil
+}
+
 // mountIdent resolves name in the container root (pathrs: links followed,
 // never out of it) and returns its mount ID, device and inode.
 func (p *procFS) mountIdent(name string) (MountIdent, error) {
@@ -27,14 +45,55 @@ func (p *procFS) mountIdent(name string) (MountIdent, error) {
 		return MountIdent{}, err
 	}
 	defer h.Close()
-	var st unix.Statx_t
-	if err := unix.Statx(int(h.Fd()), "", unix.AT_EMPTY_PATH|unix.AT_SYMLINK_NOFOLLOW, unix.STATX_INO|unix.STATX_MNT_ID, &st); err != nil {
+	st, err := statxMountID(int(h.Fd()), unix.AT_SYMLINK_NOFOLLOW, unix.STATX_INO)
+	if err != nil {
 		return MountIdent{}, err
 	}
-	if st.Mask&unix.STATX_MNT_ID == 0 {
-		return MountIdent{}, errors.New("statx sans STATX_MNT_ID (noyau antérieur à 5.8)")
-	}
 	return MountIdent{MountID: st.Mnt_id, Dev: unix.Mkdev(st.Dev_major, st.Dev_minor), Ino: st.Ino}, nil
+}
+
+// CheckWriteRoot proves the view shows the tree Docker writes in, from the
+// mount table of the pinned process (review I1 and its re-review):
+//   - a "/" mount exists (CheckRootMount), and it is the mount of the root
+//     descriptor pinned when the view was opened (else the process changed
+//     root after the open);
+//   - every destination declared by Inspect, tmpfs included, appears as a
+//     mount point (CheckVisibleMounts): a PID 1 chrooted into a volume or a
+//     tmpfs of the container shows a "/" line, but its destination is gone.
+//
+// A jail the container mounts itself (CAP_SYS_ADMIN) is not seen: spec §13.
+// A view without process (NewProcFS, tests only) has nothing to read; every
+// real view comes from For with a pid.
+func (p *procFS) CheckWriteRoot(context.Context) error {
+	if p.pidfd < 0 {
+		return nil
+	}
+	raw, err := readMountinfo(p.pid)
+	if err != nil {
+		return changed("lecture de /proc/%d/mountinfo : %v", p.pid, err)
+	}
+	if err := alive(p.pidfd, p.pid); err != nil {
+		return err
+	}
+	mi := string(raw)
+	if err := CheckRootMount(mi); err != nil {
+		return err
+	}
+	st, err := statxMountID(int(p.root.Fd()), 0, 0)
+	if err != nil {
+		return err
+	}
+	if !slices.Contains(rootMountIDs(mi), st.Mnt_id) {
+		return fmt.Errorf("%w : le montage \"/\" du process n'est pas celui de la racine épinglée à l'ouverture de la vue (chroot du process) : écriture refusée", ErrForbiddenPath)
+	}
+	mounts := slices.Clone(p.mounts)
+	for _, d := range p.tmpfs {
+		mounts = append(mounts, dockerx.Mount{Type: "tmpfs", Destination: d})
+	}
+	if err := CheckVisibleMounts(mi, LocateMounts(mi, mounts, p.mountIdent)); err != nil {
+		return fmt.Errorf("%w (écriture refusée : le process n'est peut-être pas dans la racine du conteneur, chroot du PID 1)", err)
+	}
+	return nil
 }
 
 // CheckArchive (spec §5.2 step 7, §5.4). The checks that read nothing in the

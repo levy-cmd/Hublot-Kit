@@ -298,3 +298,37 @@ func TestIntegrationDockerSocketUnderVarRun(t *testing.T) {
 		t.Fatalf("tar de /etc refusé à cause du socket Docker : %v", err)
 	}
 }
+
+// Review re-I1: an ordinary running container, with a volume and a tmpfs,
+// is not refused for a write; the same container whose PID 1 chroots into its
+// own volume or tmpfs (CAP_SYS_CHROOT, default) is.
+func TestIntegrationCheckWriteRoot(t *testing.T) {
+	needRoot(t)
+	ctx := context.Background()
+	id := runTarget(t, "hublot-it-fs-writeroot", "-v", "/vol", "--tmpfs", "/scratch", "alpine:3", "sleep", "300")
+	w, ok := openFor(t, id).(WriteRootChecker)
+	if !ok {
+		t.Fatal("la vue procfs doit implémenter WriteRootChecker")
+	}
+	if err := w.CheckWriteRoot(ctx); err != nil {
+		t.Fatalf("conteneur ordinaire avec volume et tmpfs : %v", err)
+	}
+	for name, args := range map[string][]string{
+		"volume": {"-v", "/jail"},
+		"tmpfs":  {"--tmpfs", "/jail:exec"},
+	} {
+		id := runTarget(t, "hublot-it-fs-jail-"+name, append(args, "alpine:3", "sh", "-c",
+			"mkdir /jail/lib && cp /lib/ld-musl-* /jail/lib/ && cp /bin/busybox /jail/ && exec chroot /jail /busybox sleep 300")...)
+		var err error
+		for i := 0; i < 25; i++ { // PID 1 chroots a moment after the start
+			time.Sleep(200 * time.Millisecond)
+			err = openFor(t, id).(WriteRootChecker).CheckWriteRoot(ctx)
+			if err != nil {
+				break
+			}
+		}
+		if !errors.Is(err, ErrForbiddenPath) {
+			t.Errorf("prison dans un %s : %v, attendu ErrForbiddenPath", name, err)
+		}
+	}
+}

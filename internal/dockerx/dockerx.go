@@ -42,6 +42,9 @@ type ContainerInfo struct {
 	// cache key (spec §5.2 step 1). "0001-01-01T00:00:00Z" if never started.
 	FinishedAt string
 	Mounts     []Mount
+	// Tmpfs: destinations of --tmpfs (HostConfig.Tmpfs), sorted. Absent from
+	// Mounts; Docker never writes into them (plan Explorateur 3, Q21).
+	Tmpfs []string
 }
 
 // Change is one entry of GET /containers/{id}/changes (F5).
@@ -60,9 +63,16 @@ type Mount struct {
 }
 
 // ErrNotFound: no such container (or no such path, for an archive).
+// ErrRefused: Docker refused a write because its target is read-only
+// (measured on Docker 29.7: "container rootfs is marked read-only",
+// "mounted volume is marked read-only").
+// ErrPutInvalid: any other InvalidArgument of PutArchive, e.g. "extraction
+// point is not a directory": the path changed after the agent's checks.
 // ErrUnavailable: any other failure of the daemon or of the connection to it.
 var (
 	ErrNotFound    = errors.New("introuvable dans Docker")
+	ErrRefused     = errors.New("refusé par Docker")
+	ErrPutInvalid  = errors.New("extraction refusée par Docker")
 	ErrUnavailable = errors.New("Docker indisponible")
 )
 
@@ -83,6 +93,12 @@ type Client interface {
 	SizeRootFs(ctx context.Context, id string) (int64, error)
 	// Changes is GET /containers/{id}/changes (F5): never nil.
 	Changes(ctx context.Context, id string) ([]Change, error)
+	// PutArchive extracts the tar read from content into directory dir of the
+	// container (PUT /containers/{id}/archive). dir is sent as is: package
+	// files gives the parent of the path it checked (spec §5.3 step 5).
+	// Docker never replaces a directory by a file (noOverwriteDirNonDir) and
+	// keeps the UID/GID of the tar headers (no copyUIDGID).
+	PutArchive(ctx context.Context, id, dir string, content io.Reader) error
 }
 
 type engine struct{ c *client.Client }
@@ -181,6 +197,12 @@ func fromInspect(c container.InspectResponse) ContainerInfo {
 			Type: string(m.Type), Name: m.Name, Source: m.Source, Destination: m.Destination, Driver: m.Driver,
 		})
 	}
+	if c.HostConfig != nil {
+		for d := range c.HostConfig.Tmpfs {
+			info.Tmpfs = append(info.Tmpfs, d)
+		}
+		sort.Strings(info.Tmpfs)
+	}
 	return info
 }
 
@@ -236,6 +258,28 @@ func fromChanges(cs []container.FilesystemChange) ([]Change, error) {
 		out = append(out, Change{Path: c.Path, Kind: kind})
 	}
 	return out, nil
+}
+
+func (e *engine) PutArchive(ctx context.Context, id, dir string, content io.Reader) error {
+	_, err := e.c.CopyToContainer(ctx, id, client.CopyToContainerOptions{DestinationPath: dir, Content: content})
+	if err != nil {
+		return wrapPut(err)
+	}
+	return nil
+}
+
+// wrapPut: wrap, plus Docker's own refusals of a write, InvalidArgument:
+// the target is read-only (both measured messages say "marked read-only") →
+// ErrRefused; anything else → ErrPutInvalid. Only for PutArchive: on a read
+// route an InvalidArgument stays docker_unavailable (plan Explorateur 3, Q15).
+func wrapPut(err error) error {
+	if cerrdefs.IsInvalidArgument(err) {
+		if strings.Contains(err.Error(), "marked read-only") {
+			return fmt.Errorf("%w : %v", ErrRefused, err)
+		}
+		return fmt.Errorf("%w : %v", ErrPutInvalid, err)
+	}
+	return wrap(err)
 }
 
 // wrap classifies a daemon error for the API (not_found / docker_unavailable).

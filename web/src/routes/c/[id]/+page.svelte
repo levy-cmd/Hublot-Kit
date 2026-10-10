@@ -1,6 +1,7 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
+	import { getContext } from 'svelte';
 	import { ApiError, listContainers, type Container } from '#lib/api.ts';
 	import { stateLabel } from '#lib/containers.ts';
 	import { errorMessage, t } from '#lib/i18n/index.ts';
@@ -11,6 +12,8 @@
 	let container = $state<Container | null>(null);
 	let error = $state('');
 	let reloads = $state(0); // bumped by the Reload button
+	// From the layout's /api/meta: true until it answers (spec §9).
+	const readOnly = getContext<() => boolean>('readOnly');
 	let tab = $derived(page.url.searchParams.get('tab') === 'changes' ? 'changes' : 'files');
 
 	// The list gives the name, image and state; GET /api/containers/{id}
@@ -59,7 +62,12 @@
 		{#if tab === 'changes'}
 			<ChangesList id={container.id} />
 		{:else}
-			<FileBrowser id={container.id} stopped={container.state !== 'running' && container.state !== 'paused'} />
+			<FileBrowser
+				id={container.id}
+				name={container.name}
+				readOnly={readOnly()}
+				stopped={container.state !== 'running' && container.state !== 'paused'}
+			/>
 		{/if}
 	{/if}
 </main>

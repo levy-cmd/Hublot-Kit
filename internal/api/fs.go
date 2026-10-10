@@ -17,18 +17,19 @@ import (
 // API URLs: it must never carry "/" nor start with ".".
 var containerRef = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$`)
 
-// fsRequest reads {id} and ?path=, then resolves the container by Inspect
+// fsRequest reads {id} and the query parameter param (path, or dir for an
+// upload), then resolves the container by Inspect
 // (bounded by fsTimeout: a stuck daemon must not hang the request). Every
 // later step uses info.ID, the full ID: the guard counts per container, and a
 // container recreated under the same name cannot step in mid-request. On any
 // failure it answers itself.
-func (s *server) fsRequest(w http.ResponseWriter, r *http.Request) (info dockerx.ContainerInfo, p string, ok bool) {
+func (s *server) fsRequest(w http.ResponseWriter, r *http.Request, param string) (info dockerx.ContainerInfo, p string, ok bool) {
 	id := r.PathValue("id")
 	if !containerRef.MatchString(id) {
 		writeError(w, http.StatusNotFound, "not_found", "identifiant de conteneur invalide")
 		return info, "", false
 	}
-	raw := r.URL.Query().Get("path")
+	raw := r.URL.Query().Get(param)
 	if strings.ContainsRune(raw, 0) {
 		writeError(w, http.StatusNotFound, "not_found", "chemin invalide")
 		return info, "", false
@@ -71,7 +72,7 @@ type listingJSON struct {
 }
 
 func (s *server) fsList(w http.ResponseWriter, r *http.Request) {
-	info, p, ok := s.fsRequest(w, r)
+	info, p, ok := s.fsRequest(w, r, "path")
 	if !ok {
 		return
 	}

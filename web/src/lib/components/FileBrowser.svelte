@@ -9,7 +9,8 @@
 		listDir,
 		type Change,
 		type Entry,
-		type Listing
+		type Listing,
+		uploadFile
 	} from '#lib/api.ts';
 	import { changeMarks, deletedIn, kindLabel, kindLetter, truncateNames } from '#lib/changes.ts';
 	import {
@@ -25,9 +26,17 @@
 		sortEntries
 	} from '#lib/files.ts';
 	import { errorMessage, t } from '#lib/i18n/index.ts';
+	import { latest, lock } from '#lib/guard.ts';
+	import { UPLOAD_MAX, uploadNameOk, writeErrorMessage } from '#lib/write.ts';
+	import ConfirmDialog from '#lib/components/ConfirmDialog.svelte';
 	import FilePreview from '#lib/components/FilePreview.svelte';
 
-	let { id, stopped = false }: { id: string; stopped?: boolean } = $props();
+	let {
+		id,
+		name,
+		stopped = false,
+		readOnly = true
+	}: { id: string; name: string; stopped?: boolean; readOnly?: boolean } = $props();
 
 	// The URL carries the state (?path=dir&file=selected): back button and links work.
 	let dir = $derived(page.url.searchParams.get('path') || '/');
@@ -43,6 +52,18 @@
 	let marks = $derived(changeMarks(changes));
 	let deleted = $derived(deletedIn(changes, dir));
 	let selected = $derived(file ? entries.find((e) => joinPath(dir, e.name) === file) : undefined);
+
+	let picker = $state<HTMLInputElement>();
+	let toUpload = $state<{ id: string; file: File; dir: string } | null>(null); // waiting for the confirmation
+	const uploads = latest(); // stale-response guard: another container cancels an upload in flight
+	const uploadLock = lock();
+	$effect(() => {
+		void id;
+		toUpload = null;
+		return () => uploads.cancel();
+	});
+	let uploading = $state(false);
+	let uploadError = $state('');
 
 	const href = (path: string, selectedFile?: string) =>
 		'?' + new URLSearchParams(selectedFile ? { path, file: selectedFile } : { path });
@@ -114,6 +135,52 @@
 		else go(dir, p);
 	}
 
+	function picked(e: Event & { currentTarget: HTMLInputElement }) {
+		const f = e.currentTarget.files?.[0];
+		e.currentTarget.value = ''; // the same file can be picked again
+		uploadError = '';
+		if (!f) return;
+		if (f.size > UPLOAD_MAX) {
+			uploadError = t('write.uploadTooLarge');
+			return;
+		}
+		if (!uploadNameOk(f.name)) {
+			uploadError = t('write.invalidName');
+			return;
+		}
+		toUpload = { id, file: f, dir };
+	}
+
+	function upload() {
+		const u = toUpload;
+		toUpload = null;
+		if (!u) return;
+		void uploadLock.run(async () => {
+			const token = uploads.begin();
+			uploading = true;
+			try {
+				const res = await uploadFile(u.id, u.dir, u.file);
+				if (!uploads.isCurrent(token)) return;
+				reloads++;
+				if (dir === u.dir) go(u.dir, res.path);
+			} catch (e) {
+				if (!uploads.isCurrent(token)) return;
+				if (e instanceof ApiError && e.status === 401) {
+					goto('/login').catch(() => {});
+					return;
+				}
+				uploadError =
+					e instanceof ApiError
+						? writeErrorMessage('upload', e.code, e.detail, e.status)
+						: writeErrorMessage('upload', 'unknown');
+				// The write may have happened (504, network): the listing is stale.
+				if (e instanceof ApiError && (e.status === 504 || e.code === 'network')) reloads++;
+			} finally {
+				uploading = false;
+			}
+		});
+	}
+
 	async function downloadDir() {
 		downloadError = '';
 		const url = downloadUrl(id, dir);
@@ -137,8 +204,18 @@
 		</nav>
 		<div class="tools">
 			<button type="button" onclick={downloadDir}>{t('files.downloadDir')}</button>
+			{#if !readOnly}
+				<input type="file" bind:this={picker} onchange={picked} hidden />
+				<button type="button" disabled={uploading} onclick={() => picker?.click()}>
+					{uploading ? t('write.uploading') : t('write.upload')}
+				</button>
+			{/if}
 		</div>
 		{#if downloadError}<p role="alert">{downloadError}</p>{/if}
+		{#if uploadError}
+			<p role="alert">{uploadError}</p>
+			<button type="button" onclick={() => reloads++}>{t('files.reload')}</button>
+		{/if}
 
 		{#if indexing !== null}
 			<p role="status">{t('files.indexing')} : {indexing} %</p>
@@ -198,12 +275,26 @@
 
 	<section class="preview">
 		{#if file}
-			<FilePreview {id} path={file} entry={selected} {stopped} />
+			<FilePreview {id} {name} path={file} entry={selected} {stopped} {readOnly} />
 		{:else}
 			<p>{t('files.selectFile')}</p>
 		{/if}
 	</section>
 </div>
+
+{#if toUpload}
+	<ConfirmDialog
+		title={t('confirm.upload')}
+		container={`${name} (${toUpload.id.slice(0, 12)})`}
+		path={joinPath(toUpload.dir, toUpload.file.name)}
+		details={[
+			`${t('confirm.size')} : ${formatSize(toUpload.file.size)}`,
+			...(stopped ? [t('confirm.stoppedNote')] : [])
+		]}
+		onconfirm={upload}
+		oncancel={() => (toUpload = null)}
+	/>
+{/if}
 
 <style>
 	.browser { display: grid; gap: 1rem; grid-template-columns: minmax(0, 1fr); }

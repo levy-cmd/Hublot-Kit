@@ -14,6 +14,7 @@ import (
 	"github.com/levy-cmd/hublot-kit/internal/audit"
 	"github.com/levy-cmd/hublot-kit/internal/auth"
 	"github.com/levy-cmd/hublot-kit/internal/dockerx"
+	"github.com/levy-cmd/hublot-kit/internal/files"
 	"github.com/levy-cmd/hublot-kit/internal/fsview"
 )
 
@@ -74,6 +75,7 @@ type server struct {
 	d        Deps
 	throttle *throttleLog
 	guard    *fsGuard
+	files    *files.Writer // the only writer (spec §7: read-only applied there)
 }
 
 // Spec §13 (FUSE): at most 4 file operations at once per container, each one
@@ -94,6 +96,8 @@ func New(d Deps) http.Handler {
 		d:        d,
 		throttle: &throttleLog{last: map[string]time.Time{}, now: logClock},
 		guard:    newFSGuard(fsMaxPerContainer, fsTimeout),
+		files: &files.Writer{ReadOnly: d.ReadOnly, Docker: d.Docker, Audit: d.Audit,
+			Open: d.OpenFS, Forget: d.Views.Forget},
 	}
 	session := func(h http.HandlerFunc) http.Handler { return requireSession(d.Sessions, h) }
 
@@ -105,6 +109,8 @@ func New(d Deps) http.Handler {
 	mux.Handle("GET /api/containers/{id}/fs", session(s.fsList))
 	mux.Handle("GET /api/containers/{id}/fs/file", session(s.fsFile))
 	mux.Handle("GET /api/containers/{id}/fs/download", session(s.fsDownload))
+	mux.Handle("PUT /api/containers/{id}/fs/file", session(s.fsEdit))
+	mux.Handle("POST /api/containers/{id}/fs/upload", session(s.fsUpload))
 	mux.Handle("GET /api/containers/{id}/changes", session(s.changes))
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "not_found", "")

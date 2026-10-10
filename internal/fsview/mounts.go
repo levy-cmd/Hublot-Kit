@@ -137,6 +137,43 @@ func dangerousMount(mountinfo string, match func(mountPoint string) bool) (mount
 	return scanMountinfo(mountinfo, func(l mountLine) bool { return dangerousFSType(l.FSType) && match(l.Point) })
 }
 
+// mountPoints is the set of mount points of the table; an unreadable line is
+// ErrForbiddenPath (fail closed).
+func mountPoints(mountinfo string) (map[string]bool, error) {
+	points := map[string]bool{}
+	if mp, typ, bad := scanMountinfo(mountinfo, func(l mountLine) bool { points[l.Point] = true; return false }); bad {
+		return nil, fmt.Errorf("%w : %s : %s", ErrForbiddenPath, typ, mp)
+	}
+	return points, nil
+}
+
+// CheckRootMount is the root part of CheckVisibleMounts alone: the table has
+// a "/" mount, else the root of the process is not the container's root (a
+// chroot in PID 1) and the tree it shows is not the one Docker writes in.
+func CheckRootMount(mountinfo string) error {
+	points, err := mountPoints(mountinfo)
+	if err != nil {
+		return err
+	}
+	if !points["/"] {
+		return fmt.Errorf("%w : la table des montages n'a pas de racine \"/\" : la racine du process n'est pas celle du conteneur (chroot du PID 1), écriture refusée", ErrForbiddenPath)
+	}
+	return nil
+}
+
+// rootMountIDs: the mount IDs of the lines mounted on "/" (stacked mounts
+// give several).
+func rootMountIDs(mountinfo string) []uint64 {
+	var ids []uint64
+	scanMountinfo(mountinfo, func(l mountLine) bool {
+		if l.Point == "/" {
+			ids = append(ids, l.ID)
+		}
+		return false
+	})
+	return ids
+}
+
 // CheckVisibleMounts verifies that the mount table describes the container in
 // the coordinates dockerd uses: it must have a "/" mount (else the process's
 // root was moved and mounts outside it vanished), and every Docker mount
@@ -145,9 +182,9 @@ func dangerousMount(mountinfo string, match func(mountPoint string) bool) (mount
 // point it proved to be the same Docker mount). Otherwise the other checks could miss a
 // dangerous mount: fail closed.
 func CheckVisibleMounts(mountinfo string, mounts []dockerx.Mount) error {
-	points := map[string]bool{}
-	if mp, typ, bad := scanMountinfo(mountinfo, func(l mountLine) bool { points[l.Point] = true; return false }); bad {
-		return fmt.Errorf("%w : %s : %s", ErrForbiddenPath, typ, mp)
+	points, err := mountPoints(mountinfo)
+	if err != nil {
+		return err
 	}
 	if !points["/"] {
 		return fmt.Errorf("%w : la table des montages n'a pas de racine \"/\" : tar refusé", ErrForbiddenPath)
