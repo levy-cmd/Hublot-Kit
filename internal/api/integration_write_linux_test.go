@@ -111,3 +111,42 @@ func TestIntegrationWriteRunning(t *testing.T) {
 		t.Fatalf("fichier envoyé, lien pendant intact : %q", got)
 	}
 }
+
+// Spec §13: compose "tmpfs: [/var/run]" on alpine, where /var/run ->
+// ../run: the tmpfs sits at /run. Before the fix, every write to this
+// container was refused (the destination was missing from the table). Now
+// /etc is writable, and /run, where Docker would write unseen, is refused.
+func TestIntegrationWriteTmpfsUnderLink(t *testing.T) {
+	if os.Geteuid() != 0 {
+		t.Skip("root requis pour /proc/<pid>/root des conteneurs : scripts/test-linux.sh ou job CI privilégié")
+	}
+	name := "hublot-it-write-tmpfs-link"
+	exec.Command("docker", "rm", "-f", name).Run()
+	t.Cleanup(func() { exec.Command("docker", "rm", "-f", name).Run() })
+	dockerCLI(t, "run", "-d", "--name", name, "--tmpfs", "/var/run", "alpine:3", "sleep", "300")
+	if got := dockerCLI(t, "exec", name, "readlink", "/var/run"); got != "../run" {
+		t.Skipf("précondition absente : /var/run -> %q dans alpine:3, attendu ../run", got)
+	}
+	dc, err := dockerx.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := &fixture{}
+	f.init(t, false, dc, nil)
+	c := f.session(t)
+	if rec := f.upload(t, c, name, "/etc", "tmpfs-ok.txt", []byte("ok\n"), "*"); rec.Code != http.StatusCreated {
+		t.Fatalf("envoi dans /etc : %d %s, attendu 201", rec.Code, rec.Body)
+	}
+	if got := dockerCLI(t, "exec", name, "cat", "/etc/tmpfs-ok.txt"); got != "ok" {
+		t.Fatalf("relu dans le conteneur : %q", got)
+	}
+	for _, dir := range []string{"/run", "/var/run"} {
+		rec := f.upload(t, c, name, dir, "x", []byte("x"), "*")
+		if rec.Code != http.StatusForbidden || errCode(t, rec) != "forbidden_path" {
+			t.Errorf("envoi dans %s : %d %s, attendu 403 forbidden_path", dir, rec.Code, rec.Body)
+		}
+	}
+	if got := dockerCLI(t, "exec", name, "sh", "-c", "test ! -e /run/x && echo absent"); got != "absent" {
+		t.Errorf("fichier créé par un envoi refusé : %q", got)
+	}
+}

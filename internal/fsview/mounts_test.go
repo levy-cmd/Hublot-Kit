@@ -300,3 +300,86 @@ func TestLocateMountsChrootToRootMountEndingSource(t *testing.T) {
 		t.Errorf("ÉVASION : accepté (%v)", err)
 	}
 }
+
+// Spec §13: a --tmpfs whose destination passes through a link (compose
+// "tmpfs: [/var/run]", /var/run -> ../run) is mounted at /run, so the table
+// does not show /var/run. It is found by mount ID like a bind or a volume,
+// with its own tie: a whole tmpfs (fstype tmpfs, root "/"), never on "/",
+// never on a point another destination already holds, never on a mount
+// the runtime adds (/dev, /dev/shm, /proc, /sys).
+func TestLocateMountsTmpfs(t *testing.T) {
+	mi := strings.Join([]string{
+		"20 1 0:20 / / rw - overlay overlay rw",
+		"50 20 0:50 / /run rw - tmpfs tmpfs rw",
+		"51 20 0:51 / /scratch rw - tmpfs tmpfs rw",
+		"52 20 0:52 / /dev rw - tmpfs tmpfs rw",
+		"53 52 0:53 / /dev/shm rw - tmpfs shm rw",
+		"54 20 0:54 / /hostrun rw - tmpfs tmpfs rw",
+		"55 20 8:1 /var/lib/docker/volumes/v/_data /data rw - ext4 /dev/sda1 rw",
+		"56 20 0:56 /sub /part rw - tmpfs tmpfs rw",
+	}, "\n")
+	ids := map[string]MountIdent{
+		"/run": {50, 50, 1}, "/var/run": {50, 50, 1}, // the case of spec §13
+		"/scratch": {51, 51, 1}, "/to-scratch": {51, 51, 1}, // decoy: another declared tmpfs
+		"/dev": {52, 52, 1}, "/to-dev": {52, 52, 1}, // decoy: runtime mounts
+		"/dev/shm": {53, 53, 1}, "/to-shm": {53, 53, 1},
+		"/hostrun": {54, 54, 1}, "/to-hostrun": {54, 54, 1}, // a bind of a host tmpfs
+		"/data": {55, 30, 2}, "/to-data": {55, 30, 2}, // not a tmpfs
+		"/part": {56, 56, 1}, "/to-part": {56, 56, 1}, // a part of a tmpfs, not a whole one
+		"/": {20, 20, 2}, "/to-root": {20, 20, 2}, // jail: the link leads to the root
+		"/other-inode": {50, 50, 9}, // same mount, another inode
+	}
+	ident := func(p string) (MountIdent, error) {
+		if id, ok := ids[p]; ok {
+			return id, nil
+		}
+		return MountIdent{}, fs.ErrNotExist
+	}
+	tmpfs := func(dst string) dockerx.Mount { return dockerx.Mount{Type: "tmpfs", Destination: dst} }
+
+	got := LocateMounts(mi, []dockerx.Mount{tmpfs("/var/run"), tmpfs("/scratch")}, ident)
+	if got[0].Destination != "/run" || got[1].Destination != "/scratch" {
+		t.Fatalf("tmpfs sous un lien : %v, attendu /run", got)
+	}
+	if err := CheckVisibleMounts(mi, got); err != nil {
+		t.Fatalf("après localisation : %v", err)
+	}
+	// Fail closed: each of these stays where it is, and the write is refused.
+	refused := map[string][]dockerx.Mount{
+		"lien vers la racine (overlay)":       {tmpfs("/to-root")},
+		"leurre : un autre tmpfs déclaré":     {tmpfs("/to-scratch"), tmpfs("/scratch")},
+		"leurre : /dev du runtime":            {tmpfs("/to-dev")},
+		"leurre : /dev/shm du runtime":        {tmpfs("/to-shm")},
+		"lien vers un autre montage (bind)":   {tmpfs("/to-hostrun"), {Type: "bind", Source: "/run", Destination: "/hostrun"}},
+		"lien vers un volume":                 {tmpfs("/to-data"), {Type: "volume", Name: "v", Destination: "/data"}},
+		"partie d'un tmpfs":                   {tmpfs("/to-part")},
+		"autre inode":                         {tmpfs("/other-inode")},
+		"introuvable":                         {tmpfs("/absent")},
+		"deux destinations sur un même tmpfs": {tmpfs("/var/run"), tmpfs("/var/run2")},
+	}
+	ids["/var/run2"] = MountIdent{50, 50, 1}
+	for name, ms := range refused {
+		if err := CheckVisibleMounts(mi, LocateMounts(mi, ms, ident)); !errors.Is(err, ErrForbiddenPath) {
+			t.Errorf("ÉVASION : %s accepté", name)
+		}
+	}
+	// Jail: PID 1 chrooted into the tmpfs itself, with a link var/run -> /
+	// planted in it: the destination leads to the jail's root, a whole tmpfs
+	// on "/". Only the "P is not /" guard refuses it.
+	jail := "60 1 0:60 / / rw - tmpfs tmpfs rw"
+	jailIdent := func(p string) (MountIdent, error) {
+		if p == "/" || p == "/var/run" {
+			return MountIdent{60, 60, 1}, nil
+		}
+		return MountIdent{}, fs.ErrNotExist
+	}
+	if err := CheckVisibleMounts(jail, LocateMounts(jail, []dockerx.Mount{tmpfs("/var/run")}, jailIdent)); !errors.Is(err, ErrForbiddenPath) {
+		t.Errorf("ÉVASION : prison dans le tmpfs acceptée")
+	}
+	// The tie of a bind or a volume never accepts a tmpfs line, nor the
+	// reverse: a bind whose destination leads to /run stays refused.
+	bind := []dockerx.Mount{{Type: "bind", Source: "/srv/run", Destination: "/var/run"}}
+	if err := CheckVisibleMounts(mi, LocateMounts(mi, bind, ident)); !errors.Is(err, ErrForbiddenPath) {
+		t.Errorf("ÉVASION : un bind localisé sur un tmpfs")
+	}
+}
