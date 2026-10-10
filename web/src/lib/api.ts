@@ -1,3 +1,5 @@
+import { decodeUtf8 } from './write.ts';
+
 export class ApiError extends Error {
 	constructor(
 		public status: number,
@@ -21,7 +23,8 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
 		res = await fetch(`/api${path}`, {
 			credentials: 'same-origin',
 			...init,
-			headers: { ...(init.body !== undefined ? { 'Content-Type': 'application/json' } : {}), ...(init.headers ?? {}) }
+			// JSON for a string body; a FormData gets its multipart boundary from the browser.
+			headers: { ...(typeof init.body === 'string' ? { 'Content-Type': 'application/json' } : {}), ...(init.headers ?? {}) }
 		});
 	} catch {
 		throw new ApiError(0, 'network');
@@ -65,7 +68,7 @@ export type Entry = {
 // type is "dir" for a directory; for another path, entries is empty.
 export type Listing = { path: string; type: EntryType; entries: Entry[]; truncated: boolean };
 export type Preview =
-	| { kind: 'text'; text: string; etag: string }
+	| { kind: 'text'; text: string; etag: string; utf8: boolean } // utf8 false: shown with U+FFFD, not editable
 	| { kind: 'image'; blob: Blob; etag: string }
 	| { kind: 'binary' };
 
@@ -92,7 +95,11 @@ export async function previewFile(id: string, path: string): Promise<Preview> {
 	const type = res.headers.get('Content-Type') ?? '';
 	const etag = res.headers.get('ETag') ?? '';
 	if (/^image\/(png|jpeg|gif|webp)$/.test(type)) return { kind: 'image', blob: await res.blob(), etag };
-	if (type.startsWith('text/plain')) return { kind: 'text', text: await res.text(), etag };
+	if (type.startsWith('text/plain')) {
+		const bytes = new Uint8Array(await res.arrayBuffer());
+		const strict = decodeUtf8(bytes);
+		return { kind: 'text', text: strict ?? new TextDecoder().decode(bytes), etag, utf8: strict !== null };
+	}
 	return { kind: 'binary' };
 }
 
@@ -105,3 +112,24 @@ export async function checkDownload(url: string): Promise<void> {
 
 export type Change = { path: string; kind: 'added' | 'modified' | 'deleted' };
 export const listChanges = (id: string) => api<Change[]>(`/containers/${encodeURIComponent(id)}/changes`);
+
+// F4 (spec §5.3). The If-Match is the ETag of the preview, as received.
+export async function saveFile(id: string, path: string, text: string, etag: string): Promise<string> {
+	const res = await api<{ etag: string }>(fsPath(id, '/file', path), {
+		method: 'PUT',
+		body: text,
+		headers: { 'If-Match': etag, 'Content-Type': 'text/plain; charset=utf-8' }
+	});
+	return res.etag;
+}
+
+// One file per request; the agent refuses an existing name (If-None-Match: *).
+export function uploadFile(id: string, dir: string, file: File): Promise<{ path: string; etag: string }> {
+	const body = new FormData();
+	body.append('file', file, file.name);
+	return api(`/containers/${encodeURIComponent(id)}/fs/upload?dir=${encodeURIComponent(dir)}`, {
+		method: 'POST',
+		body,
+		headers: { 'If-None-Match': '*' }
+	});
+}
