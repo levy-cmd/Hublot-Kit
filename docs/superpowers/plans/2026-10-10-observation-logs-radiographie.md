@@ -10,6 +10,7 @@
 > - Mutations (une fois chacune, puis annulées), toutes attrapées : garde « P n'est pas `/` » retirée de `LocateMounts` → `TestLocateMountsTmpfs` (prison), `TestLocateMountsChrootToRootMountEndingSource`, `TestIntegrationCheckWriteRootTmpfsUnderLink` ; garde `runtimeMount` retirée → `TestLocateMountsTmpfs` (leurre `/dev/shm`) ; points retrouvés ignorés par `checkRoot` → `TestWriteRefusedUnderResolvedTmpfs` ; recollage des parties TTY retiré → `TestReadLogsTTYPartialMessages` ; `rc.Close()` retiré du flux → `TestLogsClientGone` ; règle d'URL retirée → `TestEnv`, `TestEnvNeverLeaks` (« FUITE ») ; commande non masquée → `TestContainerRadiography` (« FUITE ») ; échec du journal ignoré → `TestRevealEnvRefusals`.
 > - Mesuré sur Docker Desktop (voir « Constats de la rédaction ») : format des logs (trames, horodatage, parties de 16 Kio, TTY), `--log-driver none` → 501, `since` inclusif, `/var/run` → `../run` dans `alpine:3`, arrêt de l'agent avec un flux ouvert (6 s et code 1 sans le correctif de la tâche 3, 1 s et code 0 avec).
 > - Interface : Vitest 76 tests verts ; `npm run check` 0 erreur ; `npm run lint` propre ; `vite build` vert. Contre un vrai agent (même montage que `scripts/e2e.sh`) : le parcours unique passe, et le parcours jetable de la tâche 8 (non commité) passe : masquage, révélation, flux en direct, recherche, pause puis reprise sans doublon ni trou, téléchargement, conteneur arrêté, 390 px sans défilement horizontal.
+> - **Revérifié après la revue 1** (même méthode : copie reconstruite depuis les blocs du plan `df000d7`, un commit par étape, corrections R1 à R9 appliquées en correctifs de la tâche concernée, puis réappliquées sur une seconde copie propre : même arbre ; copies supprimées). `go vet` macOS et Linux, avec et sans `integration` ; `gofmt` vide ; `go test -race` macOS ; `scripts/test-linux.sh -race -tags integration -count=1 -v` : 375 PASS, le seul SKIP préexistant ; `go test -race -count=30 -run 'Logs|StreamSlots'` stable ; Vitest 76, `check`, `lint`, `build` verts ; parcours unique et parcours jetable rejoués contre un vrai agent (arrêt : 0 s, code 0). Rouge avant le code inchangé à chaque tâche (compilation pour 1 à 5). Mutations nouvelles, toutes attrapées : repli fermé de `Args` retiré → `TestArgs` (« FUITE : mysql -ps3cr3t --password ») ; contrôle de session retiré → `TestLogsSessionEnds` ; délai d'écriture retiré → `TestLogsWriteDeadline` ; éviction retirée → `TestStreamSlots`, `TestLogsEvictsOldest` ; garde « P n'est pas `/` » retirée → `TestCheckArchiveTmpfsJail` (« tar accepté dans une prison tmpfs ») ; `State.Error` non masqué → `TestContainerRadiography` (« FUITE : s3cr3t-err »).
 > - **Non vérifié** : les VM `hk-ubuntu` et `hk-fedora` (tâche 9).
 
 **Goal:** Depuis la page d'un conteneur, l'utilisateur suit ses logs en direct (stdout et stderr, recherche, pause, téléchargement, reprise après coupure, logs passés d'un conteneur arrêté) et lit sa radiographie (image, état, redémarrages, commande, variables d'environnement aux secrets masqués par l'agent et révélables une à une avec journal, ports, réseaux, montages). En préalable, un `--tmpfs` placé sous un lien ne bloque plus toute écriture dans le conteneur.
@@ -22,7 +23,18 @@
 
 ## Décisions de revue
 
-Aucune encore : premier tour de revue à venir. Une ligne par correction, avec la tâche qui l'applique, comme dans les plans précédents.
+Revue du plan, premier tour (relecteur Opus et Codex, « Prêt avec réserves »). Une ligne par correction, avec la tâche qui l'applique.
+
+- **R1 (Opus I1, Codex) :** le masquage de la commande laissait passer `PGPASSWORD="x"`, `PGPASSWORD='x'`, `--requirepass "x"`, `--env=DB_PASSWORD=x`, la fin de `--password=pa ss` et de `--password=s3"cr3t`, et `["--password=", "x"]` (mesuré). `Args` accepte les valeurs entre guillemets (une apostrophe ou un guillemet non fermé court jusqu'à la fin), cherche une affectation dans la valeur d'une autre, masque tout le reste de l'argument hors d'une ligne de shell (argument qui ne suit pas `-c`), masque l'argument qui suit `--nom=` vide, et **échoue fermé** : un mot de §7 resté sans rien de masqué après lui fait masquer l'argument entier (`Line`). Cas exacts écrits d'abord dans `TestArgs`, avec la vérification « FUITE ». → Tâche 4 ; Q27.
+- **R2 (Opus I2) :** une valeur au nom neutre portait un secret (`ConnectionStrings__Default=…;Password=…;`, `…?password=…`, `JAVA_OPTS=-D…Password=…`). `Masked` ajoute `secretAssignment(value)` ; `TestEnvNeverLeaks` gagne ces cas et deux témoins qui restent visibles. → Tâches 4, 5, 9 ; Q36.
+- **R3 (Opus I3) :** un flux survivait à la déconnexion et à l'expiration de la session. À chaque battement, `sessionValid` relit le cookie (`Sessions.Valid`) ; sinon `failure` `unauthorized`, puis fermeture ; l'interface renvoie à la connexion. Test d'abord : `TestLogsSessionEnds`. → Tâches 3, 7 ; Q37.
+- **R4 (Opus I4) :** un client parti sans FIN gardait un créneau environ 15 min, et son `EventSource` en reprenait un autre. Chaque écriture du flux a un délai de 30 s (`SetWriteDeadline` par `http.ResponseController`) ; quand les 8 créneaux sont pris, le flux SSE le plus ancien cède le sien (`event: evicted`, sans reconnexion côté interface) ; un téléchargement n'est jamais évincé, et s'il ne reste que des téléchargements, le nouveau venu est refusé. Tests d'abord : `TestStreamSlots`, `TestLogsEvictsOldest`, `TestLogsDownloadSlots`, `TestLogsWriteDeadline`. → Tâches 3, 7 ; Q33, Q37.
+- **R5 (Opus I5) :** le changement de `sameMount` vaut aussi pour le tar d'un dossier (§5.4 b) : un `--mount type=tmpfs` sous un lien n'y refuse plus tout tar. Tests d'évasion ajoutés à la tâche 1 : `TestCheckArchiveTmpfsJail` (prison, la garde « P n'est pas `/` » seule refuse ; mutation attrapée) et `TestIntegrationCheckArchiveTmpfsUnderLink` (alpine, tar de `/etc` accepté) ; §5.4 (b) mis à jour par la tâche 9. → Tâches 1, 9 ; Q38.
+- **R6 (Codex) :** reprise après des lignes écartées par le limiteur, horodatages identiques : `TestLogsResumeAfterDrops` montre qu'aucune ligne envoyée n'est renvoyée et qu'aucune n'est perdue ; les lignes `dropped` reviennent à la reprise (elles n'avaient été qu'annoncées). Pas de changement de code ; limites écrites dans Q30 et §13. → Tâche 3 ; Q30.
+- **R7 (Codex Minor) :** « journalisée » pour un téléchargement interrompu désignait le journal de l'agent (`slog`), pas l'audit. La prose suit le code : §7 ne journalise que `login.fail`, `env.reveal`, `file.write` et `file.upload` ; une lecture interrompue est un incident technique, pas une action à tracer. → Décisions.
+- **R8 (Opus Minor 1) :** `tarFS.CheckWriteRoot` résout une destination tmpfs aussi loin qu'elle existe, puis y recolle le reste (`index.walk`, tiré de `resolve`) : `/dangling/x`, avec `/dangling → ../real` absent, donne `/real/x`, là où runc le créera. → Tâche 1 ; Q25.
+- **R9 (Opus Minor 3, 4, 8) :** `TestLogsClientGone` ne prouve plus la libération du créneau par une seconde ouverture (instable sous charge, et sans objet avec l'éviction) : `TestStreamSlots` la prouve. Le lien de téléchargement des logs disparaît quand le flux est en erreur (sinon le navigateur enregistrait le JSON d'erreur). `State.Error` passe par `secrets.Line` (un message de Docker peut citer la commande). → Tâches 3, 5, 7.
+- **R10 (Opus Minor 2, 5, 6, 7), non retenus :** `readRaw` est gardé (testé, mutation attrapée) ; les limites de reprise sont écrites (Q30, §13) ; la surface en plus de la radiographie (MAC, passerelle, alias, utilisateur) reste, elle est petite et utile au diagnostic ; pas de test Go de l'arrêt de l'agent : `run` crée son propre client Docker et ne peut pas tenir un flux ouvert sans démon, l'arrêt reste mesuré par le script jetable de la tâche 8.
 
 ## Ce que les plans précédents ont préparé
 
@@ -36,9 +48,9 @@ Aucune encore : premier tour de revue à venir. Une ligne par correction, avec l
 
 - **Lecteur de logs dans `dockerx`.** Le format des trames est celui de Docker : il vit à côté du client. `ReadLogs(r, tty, max, emit)` plutôt que `stdcopy` : il faut la ligne, son flux et son horodatage, recoller les parties d'une ligne longue et plafonner la mémoire. Le plafond est celui de l'appelant (16 Kio pour la vue, 1 Mio pour le téléchargement, Q32). → Tâche 2.
 - **Docker toujours interrogé avec horodatage**, stdout et stderr ; la vue demande `Follow` (le flux d'un conteneur arrêté se termine de lui-même, mesuré), le téléchargement non. → Tâches 2, 3.
-- **Événements SSE.** Une ligne : événement sans nom, `id: <horodatage RFC 3339 nano>/<rang>`, `data: {"ts","stream","line","truncated"?}`. Fin du flux de Docker : `event: end`. Lignes au-delà du débit : `event: dropped`, `{"count"}`. Erreur : `event: failure`, `{"error","detail"}`. Battement `: ping` toutes les 15 s. En-têtes `Content-Type: text/event-stream`, `Cache-Control: no-store` (déjà posé sur `/api/`), `X-Accel-Buffering: no` (nginx). → Tâche 3 ; Q29, Q30.
+- **Événements SSE.** Une ligne : événement sans nom, `id: <horodatage RFC 3339 nano>/<rang>`, `data: {"ts","stream","line","truncated"?}`. Fin du flux de Docker : `event: end`. Lignes au-delà du débit : `event: dropped`, `{"count"}`. Erreur : `event: failure`, `{"error","detail"}` (`unauthorized` quand la session a pris fin, R3). Flux évincé par un plus récent : `event: evicted` (R4). Battement `: ping` toutes les 15 s, qui vérifie aussi la session. En-têtes `Content-Type: text/event-stream`, `Cache-Control: no-store` (déjà posé sur `/api/`), `X-Accel-Buffering: no` (nginx). → Tâche 3 ; Q29, Q30.
 - **Pas de journal pour les logs.** §7 ne liste que `login.fail`, `env.reveal`, `file.write`, `file.upload`. Les logs ne passent pas par la garde des fichiers (`fsGuard`, qui vise un FUSE muet) mais par leurs propres créneaux (Q33). → Tâche 3.
-- **Téléchargement.** `<ts> <stream> <ligne>` par ligne, tout ce que Docker garde, `application/octet-stream`, `attachment; filename="<nom>-<AAAAMMJJ-HHMMSS>.log"` (nom réduit à `[A-Za-z0-9_.-]`). Une erreur avant le premier octet est une erreur d'API ; après, le fichier s'arrête (journal de l'agent). → Tâche 3.
+- **Téléchargement.** `<ts> <stream> <ligne>` par ligne, tout ce que Docker garde, `application/octet-stream`, `attachment; filename="<nom>-<AAAAMMJJ-HHMMSS>.log"` (nom réduit à `[A-Za-z0-9_.-]`). Une erreur avant le premier octet est une erreur d'API ; après, le fichier s'arrête, et une ligne `slog` le note dans le journal de l'agent, pas dans l'audit (R7 : §7 ne trace pas les lectures). → Tâche 3.
 - **Arrêt de l'agent.** Un flux SSE ne finit jamais seul : `srv.Shutdown` attendait 5 s puis échouait (mesuré : 6 s, code 1). `BaseContext` + `RegisterOnShutdown` annulent le contexte des requêtes à l'arrêt (mesuré : 1 s, code 0). Une écriture en cours n'en souffre pas : `PutArchive` a déjà son contexte détaché (plan 3, Q17). → Tâche 3.
 - **Radiographie en un seul `Inspect`.** `ContainerInfo.Details` porte ce que F7 montre ; `Env`, `Cmd` et `Entrypoint` y sont bruts et ne sortent de l'agent que par `secrets`. Ports : les liaisons réelles d'un conteneur actif (0.0.0.0 et :: une seule fois, comme F1), sinon celles de la configuration, plus les ports exposés sans liaison. Réseaux triés par nom. **Ni les labels ni le journal du healthcheck** : F7 ne les demande pas et ils portent souvent des secrets (seul l'état de santé est montré). → Tâche 5.
 - **Les logs ne sont pas masqués.** §7 masque l'environnement ; un secret écrit par l'application dans ses logs s'affiche comme avec `docker logs` (ligne §13, tâche 9).
@@ -52,27 +64,33 @@ Le plan suit la recommandation de chaque question ; une réponse différente cha
 - **Q24 — Lier une ligne tmpfs à un `--tmpfs` déclaré.** §13 donne comme parade le refus de toute écriture (échec fermé) ; §5.4 (b) lie un bind ou un volume par sa source, mais un tmpfs n'en a pas : un lien posé dans le conteneur pourrait mener sa destination vers un autre tmpfs (leurre).
   - *Recommandation (retenue en attendant la confirmation de l'utilisateur) :* une destination tmpfs absente de la table est retrouvée sur une ligne de type `tmpfs` **entière** (racine du montage `/`), dont le point P n'est **ni `/`** (prison : PID 1 chrooté dans le tmpfs, mesuré avec un vrai chroot), **ni déjà pris** par une autre destination (leurre : un autre tmpfs déclaré, un bind d'un tmpfs de l'hôte), **ni sur ou sous `/dev`, `/proc`, `/sys`** (leurre : `/dev`, `/dev/shm` du runtime), et que P résolu donne le même montage, périphérique et inode. Toute écriture **sous P** est refusée (`forbidden_path`), sinon elle réussirait sans que le conteneur la voie (mesuré au plan 3). Reste un leurre monté par le conteneur lui-même (`CAP_SYS_ADMIN`) : conséquence possible, une écriture que le conteneur ne voit pas, jamais une évasion (ligne §13). Autre option : garder le refus de toute écriture, et un compose `tmpfs: [/var/run]` (courant) n'est jamais inscriptible. → Tâches 1, 9.
 - **Q25 — Conteneur arrêté : tmpfs sous un lien.** `writable` compare les destinations au texte : sur un conteneur arrêté dont le tmpfs est `/var/run` (→ `../run`), un envoi dans `/run` passait, écrit dans le rootfs puis masqué au prochain démarrage.
-  - *Recommandation (retenue) :* `tarFS.CheckWriteRoot` résout chaque destination tmpfs dans l'index (`index.resolve`, liens suivis, jamais hors de la racine, comme runc au démarrage) et `files` refuse d'écrire dessous ; une destination absente de l'index reste telle que déclarée. Coût nul : l'index est déjà construit pour toute écriture sur un conteneur arrêté. → Tâche 1.
+  - *Recommandation (retenue) :* `tarFS.CheckWriteRoot` résout chaque destination tmpfs dans l'index (liens suivis, jamais hors de la racine, comme runc au démarrage) et `files` refuse d'écrire dessous ; une destination qui cesse d'exister en chemin est résolue aussi loin qu'elle va, le reste recollé (`index.walk`, R8 : `/dangling → ../real` puis `x` donne `/real/x`). Coût nul : l'index est déjà construit pour toute écriture sur un conteneur arrêté. → Tâche 1.
 - **Q26 — URL avec identifiants.** §7 dit `://user:pass@`. Formes courantes sans `:` ou sans utilisateur : `https://<jeton>@github.com`, `redis://:motdepasse@cache`.
   - *Recommandation (retenue) :* masquer toute valeur où `://` est suivi, avant tout blanc, d'un `@` (règle gourmande, jusqu'au dernier `@` du mot). Faux positifs acceptés (`https://example.com/a@b`) : la valeur se révèle d'un clic. → Tâche 4.
 - **Q27 — Secrets dans la commande et le point d'entrée.** §7 ne masque que l'environnement, mais F7 montre la commande, et `redis-server --requirepass …`, `mysqld --password=…`, `sh -c "PGPASSWORD=… psql postgres://u:p@h"` sont courants.
-  - *Recommandation (retenue) :* masquer partie par partie, en remplaçant par `••••••` : les identifiants d'une URL ; la valeur de `NOM=valeur` ou `--nom=valeur` ; le mot qui suit un drapeau `--nom` (argument suivant, ou dans une ligne de shell), sauf s'il est lui-même un drapeau ; `nom` selon la règle des noms de §7. `commandMasked: true` le dit à l'interface. Pas de révélation de la commande en v0.1 (`docker inspect` reste là) ; limites écrites en §13 (`mysql -pX`, un secret dans un script). Autres options : montrer la commande telle quelle (lettre de §7), ou la masquer en entier dès qu'un mot suspect y paraît (illisible). → Tâches 4, 5, 8.
+  - *Recommandation (retenue, revue 1 : R1) :* masquer partie par partie, en remplaçant par `••••••` : les identifiants d'une URL ; la valeur de `NOM=valeur` ou `--nom=valeur`, guillemets compris, et, hors d'une ligne de shell (argument qui ne suit pas `-c`), tout le reste de l'argument ; une affectation cachée dans la valeur d'une autre (`--env=DB_PASSWORD=x`) ; le mot ou l'argument qui suit un drapeau `--nom` ou `--nom=`, sauf s'il est lui-même un drapeau ; `nom` selon la règle des noms de §7. Puis **échec fermé** : un mot de §7 resté sans rien de masqué après lui masque l'argument entier (faux positifs acceptés : `passwd root` devient `•••••• root`). `commandMasked: true` le dit à l'interface. Le message d'erreur de l'état suit la même règle (`secrets.Line`). Pas de révélation de la commande en v0.1 (`docker inspect` reste là) ; limites écrites en §13 (`mysql -pX`, un secret dans un script). Autres options : montrer la commande telle quelle (lettre de §7), ou la masquer en entier dès qu'un mot suspect y paraît (illisible). → Tâches 4, 5, 8.
 - **Q28 — Révélation : ce qui est journalisé et permis.** §6 dit « journalisé » sans plus.
   - *Recommandation (retenue) :* ligne `{action: "env.reveal", container: <ID complet>, path: <nom>, result: "ok"}` écrite **avant** l'envoi ; la valeur n'est jamais journalisée ; un journal qui ne s'écrit pas → `500 internal`, rien n'est révélé (même règle que l'intention d'une écriture). Les refus (Origin, corps invalide, nom inconnu, casse différente) ne sont pas journalisés : rien n'a été révélé. Toute variable peut être demandée, masquée ou non. Permis en `--read-only` : c'est une lecture (§7 applique la lecture seule dans `files` seulement). → Tâches 5, 8, 9.
 - **Q29 — Erreurs d'un flux SSE.** `EventSource` ne lit ni le statut ni le corps d'une réponse autre que 200 : un `404 not_found` ou `503 docker_unavailable` y serait muet.
   - *Recommandation (retenue) :* une fois la session admise, toujours `200 text/event-stream` ; toute erreur arrive dans le flux (`event: failure`, code de §6) et la fin du flux de Docker par `event: end` ; l'interface ferme alors l'`EventSource`, sinon il se reconnecterait sans fin. Un `401` (session expirée, avant le flux) : l'interface interroge `/api/meta` et renvoie à la connexion. Autre option : `fetch` + `ReadableStream`, qui lit le statut mais réécrit la reconnexion, contre §3 (« reconnexion native »). → Tâches 3, 7.
 - **Q30 — Reprise après coupure, et pause.** §3 promet la reconnexion native, sans dire d'où elle reprend.
-  - *Recommandation (retenue) :* l'ID d'une ligne est `<horodatage>/<rang>`, le rang comptant les lignes de même horodatage déjà lues. `since` de Docker est inclusif (mesuré) : la reprise demande `since=<horodatage>`, `tail=all`, et saute les `rang + 1` premières lignes de cet horodatage. `Last-Event-ID` (le navigateur) prime sur `?after=` (la page). La pause ferme le flux (aucune ressource gardée, aucun tampon sans borne dans le navigateur) ; reprendre rouvre avec `after` : les lignes manquées arrivent (sous le plafond de Q31). Un ID mal formé est ignoré (départ ordinaire) ; une ligne sans horodatage n'a pas d'ID. → Tâches 3, 7.
+  - *Recommandation (retenue) :* l'ID d'une ligne est `<horodatage>/<rang>`, le rang comptant les lignes de même horodatage déjà lues. `since` de Docker est inclusif (mesuré) : la reprise demande `since=<horodatage>`, `tail=all`, et saute les `rang + 1` premières lignes de cet horodatage. `Last-Event-ID` (le navigateur) prime sur `?after=` (la page). La pause ferme le flux (aucune ressource gardée, aucun tampon sans borne dans le navigateur) ; reprendre rouvre avec `after` : les lignes manquées arrivent (sous le plafond de Q31). Un ID mal formé est ignoré (départ ordinaire) ; une ligne sans horodatage n'a pas d'ID. Limites écrites (R6, Opus Minor 5) : une ligne écartée par le limiteur revient à la reprise (elle n'avait été qu'annoncée : l'interface la compte deux fois) ; si `tail` coupe un groupe de lignes de même horodatage, la reprise peut en rejouer quelques-unes (mesuré : 2 004 lignes écrites d'un coup ont 2 004 horodatages distincts, donc rare). → Tâches 3, 7.
 - **Q31 — Débit.** Un conteneur bavard peut écrire des dizaines de milliers de lignes par seconde ; le navigateur n'en affiche utilement que quelques milliers.
   - *Recommandation (retenue) :* par flux, un seau de 10 000 lignes (la queue initiale, 10 000 au plus, y tient), rempli de 1 000 lignes par seconde. Les lignes au-delà ne sont pas envoyées mais **comptées** et annoncées (`dropped`) avant la ligne suivante, à chaque battement et à la fin ; l'interface dit combien, et renvoie au téléchargement, qui a tout. → Tâches 3, 7.
 - **Q32 — Taille d'une ligne.** Docker coupe une ligne de plus de 16 Kio en parties de même horodatage (mesuré : 16 384 + 16 384 + 7 232 octets pour 40 000).
   - *Recommandation (retenue) :* les parties sont recollées par flux ; vue en direct : 16 Kio (`truncated`, marqué « … » dans l'interface) ; téléchargement : 1 Mio, puis `[…]`. Une trame n'est jamais lue entière : un en-tête qui annonce 1 Gio n'alloue rien (test). → Tâches 2, 3, 7.
 - **Q33 — Flux simultanés, départ du client.** Rien dans la spec.
-  - *Recommandation (retenue) :* 8 flux au plus pour l'agent, téléchargements compris (un utilisateur, quelques onglets) ; au-delà, `internal` (503, ou `failure` dans le flux) qui dit pourquoi. Le créneau n'est rendu qu'une fois le flux de Docker fermé et la goroutine de lecture finie. Battement `: ping` toutes les 15 s (mandataires, client disparu). L'interface ferme le flux en quittant l'onglet : en HTTP/1.1, un navigateur n'ouvre que 6 connexions par hôte. → Tâches 3, 7.
+  - *Recommandation (retenue, revue 1 : R4) :* 8 flux au plus pour l'agent, téléchargements compris (un utilisateur, quelques onglets). Quand ils sont tous pris, le flux SSE **le plus ancien cède** sa place (`evicted`) : un client parti sans FIN garde sa connexion environ 15 min (retransmissions TCP), et son `EventSource` se reconnecte ailleurs ; le flux le plus récent est presque toujours le vivant. Un téléchargement n'est jamais évincé ; s'il ne reste que des téléchargements, `internal` (503, ou `failure` dans le flux) qui dit pourquoi. Le créneau n'est rendu qu'une fois le flux de Docker fermé et la goroutine de lecture finie. Chaque écriture a un délai de 30 s. Battement `: ping` toutes les 15 s (mandataires) ; il vérifie aussi la session (Q37). L'interface ferme le flux en quittant l'onglet : en HTTP/1.1, un navigateur n'ouvre que 6 connexions par hôte. → Tâches 3, 7.
 - **Q34 — Pilote de logs illisible** (`--log-driver none`, `syslog`, `gelf`…). Docker répond `501` « configured logging driver does not support reading » (mesuré) ; `wrap` en ferait `docker_unavailable` (« Docker ne répond pas » : faux).
-  - *Recommandation (retenue) :* nouveau code `logs_unavailable` (422), traduit, ajouté à §6 par la tâche 9. Autre option : `not_found` avec un détail, moins clair à l'écran. → Tâches 2, 3, 7, 9.
+  - *Recommandation (retenue, approuvée par Opus en revue 1 ; la décision revient à l'utilisateur, c'est une modification de §6) :* nouveau code `logs_unavailable` (422), traduit, ajouté à §6 par la tâche 9. `docker_unavailable` serait faux, `not_found` tromperait (le conteneur existe). Autre option : `not_found` avec un détail, moins clair à l'écran. → Tâches 2, 3, 7, 9.
 - **Q35 — Parcours Playwright.** §10 fixe un seul parcours (connexion → liste → fichier → diff) et ne demande rien pour F6 et F7.
   - *Recommandation (retenue) :* ne pas l'étendre ; F6 et F7 sont couverts de bout en bout côté API par la tâche 6 (§10 : « F1 à F7 de bout en bout côté API ») et l'interface par un parcours jetable, non commité (tâche 8). Si l'utilisateur le veut : trois étapes de plus dans le parcours unique (onglet Logs du conteneur arrêté, onglet Radiographie avec une variable masquée), et `scripts/e2e.sh` crée le conteneur avec un secret. → Tâche 8.
+- **Q36 — Secret dans la valeur d'une variable au nom neutre** (revue 1, I2). §7 juge le nom et les URL ; une chaîne de connexion .NET (`ConnectionStrings__Default=Server=db;Password=…;`), une URL JDBC (`…?user=u&password=…`), `JAVA_OPTS=-D…Password=…` passaient en clair.
+  - *Recommandation (retenue) :* masquer aussi la variable dont la valeur contient une affectation `NOM=…` au nom secret, après un début, un blanc, `;`, `&`, `?`, `,`, `=` ou un guillemet (même expression que la commande, R1). Témoins testés : `JAVA_OPTS=-Xmx512m -Dfile.encoding=UTF-8` et `NODE_OPTIONS=--max-old-space-size=4096` restent visibles. Restent en clair (§13) : JSON (`"token":"…"`), `user:motdepasse@hôte` sans `://`. Autre option : la lettre de §7, et ces valeurs sortent. → Tâches 4, 5, 9.
+- **Q37 — Fin d'un flux SSE** (revue 1, I3, I4). Un flux ne finissait qu'avec le client ou le conteneur : il survivait à la déconnexion et à l'expiration de la session, et un client parti sans FIN gardait son créneau environ 15 min.
+  - *Recommandation (retenue) :* trois fins de plus. (1) Session : vérifiée à chaque battement (15 s), `failure` `unauthorized` puis fermeture, l'interface renvoie à la connexion. (2) Éviction : quand les 8 créneaux sont pris, le flux le plus ancien reçoit `evicted` et ferme ; l'interface ne se reconnecte pas et propose « Recharger » (un neuvième onglet ouvert ferme donc le plus ancien, et le dit). (3) Délai d'écriture de 30 s : un client qui ne lit plus ne bloque pas la goroutine. Autres options : vérifier la session à chaque ligne (coût sur un flux bavard, pour gagner au plus 15 s), ou refuser le nouveau flux au lieu d'évincer (les créneaux zombies bloquent alors l'utilisateur légitime). → Tâches 3, 7, 9.
+- **Q38 — Le tmpfs retrouvé vaut-il pour le tar d'un dossier ?** (revue 1, I5). `LocateMounts` sert à l'écriture (`CheckWriteRoot`) et au tar (`CheckArchive`, §5.4 b) ; un `--mount type=tmpfs` (dans `Inspect.Mounts`) sous un lien faisait refuser tout tar du conteneur.
+  - *Recommandation (retenue) :* oui, mêmes gardes que pour l'écriture (ligne `tmpfs` entière, P ni `/`, ni pris, ni sous `/dev`, `/proc`, `/sys`) : le contrôle du tar reste fermé pour une prison (`TestCheckArchiveTmpfsJail`) et cesse de refuser un compose ordinaire (`TestIntegrationCheckArchiveTmpfsUnderLink`) ; §5.4 (b) le dit. Autre option : un drapeau de `LocateMounts` qui laisse le tar sans tmpfs (refus de tout tar de ces conteneurs, comme avant). → Tâches 1, 9.
 
 ## Global Constraints
 
@@ -89,19 +107,19 @@ Le plan suit la recommandation de chaque question ; une réponse différente cha
 
 ## Review Focus
 
-1. **L'utilisateur ferme l'onglet, le réseau coupe, ou l'agent s'arrête pendant un flux** : le flux de Docker est fermé, le créneau rendu, aucune goroutine ne reste ; l'agent s'arrête aussitôt (code 0). → Tâche 3 `TestLogsClientGone`, `TestLogsMaxStreams` ; tâche 8, script jetable (arrêt mesuré : 1 s, code 0).
+1. **L'utilisateur ferme l'onglet, se déconnecte, le réseau coupe sans prévenir, ou l'agent s'arrête pendant un flux** : le flux de Docker est fermé, le créneau rendu ou repris par le flux le plus récent, aucune goroutine ne reste ; l'agent s'arrête aussitôt (code 0). → Tâche 3 `TestLogsClientGone`, `TestStreamSlots`, `TestLogsEvictsOldest`, `TestLogsSessionEnds`, `TestLogsWriteDeadline` ; tâche 8, script jetable (arrêt mesuré : 1 s, code 0).
 2. **Conteneur très bavard ou ligne énorme** (JSON de 40 Kio, 10 000 lignes par seconde, en-tête de trame mensonger) : rien n'est perdu sans le dire, la mémoire reste bornée. → Tâche 2 `TestReadLogsPartialMessages`, `TestReadLogsErrors` (1 Gio annoncé), `TestReadLogsCap` ; tâche 3 `TestLogsRateLimit`, `TestLogsLongLine`.
 3. **Coupure puis reprise, ou pause puis reprise** : ni doublon ni trou, même quand plusieurs lignes partagent un horodatage. → Tâche 3 `TestLogsResume`, `TestLogsRateLimit` (rangs) ; tâche 6 (reprise sur un vrai Docker) ; tâche 8, parcours jetable (numéros de `tick` consécutifs).
-4. **Secret là où on ne l'attend pas** : jeton seul dans une URL, `sh -c` avec mot de passe, `--requirepass`, journal d'audit, réponse d'un refus. → Tâche 4 `TestURLCredentials`, `TestArgs`, `TestEnvNeverLeaks` ; tâche 5 `TestContainerRadiography`, `TestRevealEnv`, `TestRevealEnvRefusals`.
+4. **Secret là où on ne l'attend pas** : jeton seul dans une URL, `sh -c` avec mot de passe entre guillemets, `--requirepass`, chaîne de connexion sous un nom neutre, message d'erreur de Docker, journal d'audit, réponse d'un refus. → Tâche 4 `TestURLCredentials`, `TestArgs`, `TestEnvNeverLeaks` ; tâche 5 `TestContainerRadiography`, `TestRevealEnv`, `TestRevealEnvRefusals`.
 5. **Compose `tmpfs: [/var/run]` sur une image où `/var/run` → `../run`** : le reste du conteneur s'écrit, `/run` est refusé, actif comme arrêté, et aucun leurre ne déplace le refus. → Tâche 1 `TestLocateMountsTmpfs`, `TestTarCheckWriteRootTmpfs`, `TestWriteRefusedUnderResolvedTmpfs`, `TestIntegrationWriteTmpfsUnderLink`, `TestIntegrationCheckWriteRootTmpfsUnderLink`.
 
 ## Ordre : chaque test d'évasion précède le code qu'il protège
 
 | Protection (spec) | Tests écrits | Code protégé |
 |---|---|---|
-| Tmpfs sous un lien retrouvé sans prison ni leurre, écriture refusée sous le point retrouvé, actif et arrêté (§5.3 ét. 2, §13) | Tâche 1, étape 1 | Tâche 1, étape 3 |
+| Tmpfs sous un lien retrouvé sans prison ni leurre, écriture refusée sous le point retrouvé, actif et arrêté ; tar d'un dossier toujours fermé à la prison (§5.3 ét. 2, §5.4 b, §13) | Tâche 1, étape 1 | Tâche 1, étape 3 |
 | Lecteur de logs : trame jamais lue entière, lignes recollées, taille plafonnée | Tâche 2, étape 1 | Tâche 2, étape 3 |
-| Flux : session, client parti → flux de Docker fermé et créneau rendu, débit, erreurs dans le flux | Tâche 3, étape 1 | Tâche 3, étape 3 |
+| Flux : session (à l'ouverture et à chaque battement), client parti → flux de Docker fermé, créneau rendu ou repris par le plus récent, délai d'écriture, débit, erreurs dans le flux | Tâche 3, étape 1 | Tâche 3, étape 3 |
 | Masquage de §7 : noms, URL, commande ; rien ne fuit | Tâche 4, étape 1 | Tâche 4, étape 3 |
 | Radiographie sans secret ; révélation : Origin, journal avant l'envoi, valeur jamais journalisée | Tâche 5, étape 1 | Tâche 5, étape 3 |
 | Interface : lignes, filtres, URL, masques affichés tels que l'agent les donne | Tâches 7 et 8, étape 1 | Tâches 7 et 8, étape 3 |
@@ -124,16 +142,16 @@ Le plan suit la recommandation de chaque question ; une réponse différente cha
 internal/fsview/mounts.go                    LocateMounts : tmpfs lié par sa ligne (sameMount, runtimeMount), withTmpfs, tmpfsPoints
 internal/fsview/fsview.go                    WriteRootChecker.CheckWriteRoot rend les points de tmpfs
 internal/fsview/procfs_archive_linux.go      procFS.CheckWriteRoot : points retrouvés par identifiant de montage
-internal/fsview/tarindex.go, views.go        newTarFS(docker, info, …) ; tarFS.CheckWriteRoot : points résolus dans l'index
+internal/fsview/tarindex.go, views.go        newTarFS(docker, info, …) ; index.walk ; tarFS.CheckWriteRoot : points résolus dans l'index
 internal/files/files.go                      checkRoot(ctx, fsys, target), underTmpfs
 internal/dockerx/logs.go (+ test)            LogsOptions, LogLine, Logs, ReadLogs, ErrNoLogs, MaxLogLine
 internal/dockerx/dockerx.go                  Client.Logs ; ContainerInfo.Tty, LogDriver, Details ; Details, Network ; Mount.Mode, RW
 internal/dockerx/fake.go                     LogStreams, LogsErr, LogsGate, LogsCloses, LogsCalls()
-internal/api/logs.go (+ test)                GET /logs (SSE) et /logs/download, logLimits, inspectByRef
+internal/api/logs.go (+ test)                GET /logs (SSE) et /logs/download, logLimits, streamSlots (éviction), sessionValid, inspectByRef
 internal/api/container.go (+ test)           GET /api/containers/{id}, POST /env/reveal
 internal/api/server.go, fserr.go             routes, créneaux des flux, logs_unavailable
 internal/api/integration_observation_test.go F6 et F7 sur un vrai Docker (portable)
-internal/secrets/secrets.go (+ test)         SecretName, URLCredentials, Env, Lookup, Args, Mask
+internal/secrets/secrets.go (+ test)         SecretName, URLCredentials, Masked, Env, Lookup, Line, Args, Mask
 cmd/hublot/main.go                           arrêt : contexte des requêtes annulé
 web/src/lib/api.ts (+ test)                  logsUrl, logsDownloadUrl, LogLine ; Radiography, getContainer, revealEnv
 web/src/lib/logs.ts (+ test)                 parseLine, parseCount, parseFailure, appendLines, filterLines, formatTs
@@ -142,7 +160,7 @@ web/src/lib/i18n/fr.ts, en.ts, index.ts      clés logs.*, xray.*, error.logs_un
 web/src/lib/components/LogsView.svelte       onglet Logs (EventSource)
 web/src/lib/components/XrayView.svelte       onglet Radiographie
 web/src/routes/c/[id]/+page.svelte           onglets Logs et Radiographie, en-tête par GET /api/containers/{id}
-docs/superpowers/specs/2026-10-07-hublot-kit-v0.1-design.md   §5.3, §6, §7, §13 (tâche 9)
+docs/superpowers/specs/2026-10-07-hublot-kit-v0.1-design.md   §5.3, §5.4, §6, §7, §13 (tâche 9)
 ```
 
 ---
@@ -157,9 +175,9 @@ docs/superpowers/specs/2026-10-07-hublot-kit-v0.1-design.md   §5.3, §6, §7, �
 
 **Interfaces:**
 - Consumes: `LocateMounts`, `CheckVisibleMounts`, `scanMountinfo`, `mountLine`, `procFS.mountIdent`, `index.resolve`, `files.writable`, `files.under`.
-- Produces: `fsview.WriteRootChecker` devient `CheckWriteRoot(ctx context.Context) (tmpfs []string, err error)`, implémenté par `procFS` (points retrouvés par identifiant de montage) et par `tarFS` (destinations résolues dans l'index) ; `newTarFS(docker dockerx.Client, info dockerx.ContainerInfo, idx *index, stale func()) *tarFS` ; `sameMount(m dockerx.Mount, l mountLine) bool` ; `runtimeMount(p string) bool`, `withTmpfs(mounts []dockerx.Mount, tmpfs []string) []dockerx.Mount`, `tmpfsPoints(ms []dockerx.Mount) []string` ; dans `files` : `checkRoot(ctx, fsys, target string) error` et `underTmpfs(target string, points []string) error`.
+- Produces: `fsview.WriteRootChecker` devient `CheckWriteRoot(ctx context.Context) (tmpfs []string, err error)`, implémenté par `procFS` (points retrouvés par identifiant de montage) et par `tarFS` (destinations résolues dans l'index aussi loin qu'elles existent) ; `(*index).walk(p string) (cur string, rest []string, err error)`, dont `resolve` est désormais le cas « tout existe » ; `newTarFS(docker dockerx.Client, info dockerx.ContainerInfo, idx *index, stale func()) *tarFS` ; `sameMount(m dockerx.Mount, l mountLine) bool` ; `runtimeMount(p string) bool`, `withTmpfs(mounts []dockerx.Mount, tmpfs []string) []dockerx.Mount`, `tmpfsPoints(ms []dockerx.Mount) []string` ; dans `files` : `checkRoot(ctx, fsys, target string) error` et `underTmpfs(target string, points []string) error`.
 
-> **À comprendre :** compose `tmpfs: [/var/run]` sur une image où `/var/run` est un lien vers `../run` (alpine, Debian…) : runc monte le tmpfs là où le lien mène, sur `/run`, et la table des montages ne montre jamais `/var/run`. `CheckVisibleMounts` refusait donc **toute** écriture dans ce conteneur (échec fermé, §13). La tâche le retrouve comme `LocateMounts` retrouve déjà un bind ou un volume : par l'identifiant de montage de la destination résolue dans le conteneur (`pathrs`, jamais hors de la racine). Un tmpfs n'a pas de source qui le lie à une ligne : le lien est la forme de la ligne (type `tmpfs`, racine `/`), avec trois gardes contre les pièges (Q24) : P n'est pas `/` (prison), P n'est pas déjà pris (leurre : autre tmpfs, bind), P n'est pas sous `/dev`, `/proc`, `/sys` (leurre : montages du runtime). Retrouver le point ne suffit pas : Docker n'écrit jamais dans un tmpfs (mesuré au plan 3), donc `files` refuse d'écrire **sous** le point retrouvé, sinon l'écriture réussirait sans que le conteneur la voie. Pour un conteneur arrêté, l'index résout la destination comme runc le fera au démarrage (Q25).
+> **À comprendre :** compose `tmpfs: [/var/run]` sur une image où `/var/run` est un lien vers `../run` (alpine, Debian…) : runc monte le tmpfs là où le lien mène, sur `/run`, et la table des montages ne montre jamais `/var/run`. `CheckVisibleMounts` refusait donc **toute** écriture dans ce conteneur (échec fermé, §13). La tâche le retrouve comme `LocateMounts` retrouve déjà un bind ou un volume : par l'identifiant de montage de la destination résolue dans le conteneur (`pathrs`, jamais hors de la racine). Un tmpfs n'a pas de source qui le lie à une ligne : le lien est la forme de la ligne (type `tmpfs`, racine `/`), avec trois gardes contre les pièges (Q24) : P n'est pas `/` (prison), P n'est pas déjà pris (leurre : autre tmpfs, bind), P n'est pas sous `/dev`, `/proc`, `/sys` (leurre : montages du runtime). Retrouver le point ne suffit pas : Docker n'écrit jamais dans un tmpfs (mesuré au plan 3), donc `files` refuse d'écrire **sous** le point retrouvé, sinon l'écriture réussirait sans que le conteneur la voie. Pour un conteneur arrêté, l'index résout la destination comme runc le fera au démarrage, et une fin de chemin absente est recollée sous la partie résolue (Q25, R8). `LocateMounts` sert aussi au contrôle du tar d'un dossier (`CheckArchive`, §5.4 b) : un `--mount type=tmpfs` sous un lien n'y fait plus refuser tout tar, et la prison y reste refusée (Q38, R5).
 
 - [ ] **Step 1: Tests d'évasion qui échouent** — prison, leurre, lien vers un autre montage ; et le défaut de §13 sur un vrai Docker :
 
@@ -298,7 +316,7 @@ diff --git a/internal/fsview/integration_test.go b/internal/fsview/integration_t
  			if err != nil {
  				break
  			}
-@@ -332,3 +333,32 @@ func TestIntegrationCheckWriteRoot(t *testing.T) {
+@@ -332,3 +333,46 @@ func TestIntegrationCheckWriteRoot(t *testing.T) {
  		}
  	}
  }
@@ -329,6 +347,20 @@ diff --git a/internal/fsview/integration_test.go b/internal/fsview/integration_t
 +	}
 +	if !errors.Is(err, ErrForbiddenPath) {
 +		t.Errorf("ÉVASION : prison dans le tmpfs sous un lien acceptée (%v)", err)
++	}
++}
++
++// Review I5: a --mount type=tmpfs under a link is in Inspect.Mounts; the tar
++// of a directory (spec §5.4 b) locates it on /run like a write does, instead
++// of refusing every tar of the container.
++func TestIntegrationCheckArchiveTmpfsUnderLink(t *testing.T) {
++	needRoot(t)
++	id := runTarget(t, "hublot-it-fs-mount-tmpfs", "--mount", "type=tmpfs,dst=/var/run", "alpine:3", "sleep", "300")
++	if got := docker(t, "exec", id, "readlink", "/var/run"); got != "../run" {
++		t.Skipf("précondition absente : /var/run -> %q dans alpine:3, attendu ../run", got)
++	}
++	if err := openFor(t, id).CheckArchive(context.Background(), "/etc"); err != nil {
++		t.Fatalf("tar de /etc refusé à cause du tmpfs /var/run : %v", err)
 +	}
 +}
 diff --git a/internal/fsview/mounts_test.go b/internal/fsview/mounts_test.go
@@ -432,7 +464,39 @@ diff --git a/internal/fsview/procfs_archive_linux_test.go b/internal/fsview/proc
  	"strings"
  	"testing"
  
-@@ -180,7 +181,7 @@ func TestCheckArchiveDestinationUnderSymlink(t *testing.T) {
+@@ -55,6 +56,31 @@ func TestCheckArchiveMountTable(t *testing.T) {
+ 	}
+ }
+ 
++// Review I5: the tar check (spec §5.4 b) locates a tmpfs of Inspect.Mounts
++// (--mount type=tmpfs) under a link too. A PID 1 chrooted into that tmpfs,
++// with a link planted to its root, leads the destination to "/": refused.
++// The table is faked (a whole tmpfs on "/", with the real root's mount ID);
++// the destination is a real link to "/" in the test machine.
++func TestCheckArchiveTmpfsJail(t *testing.T) {
++	p, _ := childView(t)
++	st, err := statxMountID(int(p.root.Fd()), 0, 0)
++	must(t, err)
++	link := filepath.Join(t.TempDir(), "var-run")
++	must(t, os.Symlink("/", link))
++	if _, err := p.mountIdent(link); err != nil {
++		t.Skipf("précondition absente : %s illisible dans la vue (%v) ; lancer par scripts/test-linux.sh", link, err)
++	}
++	old := readMountinfo
++	t.Cleanup(func() { readMountinfo = old })
++	readMountinfo = func(int) ([]byte, error) {
++		return []byte(fmt.Sprintf("%d 1 0:50 / / rw - tmpfs tmpfs rw\n", st.Mnt_id)), nil
++	}
++	p.mounts = []dockerx.Mount{{Type: "tmpfs", Destination: link}}
++	if err := p.CheckArchive(ctx, "/etc"); !errors.Is(err, ErrForbiddenPath) {
++		t.Fatalf("ÉVASION : tar accepté dans une prison tmpfs (%v)", err)
++	}
++}
++
+ func TestCheckArchiveHostBind(t *testing.T) {
+ 	p, _ := childView(t)
+ 	p.mounts = []dockerx.Mount{{Type: "bind", Source: "/proc", Destination: "/host/proc"}}
+@@ -180,7 +206,7 @@ func TestCheckArchiveDestinationUnderSymlink(t *testing.T) {
  // table is faked: a real chrooted child needs a binary inside the jail.
  func TestCheckWriteRoot(t *testing.T) {
  	p, _ := childView(t)
@@ -441,7 +505,7 @@ diff --git a/internal/fsview/procfs_archive_linux_test.go b/internal/fsview/proc
  		t.Fatalf("process non chrooté : %v", err)
  	}
  	old := readMountinfo
-@@ -188,12 +189,12 @@ func TestCheckWriteRoot(t *testing.T) {
+@@ -188,12 +214,12 @@ func TestCheckWriteRoot(t *testing.T) {
  	readMountinfo = func(int) ([]byte, error) {
  		return []byte("36 35 8:1 / /etc rw - ext4 /dev/sda1 rw\n"), nil
  	}
@@ -456,7 +520,7 @@ diff --git a/internal/fsview/procfs_archive_linux_test.go b/internal/fsview/proc
  		t.Fatal("mountinfo illisible : doit échouer fermé")
  	}
  }
-@@ -220,24 +221,24 @@ func TestCheckWriteRootJail(t *testing.T) {
+@@ -220,24 +246,24 @@ func TestCheckWriteRootJail(t *testing.T) {
  	p.tmpfs = []string{"/run"}
  
  	readMountinfo = table(st.Mnt_id, "/data", "/jail", "/run")
@@ -498,7 +562,7 @@ diff --git a/internal/fsview/tarindex_test.go b/internal/fsview/tarindex_test.go
  }
  
  func readTar(fsys FS, p string) ([]byte, error) {
-@@ -587,3 +587,25 @@ func TestMeasureIndexMemory(t *testing.T) {
+@@ -587,3 +587,28 @@ func TestMeasureIndexMemory(t *testing.T) {
  		t.Fatalf("mesure implausible : %.0f octets par entrée", per)
  	}
  }
@@ -506,22 +570,25 @@ diff --git a/internal/fsview/tarindex_test.go b/internal/fsview/tarindex_test.go
 +// Spec §13, stopped container: runc mounts a --tmpfs at its destination
 +// resolved in the root filesystem, links followed. CheckWriteRoot resolves
 +// it the same way in the index (never out of the root), so package files
-+// refuses /run for a "tmpfs: [/var/run]" with /var/run -> ../run. A
-+// destination absent from the index stays as declared.
++// refuses /run for a "tmpfs: [/var/run]" with /var/run -> ../run. A path
++// that stops existing midway is resolved as far as it goes, the rest
++// appended (runc creates it there: /dangling -> ../real gives /real/x).
 +func TestTarCheckWriteRootTmpfs(t *testing.T) {
 +	idx, err := buildIndex(tctx, bytes.NewReader(mkTar(t,
 +		tdir("/"), tdir("/run/"), tdir("/var/"), tlink("/var/run", "../run"),
 +		tlink("/var/lock", "/../../run/lock"), tdir("/run/lock/"), tdir("/tmp/"),
++		tlink("/dangling", "../real"),
 +	)), DefaultIndexLimits, new(atomic.Int64))
 +	if err != nil {
 +		t.Fatal(err)
 +	}
-+	info := dockerx.ContainerInfo{ID: tarID, Tmpfs: []string{"/var/run", "/absent/x"},
++	info := dockerx.ContainerInfo{ID: tarID, Tmpfs: []string{"/var/run", "/absent/x", "/dangling/x", "/var/run/new/../sub"},
 +		Mounts: []dockerx.Mount{{Type: "tmpfs", Destination: "/var/lock"}, {Type: "volume", Name: "v", Destination: "/tmp"}}}
 +	var w WriteRootChecker = newTarFS(&dockerx.Fake{}, info, idx, func() {})
 +	points, err := w.CheckWriteRoot(tctx)
-+	if err != nil || !slices.Equal(points, []string{"/run/lock", "/run", "/absent/x"}) {
-+		t.Fatalf("tmpfs résolus par l'index : %v %v, attendu [/run/lock /run /absent/x]", points, err)
++	want := []string{"/run/lock", "/run", "/absent/x", "/real/x", "/run/sub"}
++	if err != nil || !slices.Equal(points, want) {
++		t.Fatalf("tmpfs résolus par l'index : %v %v, attendu %v", points, err, want)
 +	}
 +}
 ```
@@ -797,7 +864,63 @@ diff --git a/internal/fsview/tarindex.go b/internal/fsview/tarindex.go
  }
  
  var _ FS = (*tarFS)(nil)
-@@ -372,4 +373,19 @@ func (t *tarFS) CheckArchive(ctx context.Context, _ string) error {
+@@ -182,6 +183,19 @@ func progress(read, total int64) float64 {
+ // path that ever goes to GetArchive. cur never contains a link, so ".." is
+ // the parent of the resolved target, and stays at "/" on the root.
+ func (x *index) resolve(p string) (string, error) {
++	cur, rest, err := x.walk(p)
++	if err != nil {
++		return "", err
++	}
++	if rest != nil {
++		return "", notExist(p)
++	}
++	return cur, nil
++}
++
++// walk is resolve that stops at the first missing component: it returns
++// the resolved path so far and the components left (nil when p exists).
++func (x *index) walk(p string) (cur string, rest []string, err error) {
+ 	todo := components(p)
+ 	mustDir := strings.HasSuffix(p, "/")
+ 	cur, hops := "/", 0
+@@ -195,14 +209,14 @@ func (x *index) resolve(p string) (string, error) {
+ 		next := childPath(cur, c)
+ 		e, ok := x.entries[next]
+ 		if !ok {
+-			return "", notExist(p)
++			return cur, append([]string{c}, todo...), nil
+ 		}
+ 		if e.Type == TypeSymlink {
+ 			if hops++; hops > maxHops {
+-				return "", &fs.PathError{Op: "resolve", Path: p, Err: syscall.ELOOP}
++				return "", nil, &fs.PathError{Op: "resolve", Path: p, Err: syscall.ELOOP}
+ 			}
+ 			if e.LinkTarget == "" {
+-				return "", notExist(p)
++				return "", nil, notExist(p)
+ 			}
+ 			if strings.HasPrefix(e.LinkTarget, "/") {
+ 				cur = "/" // absolute: from the container root, never the host's
+@@ -214,14 +228,14 @@ func (x *index) resolve(p string) (string, error) {
+ 			continue
+ 		}
+ 		if len(todo) > 0 && e.Type != TypeDir {
+-			return "", fmt.Errorf("%w : %s", ErrNotDir, p)
++			return "", nil, fmt.Errorf("%w : %s", ErrNotDir, p)
+ 		}
+ 		cur = next
+ 	}
+ 	if mustDir && x.entries[cur].Type != TypeDir {
+-		return "", fmt.Errorf("%w : %s", ErrNotDir, p)
++		return "", nil, fmt.Errorf("%w : %s", ErrNotDir, p)
+ 	}
+-	return cur, nil
++	return cur, nil, nil
+ }
+ 
+ func components(p string) []string {
+@@ -372,4 +386,21 @@ func (t *tarFS) CheckArchive(ctx context.Context, _ string) error {
  	return HostBind(ctx, t.docker, t.mounts)
  }
  
@@ -805,12 +928,14 @@ diff --git a/internal/fsview/tarindex.go b/internal/fsview/tarindex.go
 +// Docker writes in. At start, runc mounts each tmpfs at its destination
 +// resolved in the root filesystem, links followed (spec §13: /var/run ->
 +// ../run puts it at /run): the index resolves it the same way, never out
-+// of the root. A destination absent from the index stays as declared.
++// of the root, as far as the path exists; runc creates the rest there
++// (review Minor 1: /dangling -> ../real, then x, gives /real/x). A path
++// the index refuses (loop, not a directory) stays as declared.
 +func (t *tarFS) CheckWriteRoot(context.Context) ([]string, error) {
 +	points := tmpfsPoints(withTmpfs(t.mounts, t.tmpfs))
 +	for i, d := range points {
-+		if r, err := t.idx.resolve(d); err == nil {
-+			points[i] = r
++		if cur, rest, err := t.idx.walk(d); err == nil {
++			points[i] = CleanPath(cur + "/" + strings.Join(rest, "/"))
 +		}
 +	}
 +	return points, nil
@@ -834,9 +959,9 @@ diff --git a/internal/fsview/views.go b/internal/fsview/views.go
 - [ ] **Step 4: Vérifier**
 
 Run: `go test ./internal/fsview/ ./internal/files/ 2>&1 | tail -n 3 && scripts/test-linux.sh -tags integration ./internal/fsview/ ./internal/files/ ./internal/api/ -run 'Tmpfs|CheckWriteRoot|LocateMounts|WriteRunning|WriteRefused' -v 2>&1 | grep -E '^(---|ok|FAIL)|SKIP|ÉVASION' | tail -n 20`
-Expected: `ok` ; sous Linux, `PASS` pour `TestLocateMountsTmpfs`, `TestCheckWriteRoot`, `TestCheckWriteRootJail`, `TestTarCheckWriteRootTmpfs`, `TestIntegrationCheckWriteRoot`, `TestIntegrationCheckWriteRootTmpfsUnderLink`, `TestWriteRefusedUnderResolvedTmpfs`, `TestIntegrationWriteRunning`, `TestIntegrationWriteTmpfsUnderLink`, aucun SKIP, aucune ligne `ÉVASION`.
+Expected: `ok` ; sous Linux, `PASS` pour `TestLocateMountsTmpfs`, `TestCheckWriteRoot`, `TestCheckWriteRootJail`, `TestCheckArchiveTmpfsJail`, `TestTarCheckWriteRootTmpfs`, `TestIntegrationCheckWriteRoot`, `TestIntegrationCheckWriteRootTmpfsUnderLink`, `TestIntegrationCheckArchiveTmpfsUnderLink`, `TestWriteRefusedUnderResolvedTmpfs`, `TestIntegrationWriteRunning`, `TestIntegrationWriteTmpfsUnderLink`, aucun SKIP, aucune ligne `ÉVASION`. Le motif `-run` ci-dessus attrape aussi `TestCheckArchiveTmpfsJail` (`Tmpfs`).
 
-Mutations à rejouer (une fois, puis annuler) : retirer `l.Point == "/" ||` de `LocateMounts` → `TestLocateMountsTmpfs` (« prison dans le tmpfs acceptée ») et `TestIntegrationCheckWriteRootTmpfsUnderLink` échouent ; retirer `&& !runtimeMount(l.Point)` → `TestLocateMountsTmpfs` (« leurre : /dev/shm du runtime accepté ») ; remplacer `return underTmpfs(target, points)` par `return nil` dans `checkRoot` → `TestWriteRefusedUnderResolvedTmpfs`.
+Mutations à rejouer (une fois, puis annuler) : retirer `l.Point == "/" ||` de `LocateMounts` → `TestLocateMountsTmpfs` (« prison dans le tmpfs acceptée »), `TestCheckArchiveTmpfsJail` (« tar accepté dans une prison tmpfs ») et `TestIntegrationCheckWriteRootTmpfsUnderLink` échouent ; retirer `&& !runtimeMount(l.Point)` → `TestLocateMountsTmpfs` (« leurre : /dev/shm du runtime accepté ») ; remplacer `return underTmpfs(target, points)` par `return nil` dans `checkRoot` → `TestWriteRefusedUnderResolvedTmpfs`.
 
 - [ ] **Step 5: Commit**
 
@@ -1681,9 +1806,9 @@ EOF
 
 **Interfaces:**
 - Consumes: `dockerx.Client.Logs`, `dockerx.ReadLogs`, `dockerx.MaxLogLine`, `dockerx.ErrNoLogs`, `fsErrorStatus`, `writeFSError`, `apiError`, `containerRef`, `fsTimeout`, `requireSession`.
-- Produces: `type logLimits struct{ MaxStreams, Burst int; Rate float64; DefaultTail, MaxTail int; Heartbeat time.Duration }`, `var defaultLogLimits` (lu par `New` : les tests le réduisent) ; `(*server).inspectByRef(r *http.Request) (dockerx.ContainerInfo, error)` (réutilisé par la tâche 5) ; `server.logLimits`, `server.logSlots` ; `errTooManyStreams` ; routes `GET /api/containers/{id}/logs` et `/logs/download` ; code `logs_unavailable` (422) dans `fsErrorStatus`.
+- Produces: `type logLimits struct{ MaxStreams, Burst int; Rate float64; DefaultTail, MaxTail int; Heartbeat time.Duration }`, `var defaultLogLimits` (lu par `New` : les tests le réduisent) ; `(*server).inspectByRef(r *http.Request) (dockerx.ContainerInfo, error)` (réutilisé par la tâche 5) ; `type streamSlots`, `newStreamSlots(max int) *streamSlots`, `(*streamSlots).take(live bool) (release func(), evicted <-chan struct{}, err error)` ; `(*server).sessionValid(r *http.Request) bool` ; `sseWriteTimeout = 30 * time.Second` ; `server.logLimits`, `server.streams` ; `errTooManyStreams` ; événements `evicted` et `failure` `unauthorized` ; routes `GET /api/containers/{id}/logs` et `/logs/download` ; code `logs_unavailable` (422) dans `fsErrorStatus`.
 
-> **À comprendre :** un flux SSE est une réponse qui ne finit pas : `text/event-stream`, puis des blocs `champ: valeur` séparés par une ligne vide, poussés par `Flush`. `EventSource` se reconnecte seul et renvoie le dernier `id` reçu dans `Last-Event-ID` ; il ne sait pas lire une réponse d'erreur HTTP, d'où les erreurs dans le flux (Q29). Une goroutine lit Docker et pousse les lignes dans un canal ; la boucle principale attend une ligne, le battement ou la fin de la requête. En partant, elle annule le contexte, ferme le flux de Docker, vide le canal (la goroutine se termine) et seulement alors rend le créneau (Q33). Le seau de débit (Q31) compte les lignes refusées ; elles avancent quand même le rang, pour qu'une reprise ne les rejoue pas. Côté `main`, `srv.Shutdown` attendait des flux qui ne finissent jamais : l'arrêt annule désormais le contexte des requêtes.
+> **À comprendre :** un flux SSE est une réponse qui ne finit pas : `text/event-stream`, puis des blocs `champ: valeur` séparés par une ligne vide, poussés par `Flush`. `EventSource` se reconnecte seul et renvoie le dernier `id` reçu dans `Last-Event-ID` ; il ne sait pas lire une réponse d'erreur HTTP, d'où les erreurs dans le flux (Q29). Une goroutine lit Docker et pousse les lignes dans un canal ; la boucle principale attend une ligne, le battement ou la fin de la requête. En partant, elle annule le contexte, ferme le flux de Docker, vide le canal (la goroutine se termine) et seulement alors rend le créneau (Q33). Le seau de débit (Q31) compte les lignes refusées ; elles avancent quand même le rang. Le battement fait deux choses : `: ping`, et la relecture de la session (R3) ; une session finie ferme le flux par `failure` `unauthorized`. Chaque écriture pose un délai de 30 s (`SetWriteDeadline`, R4). Les créneaux (`streamSlots`) se comptent par flux ; quand ils sont pris, le flux SSE le plus ancien est évincé : son canal `evicted` se ferme, il envoie `event: evicted` et rend la main (Q33, Q37). Côté `main`, `srv.Shutdown` attendait des flux qui ne finissent jamais : l'arrêt annule désormais le contexte des requêtes.
 
 - [ ] **Step 1: Tests qui échouent** — un vrai serveur HTTP lit le flux événement par événement, comme un navigateur :
 
@@ -1692,7 +1817,7 @@ diff --git a/internal/api/logs_test.go b/internal/api/logs_test.go
 new file mode 100644
 --- /dev/null
 +++ b/internal/api/logs_test.go
-@@ -0,0 +1,464 @@
+@@ -0,0 +1,633 @@
 +package api
 +
 +// Tests of the logs routes (F6, spec §6), written before the code. The fake
@@ -1705,10 +1830,13 @@ new file mode 100644
 +	"context"
 +	"encoding/binary"
 +	"encoding/json"
++	"errors"
++	"io"
 +	"net/http"
 +	"net/http/httptest"
 +	"slices"
 +	"strings"
++	"sync/atomic"
 +	"testing"
 +	"time"
 +
@@ -2013,10 +2141,9 @@ new file mode 100644
 +	}
 +}
 +
-+// Q33: the client leaves (tab closed, navigation): Docker's stream is closed
-+// and the slot is free again, even while the container keeps running.
++// Q33: the client leaves (tab closed, navigation): Docker's stream is closed,
++// even while the container keeps running. The slot itself: TestStreamSlots.
 +func TestLogsClientGone(t *testing.T) {
-+	smallLimits(t, func(l *logLimits) { l.MaxStreams = 1 })
 +	f, c := logsFixture(t)
 +	f.docker.LogsGate = make(chan struct{}) // running: the stream never ends
 +	s := openSSE(t, f, "/api/containers/web/logs", c, nil)
@@ -2031,16 +2158,53 @@ new file mode 100644
 +	if f.docker.LogsCloses.Load() != 1 {
 +		t.Fatal("le flux de Docker n'est pas fermé après le départ du client")
 +	}
-+	// The only slot is free: a new stream starts.
-+	s2 := openSSE(t, f, "/api/containers/web/logs", c, nil)
-+	if e, _ := s2.next(t); e.Event == "failure" {
-+		t.Fatalf("créneau non rendu : %+v", e)
++}
++
++// Q33, Q37: slots are counted per stream; when they are all taken, the
++// oldest live stream gives its slot (a client gone without FIN keeps one
++// for ~15 min, and its EventSource reconnects on a new connection). A
++// download is never evicted; with only downloads, the newcomer is refused.
++func TestStreamSlots(t *testing.T) {
++	s := newStreamSlots(2)
++	relA, evA, err := s.take(true)
++	if err != nil {
++		t.Fatal(err)
++	}
++	relD, evD, _ := s.take(false)
++	relB, evB, err := s.take(true) // full: A, the oldest live stream, goes
++	if err != nil {
++		t.Fatal(err)
++	}
++	select {
++	case <-evA:
++	default:
++		t.Fatal("A doit être évincé")
++	}
++	for name, ev := range map[string]<-chan struct{}{"téléchargement": evD, "B": evB} {
++		select {
++		case <-ev:
++			t.Errorf("%s évincé à tort", name)
++		default:
++		}
++	}
++	relA() // the evicted stream returns: its slot is not counted twice
++	relA()
++	if _, _, err := s.take(false); err != nil { // B is evicted for it
++		t.Fatalf("téléchargement : %v", err)
++	}
++	if _, _, err := s.take(true); !errors.Is(err, errTooManyStreams) { // two downloads: refused
++		t.Fatalf("plein de téléchargements : %v", err)
++	}
++	relB()
++	relD()
++	if _, _, err := s.take(true); err != nil {
++		t.Fatalf("après départ du téléchargement : %v", err)
 +	}
 +}
 +
-+// Q33: at most MaxStreams logs streams at once for the agent, downloads
-+// included; beyond, a failure "internal" that says why.
-+func TestLogsMaxStreams(t *testing.T) {
++// Q33, Q37: through the routes, the newest stream wins; the evicted one
++// is told ("evicted", so the UI does not reconnect) and closed.
++func TestLogsEvictsOldest(t *testing.T) {
 +	smallLimits(t, func(l *logLimits) { l.MaxStreams = 2 })
 +	f, c := logsFixture(t)
 +	f.docker.LogsGate = make(chan struct{})
@@ -2048,19 +2212,131 @@ new file mode 100644
 +	a.next(t)
 +	b := openSSE(t, f, "/api/containers/web/logs", c, nil)
 +	b.next(t)
-+	third := openSSE(t, f, "/api/containers/web/logs", c, nil).all(t)
-+	if failureOf(t, third) != "internal" || !strings.Contains(third[len(third)-1].Data, "flux de logs") {
-+		t.Fatalf("troisième flux : %+v", third)
++	third := openSSE(t, f, "/api/containers/web/logs", c, nil)
++	if e, _ := third.next(t); lineOf(t, e).Line != "out1" {
++		t.Fatalf("troisième flux : %+v", e)
 +	}
-+	if rec := f.do("GET", "/api/containers/web/logs/download", "", c); rec.Code != http.StatusServiceUnavailable || errCode(t, rec) != "internal" {
-+		t.Fatalf("téléchargement au-delà du plafond : %d %s", rec.Code, rec.Body)
++	var last sseEvent
++	for {
++		e, ok := a.next(t)
++		if !ok {
++			break
++		}
++		last = e
 +	}
-+	close(f.docker.LogsGate) // both containers' streams end
-+	a.all(t)
-+	b.all(t)
-+	f.docker.LogsGate = nil
-+	if events := openSSE(t, f, "/api/containers/web/logs", c, nil).all(t); events[len(events)-1].Event != "end" {
-+		t.Fatalf("après fermeture : %+v", events)
++	if last.Event != "evicted" {
++		t.Fatalf("le plus ancien doit être évincé : dernier événement %+v", last)
++	}
++	close(f.docker.LogsGate)
++	if events := b.all(t); events[len(events)-1].Event != "end" {
++		t.Fatalf("B ne doit pas être évincé : %+v", events)
++	}
++}
++
++// Downloads count in the slots: one evicts a live stream; with every slot
++// held by downloads, a new stream is refused, and says why.
++func TestLogsDownloadSlots(t *testing.T) {
++	smallLimits(t, func(l *logLimits) { l.MaxStreams = 1 })
++	f, c := logsFixture(t)
++	f.docker.LogsGate = make(chan struct{})
++	srv := httptest.NewServer(f.h)
++	t.Cleanup(srv.Close)
++	download := func() chan int {
++		done := make(chan int, 1)
++		go func() {
++			req, _ := http.NewRequest("GET", srv.URL+"/api/containers/web/logs/download", nil)
++			req.AddCookie(c)
++			res, err := srv.Client().Do(req)
++			if err != nil {
++				done <- 0
++				return
++			}
++			io.Copy(io.Discard, res.Body)
++			res.Body.Close()
++			done <- res.StatusCode
++		}()
++		return done
++	}
++	waitCalls := func(n int) {
++		deadline := time.Now().Add(2 * time.Second)
++		for len(f.docker.LogsCalls()) < n && time.Now().Before(deadline) {
++			time.Sleep(5 * time.Millisecond)
++		}
++	}
++	a := openSSE(t, f, "/api/containers/web/logs", c, nil)
++	a.next(t)
++	d := download() // takes A's slot
++	waitCalls(2)
++	if events := a.all(t); events[len(events)-1].Event != "evicted" {
++		t.Fatalf("flux évincé par un téléchargement : %+v", events)
++	}
++	refused := openSSE(t, f, "/api/containers/web/logs", c, nil).all(t)
++	if failureOf(t, refused) != "internal" || !strings.Contains(refused[len(refused)-1].Data, "flux de logs") {
++		t.Fatalf("créneaux pris par des téléchargements : %+v", refused)
++	}
++	close(f.docker.LogsGate)
++	if code := <-d; code != http.StatusOK {
++		t.Fatalf("téléchargement : %d", code)
++	}
++}
++
++// Review I3: logging out, or the session expiring, ends the streams it
++// opened: the next heartbeat sees it, says "unauthorized" and closes.
++func TestLogsSessionEnds(t *testing.T) {
++	smallLimits(t, func(l *logLimits) { l.Heartbeat = 20 * time.Millisecond })
++	f, c := logsFixture(t)
++	f.docker.LogsGate = make(chan struct{})
++	s := openSSE(t, f, "/api/containers/web/logs", c, nil)
++	s.next(t)
++	if rec := f.do("POST", "/api/logout", "", c); rec.Code != http.StatusNoContent {
++		t.Fatalf("déconnexion : %d", rec.Code)
++	}
++	var last sseEvent
++	for end := time.Now().Add(2 * time.Second); time.Now().Before(end); {
++		e, ok := s.next(t) // a ping every 20 ms: the loop stays bounded
++		if !ok {
++			break
++		}
++		if e.Comment == "" {
++			last = e
++		}
++	}
++	if last.Event != "failure" || failureOf(t, []sseEvent{last}) != "unauthorized" {
++		t.Fatalf("flux encore ouvert 2 s après la déconnexion, dernier événement %+v", last)
++	}
++	deadline := time.Now().Add(2 * time.Second)
++	for f.docker.LogsCloses.Load() != 1 && time.Now().Before(deadline) {
++		time.Sleep(10 * time.Millisecond)
++	}
++	if f.docker.LogsCloses.Load() != 1 {
++		t.Fatal("flux de Docker resté ouvert après la déconnexion")
++	}
++}
++
++// deadlineWriter counts the write deadlines the handler sets (through
++// http.ResponseController), then passes them on.
++type deadlineWriter struct {
++	http.ResponseWriter
++	n *atomic.Int32
++}
++
++func (d deadlineWriter) SetWriteDeadline(t time.Time) error {
++	d.n.Add(1)
++	return http.NewResponseController(d.ResponseWriter).SetWriteDeadline(t)
++}
++
++func (d deadlineWriter) Unwrap() http.ResponseWriter { return d.ResponseWriter }
++
++// Review I4: every write of a stream has a deadline: a client that no
++// longer reads cannot hold the goroutine.
++func TestLogsWriteDeadline(t *testing.T) {
++	f, c := logsFixture(t)
++	n := new(atomic.Int32)
++	h := f.h
++	f.h = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { h.ServeHTTP(deadlineWriter{w, n}, r) })
++	events := openSSE(t, f, "/api/containers/web/logs", c, nil).all(t)
++	if len(events) != 4 || n.Load() < int32(len(events)) {
++		t.Fatalf("%d délais pour %d événements", n.Load(), len(events))
 +	}
 +}
 +
@@ -2083,6 +2359,24 @@ new file mode 100644
 +	// The ranks go on through the dropped lines: a resumption skips them.
 +	if events[2].ID != lts1+"/2" {
 +		t.Errorf("identifiant : %q", events[2].ID)
++	}
++}
++
++// Codex: resuming after lines the limiter dropped, with shared timestamps:
++// the lines sent are never sent again; the dropped ones come back (they
++// were only announced, never shown).
++func TestLogsResumeAfterDrops(t *testing.T) {
++	smallLimits(t, func(l *logLimits) { l.Burst, l.Rate = 2, 0 })
++	f, c := logsFixture(t)
++	f.docker.LogStreams[webID] = muxAll(mux(1, lts1+" a\n"), mux(2, lts1+" b\n"), mux(1, lts1+" c\n"), mux(1, lts2+" d\n"))
++	events := openSSE(t, f, "/api/containers/web/logs", c, nil).all(t)
++	if len(events) != 4 || events[1].ID != lts1+"/1" || events[2].Data != `{"count":2}` {
++		t.Fatalf("premier flux : %+v", events)
++	}
++	events = openSSE(t, f, "/api/containers/web/logs", c, map[string]string{"Last-Event-ID": events[1].ID}).all(t)
++	if len(events) != 3 || lineOf(t, events[0]).Line != "c" || events[0].ID != lts1+"/2" ||
++		lineOf(t, events[1]).Line != "d" || events[1].ID != lts2+"/0" || events[2].Event != "end" {
++		t.Fatalf("reprise : %+v", events)
 +	}
 +}
 +
@@ -2206,7 +2500,7 @@ diff --git a/internal/api/logs.go b/internal/api/logs.go
 new file mode 100644
 --- /dev/null
 +++ b/internal/api/logs.go
-@@ -0,0 +1,324 @@
+@@ -0,0 +1,396 @@
 +package api
 +
 +import (
@@ -2218,14 +2512,16 @@ new file mode 100644
 +	"log/slog"
 +	"net/http"
 +	"regexp"
++	"slices"
 +	"strconv"
 +	"strings"
++	"sync"
 +	"time"
 +
 +	"github.com/levy-cmd/hublot-kit/internal/dockerx"
 +)
 +
-+// logLimits of F6 (plan Observation, Q31 to Q33). Tests shrink them through
++// logLimits of F6 (plan Observation, Q31 to Q33, Q37). Tests shrink them through
 +// defaultLogLimits, read by New.
 +type logLimits struct {
 +	MaxStreams  int           // logs streams open at once for the agent, downloads included
@@ -2244,8 +2540,13 @@ new file mode 100644
 +// this ends with "[…]".
 +const maxDownloadLine = 1 << 20
 +
-+// errTooManyStreams: every slot of logLimits.MaxStreams is taken.
++// errTooManyStreams: every slot of logLimits.MaxStreams is taken by
++// downloads, which are never evicted.
 +var errTooManyStreams = errors.New("trop de flux de logs ouverts")
++
++// sseWriteTimeout bounds each write of a stream (review I4): a client
++// that no longer reads cannot hold the goroutine.
++const sseWriteTimeout = 30 * time.Second
 +
 +// lineID is the SSE ID of a line: its timestamp and its rank among the
 +// lines of that same timestamp. Docker's since is inclusive: resuming
@@ -2279,14 +2580,64 @@ new file mode 100644
 +	return strconv.Itoa(min(n, l.MaxTail))
 +}
 +
-+// takeStream reserves one of the MaxStreams slots; release frees it.
-+func (s *server) takeStream() (release func(), err error) {
-+	select {
-+	case s.logSlots <- struct{}{}:
-+		return func() { <-s.logSlots }, nil
-+	default:
-+		return nil, fmt.Errorf("%w (%d au plus) : fermez un onglet de logs", errTooManyStreams, cap(s.logSlots))
++// streamSlots: at most max logs streams at once (Q33, Q37). When every slot
++// is taken, the oldest live stream gives its slot to the newcomer: a client
++// gone without FIN keeps its connection for ~15 min (TCP retransmissions),
++// and its EventSource reconnects on a new one; the newest stream is almost
++// always the living one. A download is never evicted.
++type streamSlots struct {
++	mu   sync.Mutex
++	max  int
++	used int
++	live []*slot // oldest first
++}
++
++type slot struct {
++	evicted chan struct{} // closed on eviction
++	gone    bool          // evicted: its slot is no longer counted
++}
++
++func newStreamSlots(max int) *streamSlots { return &streamSlots{max: max} }
++
++// take reserves a slot (live: an SSE stream, evictable). release frees it,
++// once; evicted is closed if a newer stream takes the slot.
++func (s *streamSlots) take(live bool) (release func(), evicted <-chan struct{}, err error) {
++	s.mu.Lock()
++	defer s.mu.Unlock()
++	if s.used >= s.max {
++		if len(s.live) == 0 {
++			return nil, nil, fmt.Errorf("%w (%d au plus, tous des téléchargements)", errTooManyStreams, s.max)
++		}
++		old := s.live[0]
++		s.live, s.used, old.gone = s.live[1:], s.used-1, true
++		close(old.evicted)
 +	}
++	s.used++
++	sl := &slot{evicted: make(chan struct{})}
++	if live {
++		s.live = append(s.live, sl)
++	}
++	var once sync.Once
++	return func() {
++		once.Do(func() {
++			s.mu.Lock()
++			defer s.mu.Unlock()
++			if sl.gone {
++				return
++			}
++			s.used--
++			if i := slices.Index(s.live, sl); i >= 0 {
++				s.live = slices.Delete(s.live, i, i+1)
++			}
++		})
++	}, sl.evicted, nil
++}
++
++// sessionValid: the session that opened the stream still exists (review
++// I3: logout and expiry end the streams at the next heartbeat).
++func (s *server) sessionValid(r *http.Request) bool {
++	c, err := r.Cookie(cookieName)
++	return err == nil && s.d.Sessions.Valid(c.Value)
 +}
 +
 +// inspectByRef checks {id} and resolves the container by Inspect, bounded
@@ -2307,6 +2658,10 @@ new file mode 100644
 +	f *http.ResponseController
 +}
 +
++// deadline: every write of a stream ends within sseWriteTimeout (a writer
++// that cannot set one, in tests, writes without).
++func (e sse) deadline() { e.f.SetWriteDeadline(time.Now().Add(sseWriteTimeout)) }
++
 +func (e sse) event(name, id string, data any) error {
 +	b, err := json.Marshal(data)
 +	if err != nil {
@@ -2322,6 +2677,7 @@ new file mode 100644
 +	sb.WriteString("data: ")
 +	sb.Write(b)
 +	sb.WriteString("\n\n")
++	e.deadline()
 +	if _, err := e.w.Write([]byte(sb.String())); err != nil {
 +		return err
 +	}
@@ -2329,6 +2685,7 @@ new file mode 100644
 +}
 +
 +func (e sse) comment(text string) error {
++	e.deadline()
 +	if _, err := e.w.Write([]byte(": " + text + "\n\n")); err != nil {
 +		return err
 +	}
@@ -2377,6 +2734,7 @@ new file mode 100644
 +	h.Set("X-Accel-Buffering", "no") // nginx: no buffering of the stream
 +	w.WriteHeader(http.StatusOK)
 +	out := sse{w: w, f: http.NewResponseController(w)}
++	out.deadline()
 +	out.f.Flush()
 +	lim := s.logLimits
 +
@@ -2385,7 +2743,7 @@ new file mode 100644
 +		out.failure(err)
 +		return
 +	}
-+	release, err := s.takeStream()
++	release, evicted, err := s.streams.take(true)
 +	if err != nil {
 +		out.failure(err)
 +		return
@@ -2442,7 +2800,15 @@ new file mode 100644
 +		select {
 +		case <-r.Context().Done():
 +			return
++		case <-evicted:
++			flushDropped()
++			out.event("evicted", "", apiError{Error: "internal", Detail: fmt.Sprintf("flux remplacé par un plus récent (%d flux de logs au plus)", lim.MaxStreams)})
++			return
 +		case <-tick.C:
++			if !s.sessionValid(r) {
++				out.event("failure", "", apiError{Error: "unauthorized", Detail: "session terminée"})
++				return
++			}
 +			if flushDropped() != nil || out.comment("ping") != nil {
 +				return
 +			}
@@ -2497,7 +2863,7 @@ new file mode 100644
 +		writeFSError(w, err)
 +		return
 +	}
-+	release, err := s.takeStream()
++	release, _, err := s.streams.take(false)
 +	if err != nil {
 +		writeFSError(w, err)
 +		return
@@ -2540,7 +2906,7 @@ diff --git a/internal/api/server.go b/internal/api/server.go
  	files    *files.Writer // the only writer (spec §7: read-only applied there)
 +	// F6: limits of the logs streams, and one slot per stream open.
 +	logLimits logLimits
-+	logSlots  chan struct{}
++	streams   *streamSlots
  }
  
  // Spec §13 (FUSE): at most 4 file operations at once per container, each one
@@ -2549,7 +2915,7 @@ diff --git a/internal/api/server.go b/internal/api/server.go
  		files: &files.Writer{ReadOnly: d.ReadOnly, Docker: d.Docker, Audit: d.Audit,
  			Open: d.OpenFS, Forget: d.Views.Forget},
 +		logLimits: defaultLogLimits,
-+		logSlots:  make(chan struct{}, defaultLogLimits.MaxStreams),
++		streams:   newStreamSlots(defaultLogLimits.MaxStreams),
  	}
  	session := func(h http.HandlerFunc) http.Handler { return requireSession(d.Sessions, h) }
  
@@ -2567,7 +2933,7 @@ diff --git a/internal/api/server.go b/internal/api/server.go
 - [ ] **Step 4: Vérifier**
 
 Run: `go test -race -count=20 ./internal/api/ -run Logs 2>&1 | tail -n 3 && go test ./cmd/... ./internal/... 2>&1 | tail -n 12`
-Expected: `ok` (vingt passages sans course ni test instable). Mutation : retirer `rc.Close()` du `defer` de `logsStream` → `TestLogsClientGone` (« le flux de Docker n'est pas fermé après le départ du client »).
+Expected: `ok` (vingt passages sans course ni test instable). Mutations : retirer `rc.Close()` du `defer` de `logsStream` → `TestLogsClientGone` (« le flux de Docker n'est pas fermé après le départ du client ») ; neutraliser `sessionValid` → `TestLogsSessionEnds` (« flux encore ouvert 2 s après la déconnexion ») ; retirer `e.deadline()` de `event` → `TestLogsWriteDeadline` ; remplacer `if len(s.live) == 0 {` par `if true {` → `TestStreamSlots`, `TestLogsEvictsOldest`.
 
 - [ ] **Step 5: Commit**
 
@@ -2591,9 +2957,9 @@ EOF
 
 **Interfaces:**
 - Consumes: rien (bibliothèque standard).
-- Produces: `const Mask = "••••••"` ; `SecretName(name string) bool` ; `URLCredentials(v string) bool` ; `Masked(name, value string) bool` ; `type Var struct{ Name string; Value *string; Masked bool }` (JSON `{"name","value","masked"}`, `value` `null` si masquée) ; `Env(env []string) []Var` ; `Lookup(env []string, name string) (string, bool)` ; `Args(args []string) (out []string, masked bool)`.
+- Produces: `const Mask = "••••••"` ; `SecretName(name string) bool` ; `URLCredentials(v string) bool` ; `Masked(name, value string) bool` (nom, URL, ou affectation secrète dans la valeur, Q36) ; `Line(s string) string` (un texte : ligne de shell, message de Docker) ; `type Var struct{ Name string; Value *string; Masked bool }` (JSON `{"name","value","masked"}`, `value` `null` si masquée) ; `Env(env []string) []Var` ; `Lookup(env []string, name string) (string, bool)` ; `Args(args []string) (out []string, masked bool)`.
 
-> **À comprendre :** §7 masque une variable dont le **nom** contient l'un de neuf mots (sans tenir compte de la casse) ou dont la **valeur** contient une URL avec identifiants. La règle est une sous-chaîne : `KEYBOARD` et `COMPASS` sont masqués aussi, et c'est voulu (côté sûr ; la valeur se révèle). `Env` ne copie jamais une valeur masquée : `Value` reste `nil`, donc le JSON n'a rien à fuir. `Args` (Q27) travaille sur une copie et ne masque que des morceaux (`--password=••••••`, `postgres://••••••@db`), pour que la commande reste lisible.
+> **À comprendre :** §7 masque une variable dont le **nom** contient l'un de neuf mots (sans tenir compte de la casse) ou dont la **valeur** contient une URL avec identifiants. La règle est une sous-chaîne : `KEYBOARD` et `COMPASS` sont masqués aussi, et c'est voulu (côté sûr ; la valeur se révèle). `Env` ne copie jamais une valeur masquée : `Value` reste `nil`, donc le JSON n'a rien à fuir. `Args` (Q27) travaille sur une copie et ne masque que des morceaux (`--password=••••••`, `postgres://••••••@db`), pour que la commande reste lisible ; une valeur peut être entre guillemets, ou cacher une autre affectation (`--env=DB_PASSWORD=x`). Les règles sont des heuristiques : d'où le repli fermé de `Line` (R1), qui masque l'argument entier dès qu'un mot de §7 y reste sans rien de masqué après lui.
 
 - [ ] **Step 1: Tests qui échouent**
 
@@ -2602,7 +2968,7 @@ diff --git a/internal/secrets/secrets_test.go b/internal/secrets/secrets_test.go
 new file mode 100644
 --- /dev/null
 +++ b/internal/secrets/secrets_test.go
-@@ -0,0 +1,144 @@
+@@ -0,0 +1,171 @@
 +package secrets
 +
 +// Tests of the masking of spec §7, written before the code (CLAUDE.md:
@@ -2682,12 +3048,23 @@ new file mode 100644
 +
 +// The whole JSON of Env never carries a secret value.
 +func TestEnvNeverLeaks(t *testing.T) {
-+	secrets := []string{"s3cr3t-1", "s3cr3t-2", "s3cr3t-3", "s3cr3t-4"}
-+	env := []string{"MYSQL_PASSWORD=" + secrets[0], "GH_TOKEN=" + secrets[1], "URL=https://bot:" + secrets[2] + "@x.io", "ssh_private_key=" + secrets[3]}
++	secrets := []string{"s3cr3t-1", "s3cr3t-2", "s3cr3t-3", "s3cr3t-4", "s3cr3t-5", "s3cr3t-6", "s3cr3t-7"}
++	env := []string{"MYSQL_PASSWORD=" + secrets[0], "GH_TOKEN=" + secrets[1], "URL=https://bot:" + secrets[2] + "@x.io", "ssh_private_key=" + secrets[3],
++		// Q36: a secret assignment inside the value of a neutral name.
++		"ConnectionStrings__Default=Server=db;User Id=sa;Password=" + secrets[4] + ";",
++		"SPRING_DATASOURCE_URL=jdbc:postgresql://db/x?user=u&password=" + secrets[5],
++		"JAVA_OPTS=-Xmx512m -Djavax.net.ssl.keyStorePassword=" + secrets[6],
++	}
 +	b, _ := json.Marshal(Env(env))
 +	for _, s := range secrets {
 +		if strings.Contains(string(b), s) {
 +			t.Errorf("FUITE : %s dans %s", s, b)
++		}
++	}
++	// Controls: neutral values stay shown.
++	for _, kv := range []string{"JAVA_OPTS=-Xmx512m -Dfile.encoding=UTF-8", "NODE_OPTIONS=--max-old-space-size=4096"} {
++		if Env([]string{kv})[0].Masked {
++			t.Errorf("%s : masqué à tort", kv)
 +		}
 +	}
 +}
@@ -2722,8 +3099,24 @@ new file mode 100644
 +		{[]string{"mysqld", "--password=s3cr3t", "--port=3306"}, []string{"mysqld", "--password=" + Mask, "--port=3306"}, true},
 +		{[]string{"sh", "-c", "PGPASSWORD=s3cr3t psql postgres://u:pw@db/x && echo ok"},
 +			[]string{"sh", "-c", "PGPASSWORD=" + Mask + " psql postgres://" + Mask + "@db/x && echo ok"}, true},
-+		{[]string{"sh", "-c", "redis-server --requirepass s3cr3t --port 6379 && x --api-key -v"},
-+			[]string{"sh", "-c", "redis-server --requirepass " + Mask + " --port 6379 && x --api-key -v"}, true},
++		{[]string{"sh", "-c", "redis-server --requirepass s3cr3t --port 6379 && x"},
++			[]string{"sh", "-c", "redis-server --requirepass " + Mask + " --port 6379 && x"}, true},
++		// Review I1 and Codex: quotes, a value with blanks or a quote inside, an
++		// assignment inside a value, "--x=" with its value in the next argument.
++		{[]string{"sh", "-c", `PGPASSWORD="s3cr3t" psql`}, []string{"sh", "-c", "PGPASSWORD=" + Mask + " psql"}, true},
++		{[]string{"sh", "-c", `PGPASSWORD='s3cr3t' psql`}, []string{"sh", "-c", "PGPASSWORD=" + Mask + " psql"}, true},
++		{[]string{"sh", "-c", `redis-server --requirepass "s3cr3t" --port 6379`},
++			[]string{"sh", "-c", "redis-server --requirepass " + Mask + " --port 6379"}, true},
++		{[]string{"sh", "-c", `x --password=s3"cr3t y`}, []string{"sh", "-c", "x --password=" + Mask}, true},
++		{[]string{"app", "--env=DB_PASSWORD=s3cr3t"}, []string{"app", "--env=DB_PASSWORD=" + Mask}, true},
++		{[]string{"app", "--password=s3 cr3t"}, []string{"app", "--password=" + Mask}, true},
++		{[]string{"app", `--password=s3"cr3t`}, []string{"app", "--password=" + Mask}, true},
++		{[]string{"app", "--password=", "s3cr3t"}, []string{"app", "--password=", Mask}, true},
++		// Fail closed: a word of §7 left with nothing masked after it in the
++		// argument masks the whole argument (false positives accepted).
++		{[]string{"sh", "-c", "mysql -ps3cr3t --password"}, []string{"sh", "-c", Mask}, true},
++		{[]string{"sh", "-c", "x --api-key -v"}, []string{"sh", "-c", Mask}, true},
++		{[]string{"passwd", "root"}, []string{Mask, "root"}, true},
 +		{[]string{"app", "-api-key", "-v"}, []string{"app", "-api-key", "-v"}, false}, // a flag follows: no value
 +		{[]string{"app", "--token"}, []string{"app", "--token"}, false},
 +		{[]string{"nginx", "-g", "daemon off;"}, []string{"nginx", "-g", "daemon off;"}, false},
@@ -2736,7 +3129,7 @@ new file mode 100644
 +			t.Errorf("%q : %q %v, attendu %q %v", k.in, got, masked, k.want, k.masked)
 +		}
 +		for _, a := range got {
-+			if strings.Contains(a, "s3cr3t") || strings.Contains(a, ":pw@") || strings.Contains(a, "=abc") {
++			if strings.Contains(a, "cr3t") || strings.Contains(a, ":pw@") || strings.Contains(a, "=abc") {
 +				t.Errorf("FUITE : %q", a)
 +			}
 +		}
@@ -2761,7 +3154,7 @@ diff --git a/internal/secrets/secrets.go b/internal/secrets/secrets.go
 new file mode 100644
 --- /dev/null
 +++ b/internal/secrets/secrets.go
-@@ -0,0 +1,120 @@
+@@ -0,0 +1,189 @@
 +// Package secrets masks the values the radiography shows (F7, spec §7): an
 +// environment variable whose name says it is a secret, or whose value is a
 +// URL with user information, never leaves the agent unless revealed.
@@ -2805,8 +3198,23 @@ new file mode 100644
 +	Masked bool    `json:"masked"`
 +}
 +
-+// Masked: the variable must not be shown as is (spec §7).
-+func Masked(name, value string) bool { return SecretName(name) || URLCredentials(value) }
++// Masked: the variable must not be shown as is (spec §7): a secret name, a
++// URL with user information, or a secret assignment inside the value
++// (plan Observation, Q36: "…;Password=…;", "?password=…",
++// "-D…Password=…").
++func Masked(name, value string) bool {
++	return SecretName(name) || URLCredentials(value) || secretAssignment(value)
++}
++
++// secretAssignment: value holds NAME=… whose NAME is a secret name.
++func secretAssignment(value string) bool {
++	for _, m := range assignment.FindAllStringSubmatch(value, -1) {
++		if SecretName(m[2]) {
++			return true
++		}
++	}
++	return false
++}
 +
 +// Env masks a Config.Env ("NAME=value"; "NAME" alone has an empty value),
 +// in order.
@@ -2835,50 +3243,104 @@ new file mode 100644
 +	return value, found
 +}
 +
-+// assignment: NAME=value or --name=value inside an argument (a shell line
-+// of sh -c too), the value up to a blank or a shell separator.
-+var assignment = regexp.MustCompile(`(^|[\s;&|"'(])(-{0,2}[A-Za-z0-9_.-]+)=([^\s;&|"')]+)`)
++// value: a word, possibly quoted or partly quoted ("x", 'x', a"b c"d); an
++// unclosed quote runs to the end (review I1: nothing after it leaks).
++const value = `(?:"[^"]*"?|'[^']*'?|[^\s;&|"'()])+`
 +
-+// flag: an argument that is only a flag, whose value is the next argument.
-+var flag = regexp.MustCompile(`^-{1,2}[A-Za-z0-9_.-]+$`)
++// assignment: NAME=value or --name=value inside a text (a shell line, a
++// connection string), after a blank, a shell or URL separator, or "=".
++var assignment = regexp.MustCompile(`(^|[\s;&|"'(=?,])(-{0,2}[A-Za-z0-9_.-]+)=(` + value + `)`)
 +
-+// flagValue: the same inside a shell line (sh -c "… --requirepass x …"):
-+// a flag, blanks, then a word that is not a flag.
-+var flagValue = regexp.MustCompile(`(^|\s)(-{1,2}[A-Za-z0-9_.-]+)(\s+)([^\s;&|"')-][^\s;&|"')]*)`)
++// flagValue: a flag, blanks, then a word that is not a flag, inside a shell
++// line (sh -c "… --requirepass x …").
++var flagValue = regexp.MustCompile(`(^|\s)(-{1,2}[A-Za-z0-9_.-]+)(\s+)((?:"[^"]*"?|'[^']*'?|[^\s;&|"'()-])(?:"[^"]*"?|'[^']*'?|[^\s;&|"'()])*)`)
 +
-+// Args masks a command or an entrypoint (plan Observation, Q27), in a copy:
-+// the user information of a URL; the value of NAME=value or --name=value
-+// whose name is a secret name; the word after a flag whose name is a
-+// secret name (--requirepass s3cr3t), unless it is a flag itself, as the
-+// next argument or inside a shell line. masked tells whether anything was
-+// hidden.
++// flag: an argument that is only a flag ("--password", or "--password="
++// whose value is the next argument).
++var flag = regexp.MustCompile(`^-{1,2}[A-Za-z0-9_.-]+=?$`)
++
++// whole: an argument NAME=value or --name=value, outside a shell line: the
++// value is the whole rest of the argument, blanks included.
++var whole = regexp.MustCompile(`(?s)^(-{0,2}[A-Za-z0-9_.-]+)=(.+)$`)
++
++// word: a word of spec §7, anywhere, ignoring case.
++var word = regexp.MustCompile(`(?i)` + strings.Join(words, "|"))
++
++// maskText masks a text: user information of URLs, then the value of each
++// secret assignment (an assignment of another name is searched inside its
++// value: --env=DB_PASSWORD=x), then the word after a secret flag.
++func maskText(s string) string {
++	s = userinfo.ReplaceAllString(s, "://"+Mask+"@")
++	s = assignment.ReplaceAllStringFunc(s, func(m string) string {
++		sub := assignment.FindStringSubmatch(m)
++		if SecretName(sub[2]) {
++			return sub[1] + sub[2] + "=" + Mask
++		}
++		return sub[1] + sub[2] + "=" + maskText(sub[3])
++	})
++	return flagValue.ReplaceAllStringFunc(s, func(m string) string {
++		sub := flagValue.FindStringSubmatch(m)
++		if !SecretName(sub[2]) || sub[4] == Mask {
++			return m
++		}
++		return sub[1] + sub[2] + sub[3] + Mask
++	})
++}
++
++// leaks: a word of §7 with nothing masked after it, outside a bare flag
++// (review I1: fail closed when the rules above did not see the value).
++func leaks(s string) bool {
++	if flag.MatchString(s) {
++		return false
++	}
++	for _, loc := range word.FindAllStringIndex(s, -1) {
++		if !strings.Contains(s[loc[1]:], Mask) {
++			return true
++		}
++	}
++	return false
++}
++
++// Line masks one text (a message of Docker, a shell line): maskText, then,
++// if a word of §7 is left with nothing masked after it, the whole text.
++func Line(s string) string {
++	if m := maskText(s); !leaks(m) {
++		return m
++	}
++	return Mask
++}
++
++// Args masks a command or an entrypoint (plan Observation, Q27), in a copy.
++// An argument after a secret flag ("--requirepass", "--password=") is
++// masked whole, unless it is a flag itself. An argument after "-c" is a
++// shell line: Line. Any other argument NAME=value or --name=value keeps its
++// name and masks its whole value if the name is secret (blanks included),
++// else the value goes through the rules of Line. masked tells whether
++// anything was hidden.
 +func Args(args []string) (out []string, masked bool) {
 +	if args == nil {
 +		return nil, false
 +	}
 +	out = make([]string, len(args))
 +	for i, a := range args {
-+		if i > 0 && flag.MatchString(args[i-1]) && SecretName(args[i-1]) && !strings.HasPrefix(a, "-") {
-+			out[i], masked = Mask, true
-+			continue
++		prev := ""
++		if i > 0 {
++			prev = args[i-1]
 +		}
-+		m := userinfo.ReplaceAllString(a, "://"+Mask+"@")
-+		m = assignment.ReplaceAllStringFunc(m, func(s string) string {
-+			sub := assignment.FindStringSubmatch(s)
-+			if !SecretName(sub[2]) || sub[3] == Mask {
-+				return s
++		switch w := whole.FindStringSubmatch(a); {
++		case flag.MatchString(prev) && SecretName(prev) && !strings.HasPrefix(a, "-"):
++			out[i] = Mask
++		case prev == "-c" || w == nil:
++			out[i] = Line(a)
++		case SecretName(w[1]):
++			out[i] = w[1] + "=" + Mask
++		default:
++			out[i] = w[1] + "=" + maskText(w[2])
++			if leaks(out[i]) {
++				out[i] = Mask
 +			}
-+			return sub[1] + sub[2] + "=" + Mask
-+		})
-+		m = flagValue.ReplaceAllStringFunc(m, func(s string) string {
-+			sub := flagValue.FindStringSubmatch(s)
-+			if !SecretName(sub[2]) || sub[4] == Mask {
-+				return s
-+			}
-+			return sub[1] + sub[2] + sub[3] + Mask
-+		})
-+		out[i] = m
-+		masked = masked || m != a
++		}
++		masked = masked || out[i] != a
 +	}
 +	return out, masked
 +}
@@ -2887,7 +3349,7 @@ new file mode 100644
 - [ ] **Step 4: Vérifier**
 
 Run: `go test -race ./internal/secrets/ 2>&1 | tail -n 3`
-Expected: `ok`. Mutation : `Masked` réduit à `SecretName(name)` → `TestEnv` et `TestEnvNeverLeaks` (« FUITE : s3cr3t-3 ») échouent.
+Expected: `ok`. Mutations : `Masked` réduit à `SecretName(name)` → `TestEnv` et `TestEnvNeverLeaks` (« FUITE : s3cr3t-3 ») échouent ; `leaks` qui rend toujours `false` → `TestArgs` (« FUITE : "mysql -ps3cr3t --password" »).
 
 - [ ] **Step 5: Commit**
 
@@ -2912,7 +3374,7 @@ EOF
 - Test: `internal/dockerx/dockerx_test.go`, `internal/api/server_test.go` (le `fixture` garde son `*audit.Log`)
 
 **Interfaces:**
-- Consumes: `secrets.Env`, `secrets.Args`, `secrets.Lookup`, `inspectByRef` (tâche 3), `writeFSError`, `audit.Event`, `Port` (F1).
+- Consumes: `secrets.Env`, `secrets.Args`, `secrets.Line` (message d'erreur de l'état, R9), `secrets.Lookup`, `inspectByRef` (tâche 3), `writeFSError`, `audit.Event`, `Port` (F1).
 - Produces: `dockerx.Details{Image, ImageID, Created, Status string; ExitCode int; Error, StartedAt string; OOMKilled bool; Health string; RestartCount int; RestartPolicy string; MaxRetry int; Entrypoint, Cmd []string; WorkingDir, User string; Env []string; Ports []Port; NetworkMode string; Networks []Network}` ; `dockerx.Network{Name, IP, Gateway, MAC string; Aliases []string}` ; `ContainerInfo.Details` ; `Mount.Mode string`, `Mount.RW bool` ; `fromInspectDetails`, `portsOf` ; routes `GET /api/containers/{id}` (`radioJSON`) et `POST /api/containers/{id}/env/reveal` (`{name}` → `{name, value}`).
 
 > **À comprendre :** un seul `Inspect` donne tout. `Env`, `Cmd` et `Entrypoint` restent bruts dans `dockerx` (le code de l'agent en a besoin, par exemple pour révéler) et ne sortent que par `toRadioJSON`, qui passe par `secrets`. La révélation suit l'ordre d'une écriture : contrôles, journal, puis seulement la réponse ; le journal ne reçoit que le nom (Q28). Le contrôle d'`Origin` de §7 s'applique déjà à toute requête `POST`.
@@ -2924,7 +3386,7 @@ diff --git a/internal/api/container_test.go b/internal/api/container_test.go
 new file mode 100644
 --- /dev/null
 +++ b/internal/api/container_test.go
-@@ -0,0 +1,204 @@
+@@ -0,0 +1,206 @@
 +package api
 +
 +// Tests of the radiography (F7, spec §6, §7), written before the code: no
@@ -2944,7 +3406,7 @@ new file mode 100644
 +
 +// The secrets of the fake "web" container: none may appear in a response
 +// that has not revealed it.
-+var radioSecrets = []string{"s3cr3t-env", "s3cr3t-url", "s3cr3t-cmd", "s3cr3t-ep"}
++var radioSecrets = []string{"s3cr3t-env", "s3cr3t-url", "s3cr3t-cmd", "s3cr3t-ep", "s3cr3t-err", "s3cr3t-cs"}
 +
 +func radioFixture(t *testing.T, readOnly bool) (*fixture, *http.Cookie) {
 +	t.Helper()
@@ -2955,11 +3417,13 @@ new file mode 100644
 +	web.LogDriver = "json-file"
 +	web.Details = dockerx.Details{
 +		Image: "nginx:1.27", ImageID: "sha256:feed", Created: "2026-10-10T07:00:00Z", Status: "running",
++		// Review Minor 8: Docker's message may quote the command.
++		Error:        `OCI runtime create failed: exec: "--password=s3cr3t-err": unknown`,
 +		RestartCount: 2, RestartPolicy: "unless-stopped",
 +		Entrypoint: []string{"/entry.sh", "--token", "s3cr3t-ep"},
 +		Cmd:        []string{"redis-server", "--requirepass", "s3cr3t-cmd"},
 +		Env: []string{"PATH=/usr/bin", "DB_PASSWORD=s3cr3t-env", "CACHE_URL=redis://:s3cr3t-url@cache:6379",
-+			"PLAIN=visible"},
++			"PLAIN=visible", "DB=Server=db;Password=s3cr3t-cs;"},
 +		Ports:       []dockerx.Port{{Private: 80, Public: 8080, Type: "tcp", IP: "0.0.0.0"}},
 +		NetworkMode: "bridge",
 +		Networks:    []dockerx.Network{{Name: "front", IP: "172.18.0.2"}},
@@ -3036,7 +3500,7 @@ new file mode 100644
 +			t.Errorf("%s : masked %v mais value %v (spec §7 : null avec masked: true)", v.Name, v.Masked, v.Value)
 +		}
 +	}
-+	if !masked["DB_PASSWORD"] || !masked["CACHE_URL"] || masked["PATH"] || masked["PLAIN"] || len(got.Env) != 4 {
++	if !masked["DB_PASSWORD"] || !masked["CACHE_URL"] || !masked["DB"] || masked["PATH"] || masked["PLAIN"] || len(got.Env) != 5 {
 +		t.Errorf("masquage : %v", masked)
 +	}
 +	if len(got.Ports) != 1 || got.Ports[0].Public != 8080 || len(got.Networks) != 1 || got.Networks[0].IP != "172.18.0.2" {
@@ -3321,7 +3785,7 @@ new file mode 100644
 +	cmd, cmdMasked := secrets.Args(d.Cmd)
 +	out := radioJSON{
 +		ID: c.ID, Name: c.Name, Image: d.Image, ImageID: d.ImageID, Created: d.Created,
-+		State: stateJSON{Status: d.Status, Running: c.Running, ExitCode: d.ExitCode, Error: d.Error,
++		State: stateJSON{Status: d.Status, Running: c.Running, ExitCode: d.ExitCode, Error: secrets.Line(d.Error),
 +			StartedAt: d.StartedAt, FinishedAt: c.FinishedAt, OOMKilled: d.OOMKilled, Health: d.Health},
 +		RestartCount: d.RestartCount, RestartPolicy: restartJSON{Name: d.RestartPolicy, MaxRetry: d.MaxRetry},
 +		Entrypoint: nonNil(ep), Cmd: nonNil(cmd), CommandMasked: epMasked || cmdMasked,
@@ -3587,7 +4051,7 @@ diff --git a/internal/dockerx/dockerx.go b/internal/dockerx/dockerx.go
 - [ ] **Step 4: Vérifier**
 
 Run: `go test -race ./internal/dockerx/ ./internal/api/ 2>&1 | tail -n 3`
-Expected: `ok`. Mutations : passer `d.Cmd` et `d.Entrypoint` bruts à `radioJSON` → `TestContainerRadiography` (« FUITE : s3cr3t-cmd ») ; ignorer l'erreur du journal dans `revealEnv` → `TestRevealEnvRefusals` (« journal en échec : 200 … s3cr3t-env »).
+Expected: `ok`. Mutations : passer `d.Cmd` et `d.Entrypoint` bruts à `radioJSON` → `TestContainerRadiography` (« FUITE : s3cr3t-cmd ») ; `Error: d.Error` brut → `TestContainerRadiography` (« FUITE : s3cr3t-err ») ; ignorer l'erreur du journal dans `revealEnv` → `TestRevealEnvRefusals` (« journal en échec : 200 … s3cr3t-env »).
 
 - [ ] **Step 5: Commit**
 
@@ -3795,9 +4259,9 @@ EOF
 
 **Interfaces:**
 - Consumes: `GET /api/containers/{id}/logs` (événements de la tâche 3), `GET /logs/download`, `getMeta`, `ApiError`, `errorMessage`, `goto`.
-- Produces: `type LogLine = { ts?: string; stream: 'stdout' | 'stderr'; line: string; truncated?: boolean }` ; `logsUrl(id, { tail?, after? })`, `logsDownloadUrl(id)` ; dans `logs.ts` : `MAX_LINES = 5000`, `ShownLine`, `parseLine`, `parseCount`, `parseFailure`, `appendLines(lines, batch, max?) → { lines, removed }`, `filterLines(lines, { query, stdout, stderr })`, `formatTs(ts, timeZone?)` ; `LogsView` (`{ id }`) ; onglet `?tab=logs` ; code `logs_unavailable` dans `API_ERROR_CODES` et ses traductions.
+- Produces: `type LogLine = { ts?: string; stream: 'stdout' | 'stderr'; line: string; truncated?: boolean }` ; `logsUrl(id, { tail?, after? })`, `logsDownloadUrl(id)` ; dans `logs.ts` : `MAX_LINES = 5000`, `ShownLine`, `parseLine`, `parseCount`, `parseFailure`, `appendLines(lines, batch, max?) → { lines, removed }`, `filterLines(lines, { query, stdout, stderr })`, `formatTs(ts, timeZone?)` ; `LogsView` (`{ id }`) ; onglet `?tab=logs` ; code `logs_unavailable` dans `API_ERROR_CODES` et ses traductions ; clé `logs.evicted`.
 
-> **À comprendre :** `EventSource` rappelle `onmessage` pour chaque ligne (événement sans nom) et `addEventListener(nom)` pour `end`, `dropped`, `failure`. Son `onerror` sert à deux choses : `readyState === CONNECTING`, le navigateur se reconnecte seul (avec `Last-Event-ID`) ; `CLOSED`, une réponse non SSE (session expirée) : on demande `/api/meta` pour savoir si c'est un `401`. Les lignes arrivent par centaines : elles attendent dans `pending` et rejoignent `lines` une fois par image (`requestAnimationFrame`), sinon Svelte rendrait la liste à chaque ligne. La pause ferme le flux et garde `lastId` ; reprendre rouvre avec `after` (Q30). L'effet ne lit pas `status` (il l'écrit) : sinon chaque changement d'état rouvrirait le flux.
+> **À comprendre :** `EventSource` rappelle `onmessage` pour chaque ligne (événement sans nom) et `addEventListener(nom)` pour `end`, `dropped`, `failure`. Son `onerror` sert à deux choses : `readyState === CONNECTING`, le navigateur se reconnecte seul (avec `Last-Event-ID`) ; `CLOSED`, une réponse non SSE (session expirée) : on demande `/api/meta` pour savoir si c'est un `401`. Les lignes arrivent par centaines : elles attendent dans `pending` et rejoignent `lines` une fois par image (`requestAnimationFrame`), sinon Svelte rendrait la liste à chaque ligne. La pause ferme le flux et garde `lastId` ; reprendre rouvre avec `after` (Q30). `failure` `unauthorized` (session finie) renvoie à la connexion ; `evicted` ferme le flux sans reconnexion et propose « Recharger » (Q37). Le lien de téléchargement disparaît quand le flux est en erreur : le navigateur enregistrerait sinon le JSON de l'erreur dans un `.log` (R9). L'effet ne lit pas `status` (il l'écrit) : sinon chaque changement d'état rouvrirait le flux.
 
 - [ ] **Step 1: Tests qui échouent**
 
@@ -3931,7 +4395,7 @@ diff --git a/web/src/lib/components/LogsView.svelte b/web/src/lib/components/Log
 new file mode 100644
 --- /dev/null
 +++ b/web/src/lib/components/LogsView.svelte
-@@ -0,0 +1,175 @@
+@@ -0,0 +1,181 @@
 +<script lang="ts">
 +	import { goto } from '$app/navigation';
 +	import { ApiError, getMeta, logsDownloadUrl, logsUrl, type LogLine } from '#lib/api.ts';
@@ -3999,7 +4463,13 @@ new file mode 100644
 +		es.addEventListener('end', () => stop('ended'));
 +		es.addEventListener('failure', (e) => {
 +			stop('error');
-+			error = errorMessage(parseFailure((e as MessageEvent<string>).data));
++			const code = parseFailure((e as MessageEvent<string>).data);
++			if (code === 'unauthorized') goto('/login').catch(() => {}); // logout or expiry (Q37)
++			error = errorMessage(code);
++		});
++		es.addEventListener('evicted', () => {
++			stop('error'); // a newer stream took the slot (Q37): no reconnection
++			error = t('logs.evicted');
 +		});
 +		es.onerror = () => {
 +			if (es.readyState === EventSource.CONNECTING) {
@@ -4055,7 +4525,7 @@ new file mode 100644
 +		{:else if status === 'live' || status === 'connecting' || status === 'reconnecting'}
 +			<button type="button" onclick={pause}>{t('logs.pause')}</button>
 +		{/if}
-+		<a href={logsDownloadUrl(id)} download>{t('logs.download')}</a>
++		{#if status !== 'error'}<a href={logsDownloadUrl(id)} download>{t('logs.download')}</a>{/if}
 +	</div>
 +	<p class="status" role="status">
 +		{#if status === 'connecting'}{t('logs.connecting')}
@@ -4110,7 +4580,7 @@ new file mode 100644
 diff --git a/web/src/lib/i18n/en.ts b/web/src/lib/i18n/en.ts
 --- a/web/src/lib/i18n/en.ts
 +++ b/web/src/lib/i18n/en.ts
-@@ -114,7 +114,25 @@ export const en: Record<Key, string> = {
+@@ -114,7 +114,26 @@ export const en: Record<Key, string> = {
  	'error.forbidden_path': 'Forbidden path.',
  	'error.link_in_path': 'The path contains a symbolic link.',
  	'error.docker_unavailable': 'Docker is not responding. Check the daemon and the agent’s socket access.',
@@ -4126,6 +4596,7 @@ diff --git a/web/src/lib/i18n/en.ts b/web/src/lib/i18n/en.ts
 +	'logs.paused': 'Paused: the lines that arrive meanwhile will be caught up.',
 +	'logs.reconnecting': 'Connection lost, reconnecting…',
 +	'logs.ended': 'End of the stream: the container is not running, or has just stopped.',
++	'logs.evicted': 'Stream closed: a newer logs stream took its place (8 at most for the agent). Reload to open it again.',
 +	'logs.follow': 'Follow again',
 +	'logs.empty': 'No line.',
 +	'logs.noMatch': 'No line matches.',
@@ -4139,7 +4610,7 @@ diff --git a/web/src/lib/i18n/en.ts b/web/src/lib/i18n/en.ts
 diff --git a/web/src/lib/i18n/fr.ts b/web/src/lib/i18n/fr.ts
 --- a/web/src/lib/i18n/fr.ts
 +++ b/web/src/lib/i18n/fr.ts
-@@ -117,7 +117,25 @@ export const fr = {
+@@ -117,7 +117,26 @@ export const fr = {
  	'error.forbidden_path': 'Chemin interdit.',
  	'error.link_in_path': 'Le chemin contient un lien symbolique.',
  	'error.docker_unavailable': "Docker ne répond pas. Vérifiez que le démon tourne et que l'agent accède au socket.",
@@ -4155,6 +4626,7 @@ diff --git a/web/src/lib/i18n/fr.ts b/web/src/lib/i18n/fr.ts
 +	'logs.paused': 'En pause : les lignes arrivées entre-temps seront reprises.',
 +	'logs.reconnecting': 'Connexion perdue, reconnexion…',
 +	'logs.ended': "Fin du flux : le conteneur ne tourne pas, ou vient de s'arrêter.",
++	'logs.evicted': "Flux fermé : un flux de logs plus récent a pris sa place (8 au plus pour l'agent). Rechargez pour le rouvrir.",
 +	'logs.follow': 'Suivre à nouveau',
 +	'logs.empty': 'Aucune ligne.',
 +	'logs.noMatch': 'Aucune ligne ne correspond.',
@@ -4636,7 +5108,7 @@ diff --git a/web/src/lib/i18n/en.ts b/web/src/lib/i18n/en.ts
  	'files.indexing': 'Indexing the stopped container',
  	'files.indexingHint': 'First opening: the agent reads the headers of the container archive. Later ones are immediate.',
  	'files.stoppedUnavailable':
-@@ -133,6 +132,39 @@ export const en: Record<Key, string> = {
+@@ -134,6 +133,39 @@ export const en: Record<Key, string> = {
  	'logs.removed': 'older line(s) left the view (5,000 at most): download the logs to see them.',
  	'logs.truncated': 'line cut at 16 KiB (whole in the download)',
  	'logs.shown': 'line(s) shown',
@@ -4687,7 +5159,7 @@ diff --git a/web/src/lib/i18n/fr.ts b/web/src/lib/i18n/fr.ts
  	'files.indexing': 'Indexation du conteneur arrêté',
  	'files.indexingHint':
  		"Première ouverture : l'agent lit les en-têtes de l'archive du conteneur. Les suivantes sont immédiates.",
-@@ -136,6 +135,39 @@ export const fr = {
+@@ -137,6 +136,39 @@ export const fr = {
  	'logs.removed': 'ligne(s) plus ancienne(s) retirée(s) de la vue (5 000 au plus) : téléchargez les logs pour les voir.',
  	'logs.truncated': 'ligne tronquée à 16 Kio (complète dans le téléchargement)',
  	'logs.shown': 'ligne(s) affichée(s)',
@@ -4985,7 +5457,7 @@ EOF
 **Où tester :** `hk-ubuntu` (AppArmor), `hk-fedora` (SELinux), Docker Desktop.
 
 **Files:**
-- Modify: `docs/superpowers/specs/2026-10-07-hublot-kit-v0.1-design.md` (§5.3, §6, §7, §13), `docs/superpowers/plans/2026-10-10-observation-logs-radiographie.md` (cases cochées, constats)
+- Modify: `docs/superpowers/specs/2026-10-07-hublot-kit-v0.1-design.md` (§5.3, §5.4, §6, §7, §13), `docs/superpowers/plans/2026-10-10-observation-logs-radiographie.md` (cases cochées, constats)
 
 - [ ] **Step 1: Reporter les décisions dans la spec** — remplacer chaque passage par le suivant (chacun est unique dans la spec ; vérifier par `grep -c`).
 
@@ -5001,7 +5473,19 @@ EOF
    chaque destination déclarée par `Inspect` (`Mounts`) et chaque `--tmpfs` (`HostConfig.Tmpfs`) apparaît comme point de montage, telle quelle ou retrouvée par identifiant de montage, comme pour le contrôle complet des montages de §5.4 (b). Un tmpfs n'a pas de source à lier : il n'est retrouvé que sur une ligne `tmpfs` entière (racine du montage `/`), ni sur `/`, ni sur un point déjà pris par une autre destination, ni sur ou sous `/dev`, `/proc` ou `/sys` (montages du runtime). Toute écriture sous le point où un tmpfs est retrouvé est refusée (`forbidden_path`) : Docker n'y écrit pas. Conteneur arrêté : la destination d'un tmpfs est résolue dans l'index, liens suivis, comme runc la résout au démarrage, et l'écriture sous le chemin résolu est refusée de même.
    ```
 
-2. §6, code logs_unavailable (Q34) — remplacer :
+2. §5.4 (b), tmpfs retrouvé pour le tar (revue I5, Q38) — remplacer :
+
+   ```text
+   La racine du montage n (champ 4) doit terminer la `Source` du bind, ou finir par `/<nom>/_data` pour un volume. P n'est pas `/`, et il ne sert qu'une seule destination.
+   ```
+
+   par :
+
+   ```text
+   La racine du montage n (champ 4) doit terminer la `Source` du bind, ou finir par `/<nom>/_data` pour un volume ; un tmpfs (`--mount type=tmpfs`), qui n'a pas de source, n'est retrouvé que sur une ligne `tmpfs` entière (racine `/`), ni sur ni sous `/dev`, `/proc` ou `/sys`. P n'est pas `/`, et il ne sert qu'une seule destination.
+   ```
+
+3. §6, code logs_unavailable (Q34) — remplacer :
 
    ```text
    `link_in_path` (écriture ou téléchargement de dossier : un lien dans la chaîne du chemin, §5.3 étape 2), `docker_unavailable`, `internal`.
@@ -5013,7 +5497,7 @@ EOF
    `link_in_path` (écriture ou téléchargement de dossier : un lien dans la chaîne du chemin, §5.3 étape 2), `docker_unavailable`, `logs_unavailable` (pilote de logs que Docker ne sait pas relire : `none`, `syslog`…), `internal`.
    ```
 
-3. §6, statuts (Q33, Q34) — remplacer :
+4. §6, statuts (Q33, Q34) — remplacer :
 
    ```text
    `not_regular` et `link_in_path` 422,
@@ -5025,7 +5509,7 @@ EOF
    `not_regular`, `link_in_path` et `logs_unavailable` 422,
    ```
 
-4. §6, plafond des flux de logs (Q33) — remplacer :
+5. §6, plafond des flux de logs (Q33) — remplacer :
 
    ```text
    un créneau n'est rendu qu'au vrai retour de l'opération, copie d'un téléchargement comprise.
@@ -5034,10 +5518,10 @@ EOF
    par :
 
    ```text
-   un créneau n'est rendu qu'au vrai retour de l'opération, copie d'un téléchargement comprise. Logs : au plus 8 flux ouverts pour l'agent, téléchargements compris ; au-delà, 503 `internal` (dans le flux SSE, événement `failure`).
+   un créneau n'est rendu qu'au vrai retour de l'opération, copie d'un téléchargement comprise. Logs : au plus 8 flux ouverts pour l'agent, téléchargements compris ; quand ils sont tous pris, le flux SSE le plus ancien cède sa place (événement `evicted`) ; s'ils ne sont tenus que par des téléchargements, 503 `internal` (dans le flux SSE, événement `failure`).
    ```
 
-5. §6, route GET /api/containers/{id} (F7) — remplacer :
+6. §6, route GET /api/containers/{id} (F7) — remplacer :
 
    ```text
    | GET | `/api/containers/{id}` | F7, env masquées par l'agent |
@@ -5049,7 +5533,7 @@ EOF
    | GET | `/api/containers/{id}` | F7 : image, état, redémarrages, commande et point d'entrée (parties secrètes remplacées par `••••••`, `commandMasked`), `env` (`[{name, value, masked}]`, valeur `null` si masquée, §7), ports, réseaux, montages, tmpfs, pilote de logs |
    ```
 
-6. §6, route POST /env/reveal (Q28) — remplacer :
+7. §6, route POST /env/reveal (Q28) — remplacer :
 
    ```text
    | POST | `/api/containers/{id}/env/reveal` | `{name}` → valeur en clair, journalisé |
@@ -5061,7 +5545,7 @@ EOF
    | POST | `/api/containers/{id}/env/reveal` | `{name}` (nom exact) → `{name, value}` en clair, journalisé (`env.reveal`) avant l'envoi : si le journal ne s'écrit pas, `internal` et rien n'est révélé ; variable absente ou corps invalide → `not_found` ; permis en lecture seule (c'est une lecture) |
    ```
 
-7. §6, route GET /logs (Q29 à Q33) — remplacer :
+8. §6, route GET /logs (Q29 à Q33) — remplacer :
 
    ```text
    | GET | `/api/containers/{id}/logs?tail=500` | F6 SSE : `{ts, stream: "stdout"|"stderr", line}` |
@@ -5070,10 +5554,10 @@ EOF
    par :
 
    ```text
-   | GET | `/api/containers/{id}/logs?tail=500` | F6 SSE : `{ts, stream: "stdout"|"stderr", line, truncated?}` par ligne, `id` = `<ts>/<rang>` ; `tail` de 0 à 10 000 ; reprise après `Last-Event-ID` ou `?after=<id>` ; événements `end` (fin du flux : conteneur arrêté), `dropped` (`{count}`, lignes au-delà du débit), `failure` (`{error, detail}`, codes de §6) ; toujours `200` une fois la session admise |
+   | GET | `/api/containers/{id}/logs?tail=500` | F6 SSE : `{ts, stream: "stdout"|"stderr", line, truncated?}` par ligne, `id` = `<ts>/<rang>` ; `tail` de 0 à 10 000 ; reprise après `Last-Event-ID` ou `?after=<id>` ; événements `end` (fin du flux : conteneur arrêté), `dropped` (`{count}`, lignes au-delà du débit), `evicted` (un flux plus récent a pris le créneau), `failure` (`{error, detail}`, codes de §6 ; `unauthorized` quand la session a pris fin, vu au battement de 15 s) ; toujours `200` une fois la session admise |
    ```
 
-8. §6, route GET /logs/download (Q32) — remplacer :
+9. §6, route GET /logs/download (Q32) — remplacer :
 
    ```text
    | GET | `/api/containers/{id}/logs/download` | F6 fichier texte |
@@ -5085,7 +5569,7 @@ EOF
    | GET | `/api/containers/{id}/logs/download` | F6 fichier texte, `<ts> <stream> <ligne>` par ligne, tout ce que Docker garde ; ligne de plus d'1 Mio coupée (`[…]`) ; `attachment` et `application/octet-stream` |
    ```
 
-9. §7, secrets (Q26, Q27) — remplacer :
+10. §7, secrets (Q26, Q27) — remplacer :
 
    ```text
    ou si sa valeur contient une URL avec identifiants (`://user:pass@`). Valeur masquée renvoyée : `null` avec `masked: true`.
@@ -5094,10 +5578,10 @@ EOF
    par :
 
    ```text
-   ou si sa valeur contient une URL avec identifiants (`://` puis un `@` avant tout blanc : mot de passe, ou jeton seul en nom d'utilisateur). Valeur masquée renvoyée : `null` avec `masked: true`. La commande et le point d'entrée sont masqués aussi, partie par partie (`••••••`) : identifiants d'une URL, valeur de `NOM=valeur` ou `--nom=valeur`, et mot qui suit un drapeau `--nom`, quand le nom suit la même règle. Une valeur se révèle une à une (`env/reveal`, journalisé) ; la commande ne se révèle pas en v0.1.
+   ou si sa valeur contient une URL avec identifiants (`://` puis un `@` avant tout blanc : mot de passe, ou jeton seul en nom d'utilisateur). Valeur masquée renvoyée : `null` avec `masked: true`. Une valeur est masquée aussi si elle contient une affectation `NOM=…` dont le nom suit la même règle (`…;Password=…;`, `?password=…`, `-D…Password=…`). La commande, le point d'entrée et le message d'erreur de l'état sont masqués partie par partie (`••••••`) : identifiants d'une URL ; valeur de `NOM=valeur` ou `--nom=valeur`, guillemets compris, et tout le reste de l'argument hors d'une ligne de shell ; argument ou mot qui suit un drapeau `--nom` ou `--nom=` ; quand le nom suit la même règle. Un mot de la liste qui reste dans un argument sans rien de masqué après lui fait masquer l'argument entier. Une valeur se révèle une à une (`env/reveal`, journalisé) ; la commande ne se révèle pas en v0.1.
    ```
 
-10. §7, journal d'audit (Q28) — remplacer :
+11. §7, journal d'audit (Q28) — remplacer :
 
    ```text
    Actions : `login.fail`, `env.reveal`, `file.write`, `file.upload`.
@@ -5109,7 +5593,7 @@ EOF
    Actions : `login.fail`, `env.reveal`, `file.write`, `file.upload`. Pour `env.reveal`, `path` porte le nom de la variable, jamais sa valeur.
    ```
 
-11. §13, tmpfs sous un lien (tâche 1) — remplacer :
+12. §13, tmpfs sous un lien (tâche 1) — remplacer :
 
    ```text
    | `--tmpfs` placé sous un lien (ex. `tmpfs: [/var/run]` en compose, avec `/var/run` → `../run`) : la destination ne se retrouve pas dans la table des montages | toute écriture (édition et envoi) sur ce conteneur actif est refusée (`forbidden_path`), par échec fermé (§5.3 étape 2) |
@@ -5124,12 +5608,16 @@ EOF
    | Masquage de la commande heuristique : `mysql -pSECRET`, un secret dans un script ou un fichier passé en argument | non masqués en v0.1 ; seuls les noms de §7 sont reconnus (§7) |
    | Conteneur qui écrit plus de 1 000 lignes par seconde | au-delà de 10 000 lignes d'avance, les lignes en trop ne sont pas affichées mais comptées (`dropped`) ; le téléchargement les contient |
    | Navigateur en HTTP/1.1 : 6 connexions par hôte, un flux de logs en tient une | l'interface ferme le flux en quittant l'onglet Logs ; l'agent plafonne à 8 flux (§6) |
+   | Client parti sans FIN (veille, changement de réseau) : sa connexion reste ouverte côté agent environ 15 min | chaque écriture du flux a un délai de 30 s ; quand les 8 créneaux sont pris, le flux le plus ancien cède le sien (`evicted`) ; un autre onglet encore ouvert peut ainsi être fermé, il le dit |
+   | Déconnexion ou expiration de la session pendant un flux | le flux s'arrête au battement suivant (15 s au plus) par `failure` `unauthorized` |
+   | Reprise d'un flux : lignes de même horodatage coupées par `tail`, ou lignes annoncées `dropped` | une reprise peut rejouer quelques lignes du groupe coupé (horodatages mesurés distincts : rare) ; les lignes `dropped` reviennent à la reprise, comptées deux fois par l'interface |
+   | Secret d'environnement hors des formes reconnues : JSON (`"token":"…"`), `user:motdepasse@hôte` sans `://` | non masqué en v0.1 ; la règle est celle de §7 |
    ```
 
 - [ ] **Step 2: Suite complète sur les deux VM**
 
 Run (pour chaque VM) : `limactl start hk-ubuntu >/dev/null && limactl shell --workdir "$PWD" hk-ubuntu -- sudo scripts/test-linux.sh -race -tags integration -count=1 ./cmd/... ./internal/... 2>&1 | grep -E '^(ok|FAIL|---)' | tail -n 30`, puis idem `hk-fedora`.
-Expected: `ok` pour chaque paquet ; `TestIntegrationWriteTmpfsUnderLink`, `TestIntegrationCheckWriteRootTmpfsUnderLink`, `TestLogsRealDocker` et `TestIntegrationObservation` passent sans SKIP (vérifier par `-run 'Tmpfs|Logs|Observation' -v`). Sur `hk-fedora`, aucun AVC (`sudo ausearch -m avc -ts recent`, vide) ; sur `hk-ubuntu`, aucun `apparmor="DENIED"` dans `dmesg`. Vérifier en particulier que `/var/run` → `../run` dans `alpine:3` sur les deux (sinon le test se saute en le disant).
+Expected: `ok` pour chaque paquet ; `TestIntegrationWriteTmpfsUnderLink`, `TestIntegrationCheckWriteRootTmpfsUnderLink`, `TestIntegrationCheckArchiveTmpfsUnderLink`, `TestCheckArchiveTmpfsJail`, `TestLogsRealDocker` et `TestIntegrationObservation` passent sans SKIP (vérifier par `-run 'Tmpfs|Logs|Observation' -v` ; seul `TestIntegrationDockerSocketUnderVarRun` peut se sauter, et seulement sur Docker Desktop). Sur `hk-fedora`, aucun AVC (`sudo ausearch -m avc -ts recent`, vide) ; sur `hk-ubuntu`, aucun `apparmor="DENIED"` dans `dmesg`. Vérifier en particulier que `/var/run` → `../run` dans `alpine:3` sur les deux (sinon le test se saute en le disant).
 
 - [ ] **Step 3: Revue de branche** — demander la revue complète de la branche (sous-agent indépendant + Codex), corriger, puis cocher les cases de ce plan et noter les constats sous « Constats de la tâche 9 » : résultat des deux VM, AVC éventuels, verdict de la revue, réponses de l'utilisateur aux questions Q24 à Q35.
 
@@ -5157,6 +5645,7 @@ EOF
 - `alpine:3` : `/var/run -> ../run` ; `--tmpfs /var/run` est monté sur `/run`. Avant la tâche 1, un envoi dans `/etc` de ce conteneur → `403 forbidden_path` (« ne montre pas la destination /var/run ») ; après, `201`, et `/run` comme `/var/run` → `403`. Un PID 1 chrooté dans ce tmpfs, avec un lien `var/run → /` posé dans la prison, est refusé.
 - Arrêt de l'agent (`docker stop -t 10`) avec un flux de logs ouvert : 6 s et code 1 sans `RegisterOnShutdown` (`Shutdown` attend 5 s puis échoue), 1 s et code 0 avec.
 - Build de l'interface : le nœud de la page conteneur passe à 38 Ko (22 Ko au plan 3 : onglets Logs et Radiographie) ; CodeMirror reste à part, chargé à la demande.
+- Revue 1 (Opus, sur Docker Desktop) : `--mount type=tmpfs,dst=/var/run` sur alpine figure dans `Inspect.Mounts` et se monte sur `/run` ; 2 004 lignes écrites d'un coup ont 2 004 horodatages distincts. Ici : `--mount type=tmpfs` n'accepte pas `exec` par la ligne de commande (`tmpfs-options` refusé par l'analyse CSV de la CLI 29.7), d'où la prison du tar simulée par une table de montages et un vrai lien vers `/` (`TestCheckArchiveTmpfsJail`) plutôt que par un vrai chroot.
 - Parcours jetable (tâche 8) : masquage à l'écran (`s3cr3t-e2e` et `s3cr3t-cmd` absents de la page), révélation, ligne `<b>pas du html</b>` affichée comme texte, filtre `WARN`, pause (nombre de lignes figé 1,5 s) puis reprise (numéros de `tick` consécutifs : ni doublon ni trou), téléchargement `hublot-e2e-obs-AAAAMMJJ-HHMMSS.log`, conteneur arrêté (« Fin du flux », `fin du e2e`), 390 px sans défilement horizontal.
 
 #### Constats de la tâche 9
