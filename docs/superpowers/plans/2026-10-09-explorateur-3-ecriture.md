@@ -96,7 +96,7 @@ Le plan suit la recommandation de chaque question ; une réponse différente cha
 - **Q18 — `If-Match` absent ou mal formé, `If-None-Match` absent.** La spec dit « obligatoire » sans code ; `428 Precondition Required` n'est pas un code de §6.
   - *Recommandation (retenue, confirmée par l'utilisateur le 2026-10-10) :* `conflict` (409) dans les trois cas. `If-Match` doit être exactement l'`ETag` de l'aperçu (`"<64 hex>"`) : ni `*`, ni `W/…`, ni hex sans guillemets. → Tâches 2, 3.
 - **Q19 — Nom d'un envoi.** `multipart.Part.FileName()` ne garde que le nom de base : `a/b` deviendrait `b` au lieu d'être refusé (§10 exige `invalid_name`).
-  - *Recommandation (retenue, confirmée par l'utilisateur le 2026-10-10) :* lire le `filename` de `Content-Disposition` tel que `mime.ParseMediaType` le décode (`filename*` RFC 2231 prioritaire, paires entre guillemets), et valider **cette** valeur, celle qui part dans le tar (R4). Refuser aussi l'octet nul, plus de 255 octets (`NAME_MAX`), un nom non UTF-8 (l'interface ne pourrait plus l'ouvrir, §13), les caractères de contrôle C0, DEL et C1 (un saut de ligne fausserait la boîte de confirmation) et `\`. Limite connue : un navigateur encode `"`, CR et LF dans un nom de fichier (`%22`…), le fichier arrive sous ce nom encodé. → Tâches 2, 3, 4.
+  - *Recommandation (retenue, confirmée par l'utilisateur le 2026-10-10) :* lire le `filename` de `Content-Disposition` tel que `mime.ParseMediaType` le décode (`filename*` RFC 2231 prioritaire, paires entre guillemets), et valider **cette** valeur, celle qui part dans le tar (R4). Noms refusés (R17) : `/`, `\`, `.`, `..`, l'octet nul, les caractères de contrôle (C0, DEL, C1 : un saut de ligne fausserait la boîte de confirmation), les caractères bidi et d'isolat (U+202A à U+202E, U+2066 à U+2069, U+200E, U+200F, U+061C), un nom non UTF-8 (l'interface ne pourrait plus l'ouvrir, §13) et plus de 255 octets (`NAME_MAX`). Limite connue : un navigateur encode `"`, CR et LF dans un nom de fichier (`%22`…), le fichier arrive sous ce nom encodé. → Tâches 2, 3, 4.
 - **Q20 — Index retiré même après un échec.** §5.3 étape 6 dit « en cas de succès ».
   - *Recommandation (retenue, confirmée par l'utilisateur le 2026-10-10) :* `Forget` après **tout** `PutArchive`. Un échec peut avoir supprimé le fichier (Q17) ; un index qui le montrerait encore mentirait. Le coût est une réindexation. → Tâches 2, 3, 8.
 - **Q21 — Où Docker écrit vraiment.** `PUT /archive` extrait dans la vue de dockerd : le rootfs plus les montages configurés, pas l'espace de noms de montage du conteneur (mesuré par Opus et ici). Un fichier monté seul (`-v ./conf.yml:/app/conf.yml`) ou `/etc/hosts` → HTTP 500 « device or resource busy », traduit en `503 docker_unavailable` trompeur. Un `--tmpfs`, `/dev`, `/dev/shm` → 200, mais le conteneur ne voit jamais le fichier : faux succès, audit `ok`.
@@ -203,7 +203,7 @@ web/src/routes/c/[id]/+page.svelte           readOnly lu dans le contexte
 
 > **À comprendre :** `PUT /containers/{id}/archive` (`docker cp` vers le conteneur) extrait un tar dans un dossier. Il marche sur un conteneur actif, arrêté ou en pause. Docker refuse lui-même d'écrire sur un rootfs `--read-only` ou un volume `:ro`, avec une erreur `InvalidArgument` dont le message dit « marked read-only » (mesuré) : `wrapPut` la classe à part (`ErrRefused`), sinon l'API répondrait « Docker indisponible ». Un autre `InvalidArgument`, comme « extraction point is not a directory » quand le dossier vérifié est devenu un fichier, devient `ErrPutInvalid` (`conflict`). Seul `PutArchive` utilise `wrapPut` : sur une route de lecture, un `InvalidArgument` reste `docker_unavailable` (Q15). `copyUIDGID` n'est pas demandé : il donnerait le fichier à l'utilisateur du conteneur au lieu de garder l'uid/gid du tar. `ContainerInfo.Tmpfs` lit `HostConfig.Tmpfs` : un `--tmpfs` n'apparaît pas dans `Mounts`, et Docker n'y écrit pas (Q21).
 
-- [ ] **Step 1: Tests unitaires qui échouent** — ajouter à `internal/dockerx/dockerx_test.go` (et `"strings"` aux imports) :
+- [x] **Step 1: Tests unitaires qui échouent** — ajouter à `internal/dockerx/dockerx_test.go` (et `"strings"` aux imports) :
 
 ```diff
 --- a/internal/dockerx/dockerx_test.go
@@ -277,7 +277,7 @@ web/src/routes/c/[id]/+page.svelte           readOnly lu dans le contexte
 
 Run: `go vet ./internal/dockerx/ 2>&1 | tail -n 3` — Expected: échec de compilation (`undefined: wrapPut`, puis `ErrRefused`, `ErrPutInvalid`…).
 
-- [ ] **Step 2: Implémenter** — dans `internal/dockerx/dockerx.go` et `internal/dockerx/fake.go` :
+- [x] **Step 2: Implémenter** — dans `internal/dockerx/dockerx.go` et `internal/dockerx/fake.go` :
 
 ```diff
 --- a/internal/dockerx/dockerx.go
@@ -429,7 +429,7 @@ Run: `go vet ./internal/dockerx/ 2>&1 | tail -n 3` — Expected: échec de compi
 
 Run: `go test ./internal/dockerx/ 2>&1 | tail -n 3 && go vet ./... 2>&1 | tail -n 3` — Expected: `ok`, aucun autre implémenteur de `Client` à compléter (les doubles de test embarquent `*Fake`).
 
-- [ ] **Step 3: Test sur un vrai Docker** — ajouter à `internal/dockerx/integration_test.go` (et `"bytes"`, `"io"`, `"slices"`, `"strings"` aux imports) :
+- [x] **Step 3: Test sur un vrai Docker** — ajouter à `internal/dockerx/integration_test.go` (et `"bytes"`, `"io"`, `"slices"`, `"strings"` aux imports) :
 
 ```diff
 --- a/internal/dockerx/integration_test.go
@@ -549,7 +549,7 @@ Run: `go test ./internal/dockerx/ 2>&1 | tail -n 3 && go vet ./... 2>&1 | tail -
 Run: `DOCKER_HOST=unix://$HOME/.docker/run/docker.sock go test -tags integration ./internal/dockerx/ -run PutArchive -v 2>&1 | grep -E '^(---|ok|FAIL)|MESURE' | tail -n 5`
 Expected: `--- PASS: TestPutArchiveRealDocker` (rootfs `--read-only` et volume `:ro` → `ErrRefused`, extraction sur le fichier `/etc/motd` → `ErrPutInvalid`, `Tmpfs` = `[/scratch]`) ; la ligne `MESURE` montre deux inodes différents (Docker supprime puis recrée le fichier : base de Q17).
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add internal/dockerx
@@ -579,7 +579,7 @@ EOF
 >
 > Les tests Linux (`files_linux_test.go`) servent une racine temporaire par un vrai `procfs` : `openat2 RESOLVE_NO_SYMLINKS` et `fstatfs` décident, pas une imitation. `/evil` mène à un dossier de l'hôte : le contrôle vérifie que le piège marche ; l'assertion vérifie que `PutArchive` n'est **jamais** appelé, même quand une erreur est renvoyée. Un appel au faux Docker n'écrit rien, mais il prouve que le vrai aurait écrit. `TestProcPseudoFSRefused` sert le `/proc` de l'hôte comme racine : `/` et `/version` ne commencent pas par `/proc`, la règle de préfixe de Q21 les laisse passer, et seul `fstatfs` les refuse (R9). `TestIsMountPoint` (dans `fsview`) prend `/proc`, point de montage sur tout Linux, hôte ou conteneur, et `/etc/passwd`, qui n'en est pas un : aucun privilège, aucun montage à créer.
 
-- [ ] **Step 1: Tests portables** — créer `internal/files/files_test.go` :
+- [x] **Step 1: Tests portables** — créer `internal/files/files_test.go` :
 
 ```go
 package files
@@ -1322,7 +1322,7 @@ func TestEditRefusesMountPoint(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Tests d'évasion Linux** — créer `internal/files/files_linux_test.go` :
+- [x] **Step 2: Tests d'évasion Linux** — créer `internal/files/files_linux_test.go` :
 
 ```go
 //go:build linux
@@ -1501,7 +1501,7 @@ func TestProcWriteSendsExactPath(t *testing.T) {
 }
 ```
 
-- [ ] **Step 3: Test du point de montage dans `fsview`** — créer `internal/fsview/mountpoint_linux_test.go` :
+- [x] **Step 3: Test du point de montage dans `fsview`** — créer `internal/fsview/mountpoint_linux_test.go` :
 
 ```go
 //go:build linux
@@ -1537,12 +1537,12 @@ func TestIsMountPoint(t *testing.T) {
 }
 ```
 
-- [ ] **Step 4: Vérifier qu'ils échouent**
+- [x] **Step 4: Vérifier qu'ils échouent**
 
 Run: `go vet ./internal/files/ 2>&1 | tail -n 3 ; GOOS=linux go vet ./internal/files/ 2>&1 | tail -n 3 ; GOOS=linux go vet ./internal/fsview/ 2>&1 | tail -n 3`
 Expected : `undefined: Writer` (les deux premiers) ; `undefined: MountPointChecker` (le troisième).
 
-- [ ] **Step 5: Commit des tests rouges** (ne pas pousser avant la tâche 3)
+- [x] **Step 5: Commit des tests rouges** (ne pas pousser avant la tâche 3)
 
 ```bash
 git add internal/files internal/fsview/mountpoint_linux_test.go
@@ -1569,7 +1569,7 @@ EOF
 
 > **À comprendre :** `Edit` et `Upload` suivent la spec ligne à ligne, les numéros d'étape sont en commentaire. Rien n'ouvre de chemin : la vue fait tous les contrôles (`StatNoLinks` refuse un lien n'importe où, dernier composant compris, et `procfs` y fait `fstatfs`), Docker fait l'écriture. Le chemin d'écriture est une **chaîne** : celle qui a été contrôlée est celle dont `path.Dir` part vers Docker. `writable` refuse, sur l'`Inspect` seul, ce que Docker n'écrirait pas comme le conteneur le voit (Q21) et tout conteneur dont un montage tombe sous la règle de §5.2 étape 7, bind de `/`, `/proc`, `/sys` ou `/dev` (Q22, portée (a)). `lock` prend le verrou du conteneur avant d'ouvrir la vue, `defer` le rend après l'étape 6, panique comprise (Q23). Une édition refuse une cible qui est un point de montage, si la vue sait le dire (`MountPointChecker`, `procfs` seulement : R15). `put` regroupe les étapes 4 à 6 : rien si la requête est déjà finie, intention, `PutArchive` avec un contexte détaché de la requête (Q17), `Forget` (Q20), résultat.
 
-- [ ] **Step 1: Implémenter** — dans `fsview`, l'interface facultative et sa version `procfs` :
+- [x] **Step 1: Implémenter** — dans `fsview`, l'interface facultative et sa version `procfs` :
 
 ```diff
 --- a/internal/fsview/fsview.go
@@ -2005,17 +2005,17 @@ func oneFile(name string, content []byte, mode fs.FileMode, uid, gid int) ([]byt
 }
 ```
 
-- [ ] **Step 2: Vérifier sur macOS**
+- [x] **Step 2: Vérifier sur macOS**
 
 Run: `go test -race ./internal/files/ 2>&1 | tail -n 5 && go vet ./... && GOOS=linux go vet ./... && gofmt -l internal`
 Expected: `ok`, aucune sortie de `vet` ni de `gofmt`.
 
-- [ ] **Step 3: Vérifier sous Linux root**
+- [x] **Step 3: Vérifier sous Linux root**
 
 Run: `scripts/test-linux.sh -race ./internal/files/ -v 2>&1 | grep -E '^(---|ok|FAIL)' | tail -n 25`
 Expected: tous `PASS` (28 tests) ; `scripts/test-linux.sh ./internal/fsview/ -run IsMountPoint 2>&1 | tail -n 2` → `ok`. Passent notamment `TestProcLinksRefused`, `TestProcNotRegular` (la FIFO ne bloque pas : `StatNoLinks` ne l'ouvre jamais en lecture), `TestProcPseudoFSRefused`, `TestProcWriteSendsExactPath`, `TestWritesAreSerialized`, `TestRefusesWhereDockerDoesNotWrite`, `TestHostBindRefusesEveryWrite` ; aucun SKIP.
 
-- [ ] **Step 4: Contrôles de mutation** (une fois chacun, puis annuler avec `git checkout internal/files/files.go`)
+- [x] **Step 4: Contrôles de mutation** (une fois chacun, puis annuler avec `git checkout internal/files/files.go`)
   - Remplacer `fsys.StatNoLinks(` par `fsys.Stat(` (une vue qui suit les liens) : `scripts/test-linux.sh ./internal/files/ -run 'Links|Proc' 2>&1 | grep -E '^(---|FAIL)' | tail -n 8` doit montrer `FAIL: TestProcLinksRefused` (« ÉVASION : PutArchive appelé malgré un lien ») et `FAIL: TestLinksRefused`.
   - Remplacer `context.WithoutCancel(ctx)` par `ctx` : `go test ./internal/files/ -run Survives 2>&1 | tail -n 3` doit échouer.
   - Faire rendre à `lock` un `func() {}` sans rien attendre : `go test ./internal/files/ -run Serialized 2>&1 | tail -n 3` doit échouer (« la seconde écriture a passé ses contrôles pendant la première »).
@@ -2025,7 +2025,7 @@ Expected: tous `PASS` (28 tests) ; `scripts/test-linux.sh ./internal/fsview/ -ru
   - Retirer `unicode.In(r, unicode.Cf, unicode.Zl, unicode.Zp)` de `validName` : `-run InvalidName` doit échouer.
   - Dans `internal/fsview/procfs_linux.go`, neutraliser `checkNotPseudo` de `StatNoLinks` : `scripts/test-linux.sh ./internal/files/ -run Pseudo 2>&1 | tail -n 3` doit échouer ; puis `git checkout internal/fsview`.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add internal/files internal/fsview
@@ -2052,7 +2052,7 @@ EOF
 
 > **À comprendre :** la route ne décide de rien : elle lit le corps (borné), puis appelle `files` sous la garde de §13. Elle demande d'abord `files.Allowed()` pour répondre `read_only` sans lire le corps ni interroger Docker. Le nom d'un envoi est le `filename` de la partie `file` tel que `mime.ParseMediaType` le décode, et c'est cette valeur que `files` valide puis écrit (Q19) : `Part.FileName()` aurait changé `a/b` en `b`. Les tests envoient des en-têtes bruts (`multipartRaw`) : `filename*=UTF-8''..%2Fx` se décode en `../x` et doit être refusé ; `filename*=UTF-8''%C3%A9t%C3%A9.txt` doit arriver dans le tar sous `été.txt`.
 
-- [ ] **Step 1: Tests qui échouent** — créer `internal/api/fs_write_test.go` :
+- [x] **Step 1: Tests qui échouent** — créer `internal/api/fs_write_test.go` :
 
 ```go
 package api
@@ -2312,12 +2312,12 @@ func tarEntry(t *testing.T, b []byte) (string, string) {
 }
 ```
 
-- [ ] **Step 2: Vérifier qu'ils échouent**
+- [x] **Step 2: Vérifier qu'ils échouent**
 
 Run: `go test ./internal/api/ -run 'Edit|Write|Upload' 2>&1 | tail -n 8`
 Expected: `FAIL` ; les routes n'existent pas encore (`404 {"error":"not_found"}`).
 
-- [ ] **Step 3: Implémenter** — créer `internal/api/fs_write.go` :
+- [x] **Step 3: Implémenter** — créer `internal/api/fs_write.go` :
 
 ```go
 package api
@@ -2600,12 +2600,12 @@ Puis câbler `files` et les routes (`server.go`), classer les erreurs (`fserr.go
  	}
 ```
 
-- [ ] **Step 4: Vérifier**
+- [x] **Step 4: Vérifier**
 
 Run: `go test -race ./internal/api/ 2>&1 | tail -n 3 && go vet ./... && GOOS=linux go vet ./... && gofmt -l internal`
 Expected: `ok` ; les tests d'aperçu existants passent toujours (l'`ETag` garde son format).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add internal/api
@@ -2631,7 +2631,7 @@ EOF
 
 > **À comprendre :** ces tests prouvent ce que le faux ne peut pas : que l'index est bien reconstruit après une écriture (l'aperçu relit `v2`), que Docker garde le mode et le propriétaire du tar (`640 1000 1001`), qu'un lien pendant reste intact après un envoi refusé, que `/etc/hosts`, un `--tmpfs` et un fichier monté (bind `:ro` de `/etc/os-release`, présent sur tout hôte de démon ; en lecture seule, une régression ne pourrait rien écrire dans l'hôte) sont refusés avant Docker, que `/sbin/docker-init` d'un `--init`, absent d'`Inspect.Mounts`, est refusé par le point de montage (Q21, R15), et que le refus d'un rootfs `--read-only` arrive en `read_only` avec le message de Docker. Une écriture sur un conteneur arrêté retire l'index : la requête suivante peut recevoir `202`, d'où `whileIndexing`.
 
-- [ ] **Step 1: Conteneur arrêté** — créer `internal/api/integration_write_test.go` :
+- [x] **Step 1: Conteneur arrêté** — créer `internal/api/integration_write_test.go` :
 
 ```go
 //go:build integration
@@ -2716,7 +2716,7 @@ func TestIntegrationWriteStopped(t *testing.T) {
 }
 ```
 
-- [ ] **Step 2: Conteneur actif** — créer `internal/api/integration_write_linux_test.go` :
+- [x] **Step 2: Conteneur actif** — créer `internal/api/integration_write_linux_test.go` :
 
 ```go
 //go:build integration && linux
@@ -2823,7 +2823,7 @@ func TestIntegrationWriteRunning(t *testing.T) {
 }
 ```
 
-- [ ] **Step 3: Vérifier**
+- [x] **Step 3: Vérifier**
 
 Run: `DOCKER_HOST=unix://$HOME/.docker/run/docker.sock go test -tags integration ./internal/api/ -run IntegrationWriteStopped -v 2>&1 | grep -E '^(---|ok|FAIL)|MESURE' | tail -n 5`
 Expected: `PASS`, et la ligne `MESURE refus de Docker : {"error":"read_only","detail":"refusé par Docker : … container rootfs is marked read-only"}`.
@@ -2831,7 +2831,7 @@ Expected: `PASS`, et la ligne `MESURE refus de Docker : {"error":"read_only","de
 Run: `scripts/test-linux.sh -race -tags integration ./cmd/... ./internal/... 2>&1 | tail -n 12`
 Expected: `ok` pour chaque paquet ; `TestIntegrationWriteRunning` passe (vérifier avec `-run IntegrationWrite -v` qu'il n'est pas sauté). Contrôle une fois : sans le contrôle de point de montage de `files.Edit`, le cas `docker-init` échoue (la requête arrive jusqu'à `If-Match`).
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add internal/api
@@ -2858,7 +2858,7 @@ EOF
 
 > **À comprendre :** `api()` posait `Content-Type: application/json` dès qu'un corps existait ; un `FormData` doit laisser le navigateur poser le `boundary` du multipart. La condition devient « corps texte ». L'aperçu lit désormais les octets et les décode strictement (Q16) : `utf8: false` garde l'affichage avec U+FFFD, mais l'interface n'offrira pas l'édition. Chaque langage est un `import()` séparé : Vite en fait un morceau chargé quand un fichier de ce type s'ouvre dans l'éditeur. `docText` relit le texte par `state.sliceDoc()` : `state.doc.toString()` joint toujours par LF, et un fichier CRLF serait enregistré en LF (R1 ; le test le montre).
 
-- [ ] **Step 1: Dépendances**
+- [x] **Step 1: Dépendances**
 
 Run: `cd web && export PATH=/opt/homebrew/bin:$PATH && npm install codemirror@6.0.2 @codemirror/state@6.7.6 @codemirror/view@6.43.14 @codemirror/language@6.13.1 @codemirror/lang-json@6.0.2 @codemirror/lang-yaml@6.1.3 @codemirror/lang-javascript@6.2.5 @codemirror/lang-python@6.2.1 @codemirror/legacy-modes@6.5.5 2>&1 | tail -n 3`
 Expected: `package.json` gagne un bloc `dependencies` :
@@ -2885,7 +2885,7 @@ Expected: `package.json` gagne un bloc `dependencies` :
  }
 ```
 
-- [ ] **Step 2: Tests qui échouent** — créer `web/src/lib/write.test.ts` et `web/src/lib/editor.test.ts`, compléter `web/src/lib/api.test.ts` :
+- [x] **Step 2: Tests qui échouent** — créer `web/src/lib/write.test.ts` et `web/src/lib/editor.test.ts`, compléter `web/src/lib/api.test.ts` :
 
 ```ts
 import { describe, expect, it } from 'vitest';
@@ -3041,7 +3041,7 @@ describe('docText', () => {
 
 Run: `npx vitest run 2>&1 | tail -n 5` — Expected: `FAIL` ; `write.ts` et `editor.ts` n'existent pas, `saveFile` et `uploadFile` ne sont pas exportés.
 
-- [ ] **Step 3: Implémenter** — créer `web/src/lib/write.ts` et `web/src/lib/editor.ts`, modifier `api.ts`, ajouter les textes (mêmes clés en français et en anglais) :
+- [x] **Step 3: Implémenter** — créer `web/src/lib/write.ts` et `web/src/lib/editor.ts`, modifier `api.ts`, ajouter les textes (mêmes clés en français et en anglais) :
 
 ```ts
 import { errorMessage, t } from './i18n/index.ts';
@@ -3292,12 +3292,12 @@ export const docText = (state: EditorState): string => state.sliceDoc();
  	'error.forbidden_origin':
 ```
 
-- [ ] **Step 4: Vérifier**
+- [x] **Step 4: Vérifier**
 
 Run: `npx vitest run 2>&1 | tail -n 4 && npm run check 2>&1 | tail -n 3 && npm run lint 2>&1 | tail -n 3`
 Expected: `55 passed` ; `0 ERRORS 0 WARNINGS` ; ESLint sans sortie.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add web/package.json web/package-lock.json web/src/lib
@@ -3324,7 +3324,7 @@ EOF
 
 > **À comprendre :** le layout demande déjà `/api/meta` ; il expose `readOnly` par un contexte, la page le lit et le passe à l'explorateur, qui le passe à l'aperçu. Tant que la réponse n'est pas là, ou si elle échoue, `readOnly` vaut `true` : aucun bouton d'écriture (§9). Un texte de plus de `EDIT_MAX` octets est refusé avant la confirmation. L'éditeur importe CodeMirror quand il s'ouvre, avec le séparateur de lignes du fichier ; la boîte de confirmation est un `<dialog>` natif monté seulement pendant la confirmation (Échap vaut Annuler). Un enregistrement ou un envoi dont la réponse arrive après un changement de fichier n'écrase rien à l'écran (`path !== wanted`, `dir === u.dir`).
 
-- [ ] **Step 1: Composants nouveaux** — créer `web/src/lib/components/FileEditor.svelte` et `web/src/lib/components/ConfirmDialog.svelte` :
+- [x] **Step 1: Composants nouveaux** — créer `web/src/lib/components/FileEditor.svelte` et `web/src/lib/components/ConfirmDialog.svelte` :
 
 ```svelte
 <script lang="ts">
@@ -3455,7 +3455,7 @@ EOF
 </style>
 ```
 
-- [ ] **Step 2: Aperçu, explorateur, layout, page**
+- [x] **Step 2: Aperçu, explorateur, layout, page**
 
 ```diff
 --- a/web/src/lib/components/FilePreview.svelte
@@ -3808,12 +3808,12 @@ EOF
  </main>
 ```
 
-- [ ] **Step 3: Vérifier le typage, le style et le découpage**
+- [x] **Step 3: Vérifier le typage, le style et le découpage**
 
 Run: `npm run check 2>&1 | tail -n 3 && npm run lint 2>&1 | tail -n 3 && npx vitest run 2>&1 | tail -n 3 && npm run build 2>&1 | tail -n 2 && grep -l 'cm-content' build/_app/immutable/nodes/*.js build/_app/immutable/entry/*.js ; grep -l 'cm-content' build/_app/immutable/chunks/*.js | wc -l`
 Expected: `0 ERRORS 0 WARNINGS` ; ESLint muet ; `55 passed` ; build réussi ; le premier `grep` ne trouve rien (CodeMirror n'est ni dans l'entrée ni dans un nœud de page) ; le second compte `1` morceau.
 
-- [ ] **Step 4: Parcours jetable d'écriture** — créer `web/e2e/zz-ecriture.e2e.ts` (il ne sera **pas** commité : §10 garde un seul parcours) :
+- [x] **Step 4: Parcours jetable d'écriture** — créer `web/e2e/zz-ecriture.e2e.ts` (il ne sera **pas** commité : §10 garde un seul parcours) :
 
 ```ts
 import { expect, test } from '@playwright/test';
@@ -3885,9 +3885,9 @@ test('écriture : édition et envoi', async ({ page }) => {
 Run: `cd .. && export PATH=/opt/homebrew/bin:$PATH && DOCKER_HOST=unix://$HOME/.docker/run/docker.sock scripts/e2e.sh 2>&1 | tail -n 6 ; rm web/e2e/zz-ecriture.e2e.ts`
 Expected: `2 passed` (le parcours unique et le jetable). Le jetable prouve, contre un vrai agent et sous la CSP : `readOnly` arrive par le contexte (le bouton « Modifier » existe), CodeMirror se charge, la boîte nomme le conteneur et le chemin, Annuler a le focus, l'écriture est relue après réindexation, l'envoi sélectionne le nouveau fichier, un nom existant est refusé, et un fichier CRLF modifié revient octet pour octet (`un 1\r\ndeux\r\n`).
 
-- [ ] **Step 5: Essai manuel en lecture seule** — lancer l'agent de dev avec `--read-only` (`scripts/dev-agent.sh --read-only`), ouvrir un fichier texte : ni « Modifier », ni « Envoyer un fichier ici » ; le badge « Lecture seule » est dans la barre. À 390 px de large, la boîte de confirmation tient dans l'écran.
+- [x] **Step 5: Essai manuel en lecture seule** — lancer l'agent de dev avec `--read-only` (`scripts/dev-agent.sh --read-only`), ouvrir un fichier texte : ni « Modifier », ni « Envoyer un fichier ici » ; le badge « Lecture seule » est dans la barre. À 390 px de large, la boîte de confirmation tient dans l'écran.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git status --short web/e2e   # rien : le parcours jetable est supprimé
@@ -3908,7 +3908,7 @@ EOF
 **Files:**
 - Modify: `docs/superpowers/specs/2026-10-07-hublot-kit-v0.1-design.md` (§5.2 étape 1, §5.3, §6, §7, §13), `docs/superpowers/plans/2026-10-09-explorateur-3-ecriture.md` (cases cochées, constats)
 
-- [ ] **Step 1: Reporter les décisions dans la spec** — remplacer chaque passage par le suivant (chacun est unique dans la spec). Les textes ci-dessous suivent Q22 (a). Si l'utilisateur retient (b), les items 2, 8, 10 et 15 nomment en plus la liste de (b) et ses faux refus.
+- [x] **Step 1: Reporter les décisions dans la spec** — remplacer chaque passage par le suivant (chacun est unique dans la spec). Les textes ci-dessous suivent Q22 (a). Si l'utilisateur retient (b), les items 2, 8, 10 et 15 nomment en plus la liste de (b) et ses faux refus.
 
 1. §5.2 étape 1 — remplacer :
 
@@ -4100,14 +4100,14 @@ EOF
    | userns-remap (hors v0.1, §2) : `procfs` donne les uid/gid de l'hôte, le tar attend ceux du conteneur | non pris en charge en v0.1 |
    ```
 
-- [ ] **Step 2: Suite complète sur les deux VM**
+- [x] **Step 2: Suite complète sur les deux VM**
 
 Run (pour chaque VM) : `limactl start hk-ubuntu >/dev/null && limactl shell --workdir "$PWD" hk-ubuntu -- sudo scripts/test-linux.sh -race -tags integration ./cmd/... ./internal/... 2>&1 | grep -E '^(ok|FAIL|---)|MESURE' | tail -n 30`, puis idem `hk-fedora`.
 Expected: `ok` pour chaque paquet ; `TestIntegrationWriteRunning`, `TestProcLinksRefused` et `TestProcPseudoFSRefused` passent, sans SKIP (vérifier par `-run 'IntegrationWrite|Proc' -v` si besoin) ; les lignes `MESURE` (inode, refus de Docker) sont relevées. Sur `hk-fedora`, aucun AVC (`sudo ausearch -m avc -ts recent`, vide).
 
 - [ ] **Step 3: Revue de branche** — demander la revue complète de la branche (sous-agent indépendant + Codex), corriger, puis cocher les cases de ce plan et noter les constats sous « Constats de la tâche 8 » : résultat des deux VM, lignes `MESURE`, AVC éventuels, verdict de la revue.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add docs/superpowers
@@ -4131,4 +4131,8 @@ EOF
 
 #### Constats de la tâche 8
 
-À remplir à l'étape 3 de la tâche 8 : résultat des deux VM, lignes `MESURE`, AVC éventuels, verdict de la revue de branche.
+- `hk-ubuntu` (AppArmor) et `hk-fedora` (SELinux), `scripts/test-linux.sh -race -tags integration ./cmd/... ./internal/...` : `ok` pour chaque paquet sur les deux. `-v` : aucun SKIP sur les deux VM. `TestIntegrationWriteRunning`, `TestIntegrationWriteStopped`, `TestProcLinksRefused`, `TestProcPseudoFSRefused`, `TestIntegrationCheckWriteRoot`, `TestCheckWriteRoot` et `TestCheckWriteRootJail` passent sur les deux.
+- Lignes `MESURE` : refus de Docker sur rootfs `--read-only` → `read_only`, « container rootfs is marked read-only » ; inode de `/etc/motd` 796620 → 1598455 (ubuntu), 152316 → 243977 (fedora) : Docker remplace le fichier ; `GET /archive` ne voit pas le `/proc` propre du conteneur ; `SizeRootFs` 9,3 Mo (ubuntu), 10,3 Mo (fedora) ; index : 237 octets par entrée.
+- AVC : `ausearch -m avc -ts recent` vide sur `hk-fedora` ; aucun `apparmor="DENIED"` dans `dmesg` sur `hk-ubuntu`.
+- Un échec isolé sur `hk-fedora`, en `-v -count=1` : `TestStoppedContainerIndexDropped` (`internal/files/files_test.go:477`, « après l'écriture, l'index doit être retiré : <nil> »). Cause : `Options{}` donne `FirstWait` nul ; si la construction de l'index (un tar de trois entrées) finit avant que `For` teste `finished(b)`, `For` rend l'index au lieu d'`ErrIndexing`. Défaut du test, pas du code : 600 essais sur macOS, dont 300 avec `-race`, ne le reproduisent pas ; il est passé sur la même VM dans la première exécution (sans `-v`). À corriger en donnant au `Fake` une porte, ou en acceptant l'un ou l'autre résultat.
+- Revue de branche (étape 3) : non faite ici, c'est le travail du contrôleur ; la case reste décochée.
