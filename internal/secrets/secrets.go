@@ -9,7 +9,13 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"unicode"
 )
+
+// maxLen: a text longer than this is masked whole (fail closed). It bounds
+// the work done per value: the image or the creator of a container chooses
+// the size of Env and Cmd (review, round 1, I1).
+const maxLen = 8 << 10
 
 // Mask replaces a masked part of a command argument.
 const Mask = "••••••"
@@ -20,6 +26,19 @@ var words = []string{"PASSWORD", "PASSWD", "PASS", "TOKEN", "KEY", "SECRET", "CR
 // SecretName: the name contains one of the words of spec §7, ignoring case
 // (KEYBOARD and COMPASS too: the rule errs on the safe side).
 func SecretName(name string) bool {
+	// Fail closed on look-alikes (Codex): drop the format characters
+	// (zero width…), then a non-ASCII letter makes the name suspect.
+	name = strings.Map(func(r rune) rune {
+		if unicode.Is(unicode.Cf, r) {
+			return -1
+		}
+		return r
+	}, name)
+	for _, r := range name {
+		if r > unicode.MaxASCII && unicode.IsLetter(r) {
+			return true
+		}
+	}
 	up := strings.ToUpper(name)
 	for _, w := range words {
 		if strings.Contains(up, w) {
@@ -50,6 +69,9 @@ type Var struct {
 // "?password=…", "-D…Password\=…", "--requirepass …"), the value read as
 // is and percent-decoded ("?pass%77ord=…").
 func Masked(name, value string) bool {
+	if len(value) > maxLen {
+		return true
+	}
 	if SecretName(name) || maskText(value) != value {
 		return true
 	}
@@ -86,13 +108,22 @@ func Lookup(env []string, name string) (string, bool) {
 
 // value: a word, possibly quoted or partly quoted ("x", 'x', a"b c"d); an
 // unclosed quote runs to the end (review I1: nothing after it leaks).
-const value = `(?:"[^"]*"?|'[^']*'?|[^\s;&|"'()])+`
+const value = `(?:"[^"]*"?|'[^']*'?|\\.|[^\s;&|"'()])+`
 
-// assignment: NAME=value or --name=value inside a text (a shell line, a
-// connection string), after anything that cannot be part of a name (review
-// 2, Minor 5: ":", "/", "{", "[" too); "\=" (an escaped "=", Java
-// properties) counts.
-var assignment = regexp.MustCompile(`(^|[^A-Za-z0-9_.-])(-{0,2}[A-Za-z0-9_.-]+)(\\?=)(` + value + `)`)
+// assignment: the key of NAME=value or --name=value inside a text (a shell
+// line, a connection string): the leftmost run of name characters is
+// preceded by anything that cannot be part of a name (review 2, Minor 5:
+// ":", "/", "{", "[" too); "\=" (an escaped "=", Java properties) counts.
+var assignment = regexp.MustCompile(`(-{0,2}[A-Za-z0-9_.-]+)(\\?=)`)
+
+// valueAt: the value that starts a text.
+var valueAt = regexp.MustCompile(`^` + value)
+
+// bearer: the credential of an Authorization header (round 1, Minor).
+var bearer = regexp.MustCompile(`(?i)\b((?:bearer|authorization\s*[:=]\s*basic)\s+)[^\s'"]+`)
+
+// jsonKey: what follows a word of §7 that is a JSON key ("password":"x").
+var jsonKey = regexp.MustCompile(`^"\s*:\s*(?:["\d\[{]|true|false|null)`)
 
 // pwd: Pwd=, the password key of ODBC and .NET connection strings. Only
 // as an assignment inside a text: the variable PWD is the working
@@ -104,7 +135,7 @@ func secretKey(name string) bool { return SecretName(name) || pwd.MatchString(na
 
 // flagValue: a flag, blanks, then a word that is not a flag, inside a shell
 // line (sh -c "… --requirepass x …").
-var flagValue = regexp.MustCompile(`(^|\s)(-{1,2}[A-Za-z0-9_.-]+)(\s+)((?:"[^"]*"?|'[^']*'?|[^\s;&|"'()-])(?:"[^"]*"?|'[^']*'?|[^\s;&|"'()])*)`)
+var flagValue = regexp.MustCompile(`(^|\s)(-{1,2}[A-Za-z0-9_.-]+)(\s+)((?:"[^"]*"?|'[^']*'?|\\.|[^\s;&|"'()-])(?:"[^"]*"?|'[^']*'?|\\.|[^\s;&|"'()])*)`)
 
 // flag: an argument that is only a flag ("--password", or "--password="
 // whose value is the next argument).
@@ -124,18 +155,33 @@ var whole = regexp.MustCompile(`(?s)^(-{0,2}[A-Za-z0-9_.-]+)=(.+)$`)
 // word: a word of spec §7, anywhere, ignoring case.
 var word = regexp.MustCompile(`(?i)` + strings.Join(words, "|"))
 
-// maskText masks a text: user information of URLs, then the value of each
-// secret assignment (an assignment of another name is searched inside its
-// value: --env=DB_PASSWORD=x), then the word after a secret flag.
+// maskText masks a text: user information of URLs, the credential of an
+// Authorization header, then the value of each secret assignment (a key
+// inside the value of another is found as the scan goes on: --env=DB_PASSWORD=x;
+// one pass, linear), then the word after a secret flag.
 func maskText(s string) string {
 	s = userinfo.ReplaceAllString(s, "://"+Mask+"@")
-	s = assignment.ReplaceAllStringFunc(s, func(m string) string {
-		sub := assignment.FindStringSubmatch(m)
-		if secretKey(sub[2]) {
-			return sub[1] + sub[2] + sub[3] + Mask
+	s = bearer.ReplaceAllString(s, "${1}"+Mask)
+	var b strings.Builder
+	last, pos := 0, 0
+	for pos < len(s) {
+		loc := assignment.FindStringSubmatchIndex(s[pos:])
+		if loc == nil {
+			break
 		}
-		return sub[1] + sub[2] + sub[3] + maskText(sub[4])
-	})
+		start, end := pos, pos+loc[1]
+		pos = end
+		if !secretKey(s[start+loc[2] : start+loc[3]]) {
+			continue
+		}
+		if v := valueAt.FindStringIndex(s[end:]); v != nil {
+			b.WriteString(s[last:end])
+			b.WriteString(Mask)
+			last, pos = end+v[1], end+v[1]
+		}
+	}
+	b.WriteString(s[last:])
+	s = b.String()
 	return flagValue.ReplaceAllStringFunc(s, func(m string) string {
 		sub := flagValue.FindStringSubmatch(m)
 		if !SecretName(sub[2]) || sub[4] == Mask {
@@ -166,21 +212,41 @@ func leaks(s string) bool {
 	if flag.MatchString(s) {
 		return false
 	}
+	// One pass: the token (a run without blank or quote) is found once, and
+	// its first "/" and the next "=" or ":" are tracked as the words go by
+	// (round 1, I1: linear).
+	var st, slash, sep int
+	tokEn := 0
 	for _, loc := range word.FindAllStringIndex(s, -1) {
-		st := strings.LastIndexAny(s[:loc[0]], blank) + 1
-		en := len(s)
-		if i := strings.IndexAny(s[loc[1]:], blank); i >= 0 {
-			en = loc[1] + i
+		if loc[0] >= tokEn {
+			st = tokEn + strings.LastIndexAny(s[tokEn:loc[0]], blank) + 1
+			tokEn = len(s)
+			if i := strings.IndexAny(s[loc[1]:], blank); i >= 0 {
+				tokEn = loc[1] + i
+			}
+			slash, sep = -1, -1
+			if i := strings.IndexByte(s[st:tokEn], '/'); i >= 0 {
+				slash = st + i
+			}
 		}
-		tok, before, after := s[st:en], s[st:loc[0]], s[loc[1]:en]
-		if i := strings.LastIndex(after, Mask); i >= 0 && !alnum.MatchString(after[i+len(Mask):]) {
+		if sep < loc[1] {
+			sep = tokEn // none
+			if i := strings.IndexAny(s[loc[1]:tokEn], "=:"); i >= 0 {
+				sep = loc[1] + i
+			}
+		}
+		bound := sep < tokEn
+		if bound && strings.HasPrefix(s[sep+1:tokEn], Mask) && !alnum.MatchString(s[sep+1+len(Mask):tokEn]) {
 			continue
 		}
-		isFlag, bound := strings.HasPrefix(tok, "-"), strings.ContainsAny(after, "=:")
-		if isFlag && !bound && strings.HasPrefix(strings.TrimLeft(s[en:], " \t"), Mask) {
+		isFlag := s[st] == '-'
+		if isFlag && !bound && strings.HasPrefix(strings.TrimLeft(s[tokEn:], " \t"), Mask) {
 			continue
 		}
-		if strings.Contains(before, "/") && !bound {
+		if tokEn < len(s) && s[tokEn] == '"' && jsonKey.MatchString(s[tokEn:min(len(s), tokEn+64)]) {
+			bound = true // "password":"x" (JSON): the separator is after the quote
+		}
+		if slash >= 0 && slash < loc[0] && !bound {
 			continue
 		}
 		if isFlag || bound {
@@ -193,6 +259,9 @@ func leaks(s string) bool {
 // Line masks one text (a message of Docker, a shell line): maskText, then,
 // if a word of §7 is left with nothing masked after it, the whole text.
 func Line(s string) string {
+	if len(s) > maxLen {
+		return Mask
+	}
 	if m := maskText(s); !leaks(m) {
 		return m
 	}
@@ -217,12 +286,16 @@ func Args(args []string) (out []string, masked bool) {
 		if i > 0 {
 			prev = args[i-1]
 		}
+		if len(a) > maxLen {
+			out[i], masked = Mask, true
+			continue
+		}
 		switch w := whole.FindStringSubmatch(a); {
 		case flag.MatchString(prev) && SecretName(prev) && (strings.HasSuffix(prev, "=") || !strings.HasPrefix(a, "-")):
 			out[i] = Mask // "--password=" then any value; "--password" then a non-flag
-		case i > 0 && shellFlag.MatchString(prev) && slices.Contains(shells, path.Base(args[0])), w == nil:
-			out[i] = Line(a)
-		case SecretName(w[1]):
+		case w == nil, i > 0 && shellFlag.MatchString(prev) && slices.Contains(shells, path.Base(args[0])):
+			out[i] = Line(a) // not an assignment, or the line of "sh -c"
+		case secretKey(w[1]):
 			out[i] = w[1] + "=" + Mask
 		default:
 			out[i] = w[1] + "=" + maskText(w[2])
