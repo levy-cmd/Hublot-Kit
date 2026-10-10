@@ -3,7 +3,7 @@ branche: phase/observation
 base: bf6ab69
 de: Livaille An-nour (avec Claude)
 le: 2026-10-10
-repris_par:
+repris_par: Claude (session du 2026-10-10)
 verif: export PATH=/opt/homebrew/bin:$PATH DOCKER_HOST=unix://$HOME/.docker/run/docker.sock; make test && make build
 ---
 
