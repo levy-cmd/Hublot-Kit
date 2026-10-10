@@ -76,6 +76,9 @@ type server struct {
 	throttle *throttleLog
 	guard    *fsGuard
 	files    *files.Writer // the only writer (spec §7: read-only applied there)
+	// F6: limits of the logs streams, and one slot per stream open.
+	logLimits logLimits
+	streams   *streamSlots
 }
 
 // Spec §13 (FUSE): at most 4 file operations at once per container, each one
@@ -98,6 +101,8 @@ func New(d Deps) http.Handler {
 		guard:    newFSGuard(fsMaxPerContainer, fsTimeout),
 		files: &files.Writer{ReadOnly: d.ReadOnly, Docker: d.Docker, Audit: d.Audit,
 			Open: d.OpenFS, Forget: d.Views.Forget},
+		logLimits: defaultLogLimits,
+		streams:   newStreamSlots(defaultLogLimits.MaxStreams),
 	}
 	session := func(h http.HandlerFunc) http.Handler { return requireSession(d.Sessions, h) }
 
@@ -112,6 +117,8 @@ func New(d Deps) http.Handler {
 	mux.Handle("PUT /api/containers/{id}/fs/file", session(s.fsEdit))
 	mux.Handle("POST /api/containers/{id}/fs/upload", session(s.fsUpload))
 	mux.Handle("GET /api/containers/{id}/changes", session(s.changes))
+	mux.Handle("GET /api/containers/{id}/logs", session(s.logsStream))
+	mux.Handle("GET /api/containers/{id}/logs/download", session(s.logsDownload))
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "not_found", "")
 	})

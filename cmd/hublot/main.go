@@ -84,6 +84,12 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 	}
 
 	srv := &http.Server{ReadHeaderTimeout: 10 * time.Second}
+	// A logs stream (SSE, F6) never ends by itself: Shutdown cancels the
+	// context of every request, so the streams return, then waits for them.
+	base, cancelBase := context.WithCancel(context.Background())
+	defer cancelBase()
+	srv.BaseContext = func(net.Listener) context.Context { return base }
+	srv.RegisterOnShutdown(cancelBase)
 	if cfg.TLS() {
 		cert, err := tls.LoadX509KeyPair(cfg.TLSCert, cfg.TLSKey)
 		if err != nil {
