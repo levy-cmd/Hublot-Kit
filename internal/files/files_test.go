@@ -446,12 +446,19 @@ func TestStoppedContainerIndexDropped(t *testing.T) {
 	fake := &dockerx.Fake{
 		Infos:    map[string]dockerx.ContainerInfo{cid: info},
 		Archives: map[string][]byte{cid + ":/": buf.Bytes(), cid + ":/etc/app.conf": file.Bytes()},
+		// The gate keeps the first build in flight: ErrIndexing is certain,
+		// whatever the speed of the machine.
+		ArchiveGate: make(chan struct{}),
 	}
+	var release sync.Once
+	open := func() { release.Do(func() { close(fake.ArchiveGate) }) }
+	t.Cleanup(open)
 	views := fsview.NewViews(fake, fsview.Options{})
 	w := &Writer{Docker: fake, Audit: &journal{}, Open: views.For, Forget: views.Forget}
 	if _, err := w.Edit(ctx, info, "/etc/app.conf", []byte("new\n"), ETag([]byte("old\n"))); !errors.Is(err, fsview.ErrIndexing) {
 		t.Fatalf("pendant l'indexation : %v, attendu ErrIndexing", err)
 	}
+	open()
 	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(5 * time.Millisecond) {
 		_, err := w.Edit(ctx, info, "/etc/app.conf", []byte("new\n"), ETag([]byte("old\n")))
 		if err == nil {
@@ -473,8 +480,12 @@ func TestStoppedContainerIndexDropped(t *testing.T) {
 	if n := builds(); n != 1 {
 		t.Fatalf("une construction attendue, %d", n)
 	}
-	if _, err := views.For(ctx, cid); !errors.Is(err, fsview.ErrIndexing) {
-		t.Fatalf("après l'écriture, l'index doit être retiré : %v", err)
+	// The index is gone: this access starts a new build, which may or may
+	// not be done when it answers. The proof is the second GetArchive of "/".
+	if fsys, err := views.For(ctx, cid); err == nil {
+		fsys.Close()
+	} else if !errors.Is(err, fsview.ErrIndexing) {
+		t.Fatalf("après l'écriture : %v", err)
 	}
 	// The new build runs in a goroutine: wait for its GetArchive of "/".
 	for deadline := time.Now().Add(5 * time.Second); builds() != 2; time.Sleep(5 * time.Millisecond) {

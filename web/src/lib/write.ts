@@ -74,3 +74,12 @@ export function writeErrorMessage(kind: 'edit' | 'upload', code: string, detail?
 			return errorMessage(code);
 	}
 }
+
+/**
+ * False for a name the browser rewrites in the multipart filename (`"`, CR,
+ * LF become %22, %0D, %0A): the agent would write another name than the one
+ * the confirmation shows.
+ */
+export function uploadNameOk(name: string): boolean {
+	return !/["\r\n]/.test(name);
+}

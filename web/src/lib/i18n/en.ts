@@ -84,6 +84,7 @@ export const en: Record<Key, string> = {
 	'write.readOnly': 'Write refused: the target is read-only',
 	'write.linkInPath': 'This path goes through a symbolic link: the agent only writes on a path without links. Open the link target.',
 	'write.editTooLarge': 'Over 2 MiB: the editor stops there.',
+	'write.invalidName': 'This name contains a quote or a line break: rename the file before uploading it.',
 	'write.uploadTooLarge': 'Over 32 MiB: use docker cp for this file.',
 	'write.forbidden':
 		'Write refused here: Docker does not write there (mounted file or tmpfs, /etc/hosts, /dev, /proc, /sys), or a mount of the container exposes the host',

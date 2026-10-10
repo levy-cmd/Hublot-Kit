@@ -20,6 +20,10 @@ type Fake struct {
 	Infos map[string]ContainerInfo
 	// Archives answers GetArchive, keyed by id + ":" + path.
 	Archives map[string][]byte
+	// ArchiveGate, when not nil, holds every GetArchive call (after it is
+	// recorded) until the channel is closed or the context ends: a test
+	// keeps an index build in flight as long as it needs.
+	ArchiveGate chan struct{}
 	// ArchiveCalls records every GetArchive call as id + ":" + path.
 	ArchiveCalls []string
 	// Sizes answers SizeRootFs, by full ID (absent: 0).
@@ -62,10 +66,17 @@ func (f *Fake) Inspect(_ context.Context, id string) (ContainerInfo, error) {
 	return ContainerInfo{}, fmt.Errorf("%w : %s", ErrNotFound, id)
 }
 
-func (f *Fake) GetArchive(_ context.Context, id, path string) (io.ReadCloser, error) {
+func (f *Fake) GetArchive(ctx context.Context, id, path string) (io.ReadCloser, error) {
 	f.mu.Lock()
 	f.ArchiveCalls = append(f.ArchiveCalls, id+":"+path)
 	f.mu.Unlock()
+	if f.ArchiveGate != nil {
+		select {
+		case <-f.ArchiveGate:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
 	if f.Err != nil {
 		return nil, f.Err
 	}

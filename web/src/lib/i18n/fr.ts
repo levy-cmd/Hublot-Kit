@@ -86,6 +86,7 @@ export const fr = {
 	'write.linkInPath':
 		"Ce chemin passe par un lien symbolique : l'agent n'écrit que sur un chemin sans lien. Ouvrez la cible du lien.",
 	'write.editTooLarge': "Plus de 2 Mio : l'éditeur s'arrête là.",
+	'write.invalidName': "Ce nom contient un guillemet ou un saut de ligne : renommez le fichier avant de l'envoyer.",
 	'write.uploadTooLarge': 'Plus de 32 Mio : utilisez docker cp pour ce fichier.',
 	'write.forbidden':
 		"Écriture refusée à cet endroit : Docker n'y écrit pas (fichier ou tmpfs monté, /etc/hosts, /dev, /proc, /sys), ou un montage du conteneur expose l'hôte",

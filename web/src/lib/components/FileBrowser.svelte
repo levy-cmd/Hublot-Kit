@@ -27,7 +27,7 @@
 	} from '#lib/files.ts';
 	import { errorMessage, t } from '#lib/i18n/index.ts';
 	import { latest, lock } from '#lib/guard.ts';
-	import { UPLOAD_MAX, writeErrorMessage } from '#lib/write.ts';
+	import { UPLOAD_MAX, uploadNameOk, writeErrorMessage } from '#lib/write.ts';
 	import ConfirmDialog from '#lib/components/ConfirmDialog.svelte';
 	import FilePreview from '#lib/components/FilePreview.svelte';
 
@@ -142,6 +142,10 @@
 		if (!f) return;
 		if (f.size > UPLOAD_MAX) {
 			uploadError = t('write.uploadTooLarge');
+			return;
+		}
+		if (!uploadNameOk(f.name)) {
+			uploadError = t('write.invalidName');
 			return;
 		}
 		toUpload = { id, file: f, dir };

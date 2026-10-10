@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { t } from './i18n/index.ts';
-import { decodeUtf8, languageOf, lineSeparatorOf, writeErrorMessage } from './write.ts';
+import { decodeUtf8, languageOf, lineSeparatorOf, uploadNameOk, writeErrorMessage } from './write.ts';
 
 describe('decodeUtf8', () => {
 	it('keeps valid UTF-8, BOM included', () => {
@@ -56,5 +56,18 @@ describe('writeErrorMessage', () => {
 		// Network error during the write: the request may have reached the agent.
 		expect(writeErrorMessage('edit', 'network', undefined, 0)).toBe(t('write.maybeWrittenNetwork'));
 		expect(writeErrorMessage('upload', 'network')).toBe(t('write.maybeWrittenNetwork'));
+	});
+});
+
+describe('uploadNameOk', () => {
+	it('refuses a name the browser would encode in the multipart filename', () => {
+		expect(uploadNameOk('a.txt')).toBe(true);
+		expect(uploadNameOk('été (1).txt')).toBe(true);
+		expect(uploadNameOk('a"b.txt')).toBe(false); // sent as a%22b.txt
+		expect(uploadNameOk('a\rb')).toBe(false);
+		expect(uploadNameOk('a\nb')).toBe(false);
+	});
+	it('has its message in both languages', () => {
+		expect(t('write.invalidName')).not.toBe('write.invalidName');
 	});
 });
