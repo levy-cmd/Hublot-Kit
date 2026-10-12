@@ -119,3 +119,17 @@ Scan de cohérence du plan (HEAD 2576a19, seul le plan diffère de `a6ffdeb`, ba
   - Minor reporté : la mutation qui retire `!shared` de la condition sur `Running` survit. Le garde est redondant, puisque Docker donne `Ports: {}` en réseau partagé.
 - Task 7 (2026-10-12) : wip repris et fini (6c0be92), correctif tour 1 (2397b5e : `enqueue` borne `pending` à 2 × MAX_LINES, `$state.raw`), validée par Opus et Codex, fusionnée dans phase/observation (c7258ff).
   - Minor reporté : `LogsView` n'a pas de test de composant (garde `current`, remise à zéro au changement de conteneur) ; à couvrir par le parcours de la T8 si possible.
+- Task 6 (2026-10-12) : validée par Opus et Codex après trois tours.
+  - Commits : 8a9627d (test bout en bout) ; 809ba1f/b0d6295 (reprise des logs) ; ac92a1e/56f70e7 (borne et preuves) ; c027b4a (test interruptible).
+  - Ruling: la reprise des logs doit tenir « ni doublon ni trou » ; ce n'est pas une limite §13. La T6 a révélé jusqu'à 716 doublons en rafale avec l'ancien ID `ts/rang`, car Docker n'ordonne pas les flux par horodatage. Nouvel ID `ts/flux/rang`, et saut jusqu'à la ligne de coupure comprise. Garde-fous : une ligne du même flux au-delà de la coupure, ou de l'autre flux de plus d'une seconde, arrête le saut. Un ID de l'ancien format est traité comme invalide.
+  - Ruling: la goroutine `srv.Close` qui reste en vie après 10 s est acceptée. Elle n'existe qu'après un échec du test (mutation « lecteur bloqué »), et le processus de test se termine juste après (Minor de Codex, tour 3).
+  - POUR LA T9 (§13) :
+    - reprise après rotation du journal : si la ligne de coupure a disparu, les lignes de l'autre flux sont sautées jusqu'à la prochaine ligne du flux coupé, et au plus une seconde ;
+    - recul d'horloge (NTP) : des lignes du flux coupé peuvent être sautées.
+  - POUR LA T9 (petits correctifs de test) :
+    - `rmAll` doit journaliser les erreurs de `docker rm` (integration_observation_test.go:90) ;
+    - le commentaire périmé de integration_observation_test.go:112-116 est à corriger ;
+    - `-timeout` passe à 5m, ou un pré-tirage des images `fsview` est ajouté sur un runner CI neuf.
+- Task 8 (2026-10-12) : validée par Opus et Codex après deux tours ; fusionnée dans phase/observation (f55d3ca).
+  - Commits : e4ad112 ; cb7e213/e61e7d1 (cycle de vie des valeurs révélées dans `xray.ts`, golden Go `internal/api/testdata/radio.golden.json` lu par Vitest, IPv6, i18n du « : », cas `dead`) ; c71fbba/d2b36cc (génération invalidée sur `pagehide` et `onDestroy`).
+  - Minor reporté : le branchement de `revealedFor` et `askFor` dans `XrayView.svelte` n'a pas de test de composant (pas de jsdom, aucune dépendance permise). Il a été vérifié par lecture par les deux relecteurs.
