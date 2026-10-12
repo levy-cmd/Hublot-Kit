@@ -1,0 +1,209 @@
+package api
+
+// Tests of the radiography (F7, spec §6, §7), written before the code: no
+// secret leaves the agent unmasked; a reveal needs the Origin check, is
+// audited before the value is sent, and never writes the value in the log.
+
+import (
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"strings"
+	"testing"
+
+	"github.com/levy-cmd/hublot-kit/internal/dockerx"
+)
+
+// The secrets of the fake "web" container: none may appear in a response
+// that has not revealed it.
+var radioSecrets = []string{"s3cr3t-env", "s3cr3t-url", "s3cr3t-cmd", "s3cr3t-ep", "s3cr3t-err", "s3cr3t-cs"}
+
+func radioFixture(t *testing.T, readOnly bool) (*fixture, *http.Cookie) {
+	t.Helper()
+	f := newFixture(t, readOnly)
+	web := f.docker.Infos["web"]
+	web.Mounts = []dockerx.Mount{{Type: "bind", Source: "/srv/conf", Destination: "/etc/app", Mode: "ro"}}
+	web.Tmpfs = []string{"/run"}
+	web.LogDriver = "json-file"
+	web.Details = dockerx.Details{
+		Image: "nginx:1.27", ImageID: "sha256:feed", Created: "2026-10-10T07:00:00Z", Status: "running",
+		// Review Minor 8: Docker's message may quote the command.
+		Error:        `OCI runtime create failed: exec: "--password=s3cr3t-err": unknown`,
+		RestartCount: 2, RestartPolicy: "unless-stopped",
+		Entrypoint: []string{"/entry.sh", "--token", "s3cr3t-ep"},
+		Cmd:        []string{"redis-server", "--requirepass", "s3cr3t-cmd"},
+		Env: []string{"PATH=/usr/bin", "DB_PASSWORD=s3cr3t-env", "CACHE_URL=redis://:s3cr3t-url@cache:6379",
+			"PLAIN=visible", "DB=Server=db;Password=s3cr3t-cs;"},
+		Ports:       []dockerx.Port{{Private: 80, Public: 8080, Type: "tcp", IP: "0.0.0.0"}},
+		NetworkMode: "bridge",
+		Networks:    []dockerx.Network{{Name: "front", IP: "172.18.0.2"}},
+	}
+	f.docker.Infos["web"], f.docker.Infos[webID] = web, web
+	return f, f.session(t)
+}
+
+func noSecret(t *testing.T, body string) {
+	t.Helper()
+	for _, s := range radioSecrets {
+		if strings.Contains(body, s) {
+			t.Errorf("FUITE : %s dans la réponse", s)
+		}
+	}
+}
+
+func TestContainerNeedsSession(t *testing.T) {
+	f, _ := radioFixture(t, false)
+	if rec := f.do("GET", "/api/containers/web", "", nil); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("statut %d", rec.Code)
+	}
+	if rec := f.do("POST", "/api/containers/web/env/reveal", `{"name":"DB_PASSWORD"}`, nil); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("révélation sans session : %d", rec.Code)
+	}
+}
+
+func TestContainerRadiography(t *testing.T) {
+	f, c := radioFixture(t, false)
+	rec := f.do("GET", "/api/containers/web", "", c)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("statut %d : %s", rec.Code, rec.Body)
+	}
+	noSecret(t, rec.Body.String())
+	var got struct {
+		ID, Name, Image, ImageID, LogDriver string
+		State                               struct {
+			Status  string
+			Running bool
+		}
+		RestartCount    int
+		RestartPolicy   struct{ Name string }
+		Cmd, Entrypoint []string
+		CommandMasked   bool
+		Env             []struct {
+			Name   string
+			Value  *string
+			Masked bool
+		}
+		Ports    []dockerx.Port
+		Networks []struct{ Name, IP string }
+		Mounts   []struct {
+			Type, Source, Destination, Mode string
+			RW                              bool
+		}
+		Tmpfs []string
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.ID != webID || got.Name != "web" || got.Image != "nginx:1.27" || got.ImageID != "sha256:feed" ||
+		got.State.Status != "running" || !got.State.Running || got.RestartCount != 2 ||
+		got.RestartPolicy.Name != "unless-stopped" || got.LogDriver != "json-file" {
+		t.Errorf("identité, état : %+v", got)
+	}
+	if !got.CommandMasked || strings.Join(got.Cmd, " ") != "redis-server --requirepass ••••••" ||
+		strings.Join(got.Entrypoint, " ") != "/entry.sh --token ••••••" {
+		t.Errorf("commande : %q %q %v", got.Entrypoint, got.Cmd, got.CommandMasked)
+	}
+	masked := map[string]bool{}
+	for _, v := range got.Env {
+		masked[v.Name] = v.Masked
+		if v.Masked != (v.Value == nil) {
+			t.Errorf("%s : masked %v mais value %v (spec §7 : null avec masked: true)", v.Name, v.Masked, v.Value)
+		}
+	}
+	if !masked["DB_PASSWORD"] || !masked["CACHE_URL"] || !masked["DB"] || masked["PATH"] || masked["PLAIN"] || len(got.Env) != 5 {
+		t.Errorf("masquage : %v", masked)
+	}
+	if len(got.Ports) != 1 || got.Ports[0].Public != 8080 || len(got.Networks) != 1 || got.Networks[0].IP != "172.18.0.2" {
+		t.Errorf("ports, réseaux : %+v %+v", got.Ports, got.Networks)
+	}
+	if len(got.Mounts) != 1 || got.Mounts[0].Mode != "ro" || got.Mounts[0].Destination != "/etc/app" || len(got.Tmpfs) != 1 {
+		t.Errorf("montages : %+v %v", got.Mounts, got.Tmpfs)
+	}
+}
+
+func TestContainerErrors(t *testing.T) {
+	f, c := radioFixture(t, false)
+	if rec := f.do("GET", "/api/containers/absent", "", c); rec.Code != http.StatusNotFound || errCode(t, rec) != "not_found" {
+		t.Errorf("absent : %d %s", rec.Code, rec.Body)
+	}
+	if rec := f.do("GET", "/api/containers/..x", "", c); rec.Code != http.StatusNotFound {
+		t.Errorf("identifiant invalide : %d", rec.Code)
+	}
+	f.docker.Err = dockerx.ErrUnavailable
+	if rec := f.do("GET", "/api/containers/web", "", c); rec.Code != http.StatusServiceUnavailable || errCode(t, rec) != "docker_unavailable" {
+		t.Errorf("Docker indisponible : %d %s", rec.Code, rec.Body)
+	}
+}
+
+func auditLines(t *testing.T, f *fixture) string {
+	t.Helper()
+	b, _ := os.ReadFile(f.auditP)
+	return string(b)
+}
+
+// Spec §6, §7: the value of one variable, journaled (env.reveal) before it
+// is sent; the value itself never goes to the log. Read-only mode does not
+// forbid it: it is a read.
+func TestRevealEnv(t *testing.T) {
+	f, c := radioFixture(t, true)
+	rec := f.do("POST", "/api/containers/web/env/reveal", `{"name":"DB_PASSWORD"}`, c)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("statut %d : %s", rec.Code, rec.Body)
+	}
+	var got struct{ Name, Value string }
+	json.Unmarshal(rec.Body.Bytes(), &got)
+	if got.Name != "DB_PASSWORD" || got.Value != "s3cr3t-env" {
+		t.Fatalf("révélé : %+v", got)
+	}
+	log := auditLines(t, f)
+	if !strings.Contains(log, `"action":"env.reveal","container":"`+webID+`","path":"DB_PASSWORD","result":"ok"`) {
+		t.Errorf("journal : %s", log)
+	}
+	noSecret(t, log)
+	// A variable shown anyway can be asked too, and is journaled the same.
+	if rec := f.do("POST", "/api/containers/web/env/reveal", `{"name":"PLAIN"}`, c); rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), "visible") {
+		t.Errorf("variable non masquée : %d %s", rec.Code, rec.Body)
+	}
+}
+
+func TestRevealEnvRefusals(t *testing.T) {
+	f, c := radioFixture(t, false)
+	const same = "http://example.com"
+	cases := []struct {
+		name, body, origin string
+		status             int
+		code               string
+	}{
+		{"Origin absente", `{"name":"DB_PASSWORD"}`, "", http.StatusForbidden, "forbidden_origin"},
+		{"Origin étrangère", `{"name":"DB_PASSWORD"}`, "http://evil.example", http.StatusForbidden, "forbidden_origin"},
+		{"variable absente", `{"name":"NOPE"}`, same, http.StatusNotFound, "not_found"},
+		{"casse différente", `{"name":"db_password"}`, same, http.StatusNotFound, "not_found"},
+		{"corps invalide", `{"name":`, same, http.StatusNotFound, "not_found"},
+		{"données en trop", `{"name":"DB_PASSWORD"}{}`, same, http.StatusNotFound, "not_found"},
+	}
+	for _, k := range cases {
+		r := httptest.NewRequest("POST", "http://example.com/api/containers/web/env/reveal", strings.NewReader(k.body))
+		if k.origin != "" {
+			r.Header.Set("Origin", k.origin)
+		}
+		r.AddCookie(c)
+		rec := httptest.NewRecorder()
+		f.h.ServeHTTP(rec, r)
+		if r := rec; r.Code != k.status || errCode(t, r) != k.code {
+			t.Errorf("%s : %d %s, attendu %d %s", k.name, r.Code, r.Body, k.status, k.code)
+		}
+		noSecret(t, rec.Body.String())
+	}
+	if rec := f.do("POST", "/api/containers/absent/env/reveal", `{"name":"DB_PASSWORD"}`, c); rec.Code != http.StatusNotFound || errCode(t, rec) != "not_found" {
+		t.Errorf("conteneur absent : %d %s", rec.Code, rec.Body)
+	}
+	if log := auditLines(t, f); strings.Contains(log, "env.reveal") {
+		t.Errorf("un refus a été journalisé comme une révélation : %s", log)
+	}
+	// The audit log cannot be written: nothing is revealed.
+	f.auditLog.Close()
+	if r := f.do("POST", "/api/containers/web/env/reveal", `{"name":"DB_PASSWORD"}`, c); r.Code != http.StatusInternalServerError || strings.Contains(r.Body.String(), "s3cr3t") {
+		t.Errorf("journal en échec : %d %s", r.Code, r.Body)
+	}
+}

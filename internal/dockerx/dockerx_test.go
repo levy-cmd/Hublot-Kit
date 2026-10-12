@@ -14,6 +14,7 @@ import (
 
 	cerrdefs "github.com/containerd/errdefs"
 	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/network"
 )
 
 func TestFromSummary(t *testing.T) {
@@ -233,5 +234,65 @@ func TestFakePutArchive(t *testing.T) {
 	}
 	if len(f.PutCalls()) != 2 {
 		t.Fatal("un appel en échec est enregistré aussi")
+	}
+}
+
+// F7: what the radiography shows of `docker inspect`. Env stays raw here:
+// package secrets masks it in the API (spec §7).
+func TestFromInspectDetails(t *testing.T) {
+	p80 := network.MustParsePort("80/tcp")
+	p53 := network.MustParsePort("53/udp")
+	p9000 := network.MustParsePort("9000/tcp")
+	in := container.InspectResponse{
+		ID: "abc", Name: "/web", Image: "sha256:feed", Created: "2026-10-10T07:00:00Z", RestartCount: 3,
+		State: &container.State{Status: "running", Running: true, Pid: 7, ExitCode: 0, StartedAt: "2026-10-10T07:00:01Z",
+			FinishedAt: "0001-01-01T00:00:00Z", OOMKilled: true, Health: &container.Health{Status: "unhealthy"}},
+		Config: &container.Config{Image: "nginx:1.27", Env: []string{"A=1", "DB_PASSWORD=x"}, Cmd: []string{"nginx", "-g", "daemon off;"},
+			Entrypoint: []string{"/docker-entrypoint.sh"}, WorkingDir: "/srv", User: "101",
+			ExposedPorts: network.PortSet{p80: {}, p53: {}, p9000: {}}},
+		HostConfig: &container.HostConfig{NetworkMode: "bridge",
+			RestartPolicy: container.RestartPolicy{Name: "on-failure", MaximumRetryCount: 5},
+			PortBindings:  network.PortMap{p80: {{HostPort: "8080"}}}},
+		NetworkSettings: &container.NetworkSettings{
+			Ports: network.PortMap{
+				p80: {{HostIP: netip.MustParseAddr("0.0.0.0"), HostPort: "8080"}, {HostIP: netip.MustParseAddr("::"), HostPort: "8080"}},
+				p53: {{HostIP: netip.MustParseAddr("127.0.0.1"), HostPort: "5353"}},
+			},
+			Networks: map[string]*network.EndpointSettings{
+				"front": {IPAddress: netip.MustParseAddr("172.18.0.2"), Gateway: netip.MustParseAddr("172.18.0.1"), Aliases: []string{"web"},
+					MacAddress: network.HardwareAddr{2, 66, 172, 18, 0, 2}},
+				"back": {},
+			},
+		},
+		Mounts: []container.MountPoint{{Type: "volume", Name: "data", Source: "/var/lib/docker/volumes/data/_data", Destination: "/data", Driver: "local", Mode: "z", RW: true}},
+	}
+	got := fromInspect(in).Details
+	want := Details{
+		Image: "nginx:1.27", ImageID: "sha256:feed", Created: "2026-10-10T07:00:00Z",
+		Status: "running", StartedAt: "2026-10-10T07:00:01Z", OOMKilled: true, Health: "unhealthy",
+		RestartCount: 3, RestartPolicy: "on-failure", MaxRetry: 5,
+		Entrypoint: []string{"/docker-entrypoint.sh"}, Cmd: []string{"nginx", "-g", "daemon off;"},
+		WorkingDir: "/srv", User: "101", Env: []string{"A=1", "DB_PASSWORD=x"},
+		NetworkMode: "bridge",
+		Ports: []Port{ // running: the real bindings, 0.0.0.0 and :: once; exposed without binding too
+			{Private: 53, Public: 5353, Type: "udp", IP: "127.0.0.1"},
+			{Private: 80, Public: 8080, Type: "tcp", IP: "0.0.0.0"},
+			{Private: 9000, Type: "tcp"},
+		},
+		Networks: []Network{{Name: "back"}, {Name: "front", IP: "172.18.0.2", Gateway: "172.18.0.1", MAC: "02:42:ac:12:00:02", Aliases: []string{"web"}}},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got  %+v\nwant %+v", got, want)
+	}
+	if m := fromInspect(in).Mounts[0]; m.Mode != "z" || !m.RW {
+		t.Errorf("montage : %+v", m)
+	}
+	// Stopped: no real binding, the configured ones.
+	in.State.Running, in.NetworkSettings.Ports = false, nil
+	if ports := fromInspect(in).Details.Ports; !reflect.DeepEqual(ports, []Port{{Private: 53, Type: "udp"}, {Private: 80, Public: 8080, Type: "tcp"}, {Private: 9000, Type: "tcp"}}) {
+		t.Errorf("ports configurés : %+v", ports)
+	}
+	if d := fromInspect(container.InspectResponse{ID: "x"}).Details; !reflect.DeepEqual(d, Details{}) {
+		t.Errorf("Inspect vide : %+v", d)
 	}
 }

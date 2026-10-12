@@ -22,10 +22,11 @@ import (
 )
 
 type fixture struct {
-	h      http.Handler
-	token  string
-	auditP string
-	docker *dockerx.Fake // nil when the fixture talks to a real Docker
+	h        http.Handler
+	token    string
+	auditP   string
+	auditLog *audit.Log    // closed by a test to make audit writes fail
+	docker   *dockerx.Fake // nil when the fixture talks to a real Docker
 	// File routes: OpenFS returns fs (or openErr) and records the ID it got.
 	fs       *fsview.MemFS
 	views    *fsview.Views // nil: the default of New
@@ -88,7 +89,7 @@ func (f *fixture) init(t *testing.T, readOnly bool, docker dockerx.Client, openF
 		Sessions: auth.NewSessions(auth.SessionTTL, time.Now),
 		Limiter:  auth.NewLimiter(5, time.Minute, time.Now),
 	})
-	f.token, f.auditP = tok, ap
+	f.token, f.auditP, f.auditLog = tok, ap, al
 }
 
 func (f *fixture) do(method, path, body string, cookie *http.Cookie) *httptest.ResponseRecorder {
