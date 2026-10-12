@@ -98,4 +98,13 @@ Scan de cohérence du plan (HEAD 2576a19, seul le plan diffère de `a6ffdeb`, ba
 - Task 3: minor (deferred): F3 (flux silencieux à l'arrêt) sans test dédié ; échéance du téléchargement avant le 1er octet → 500 internal (504 serait plus juste)
 - Task 3: complete (commits e289631..2c90892, review clean après 1 tour)
 - Task 4: tour 1 envoyé (I1 quadratique, I2 repli trompé, I3 --pwd/Pwd, Unicode Cf/homoglyphes, Minor JSON/blanc échappé/Bearer/URL a@b)
+- Task 4: fix round 2/5 (I coût quadratique du séparateur partagé — séparateur couvert et masque suivant mémorisés par jeton ; Minor JSON échappé `\"password\":\"x\"` ; commits d1ee5bc..c08f4f5)
+- Task 4: POUR LA T9 (§13) : limites acceptées du masquage —
+  - clés non ASCII ou à caractères invisibles dans `Args`/`Line` (`--pаssword=` cyrillique, pleine chasse, espace de largeur nulle) : non reconnues (seul `SecretName`, donc `Env`, échoue fermé) ;
+  - `Authorization: Token|ApiKey …` : seuls `Bearer` et `Basic` sont masqués ;
+  - JSON à apostrophes `{'password': 's3cr3t'}` : non reconnu ;
+  - fin non alphanumérique laissée visible après un masque (`Password=ab(üü)` → `Password=••••••(üü)`) ;
+  - barre oblique inverse suivie d'un saut de ligne (continuation de ligne shell) : la valeur s'arrête au saut de ligne ;
+  - `--pwd s3cr3t` en deux arguments : non masqué (conforme à Q27 : `pwd` n'est un mot secret que dans une affectation) ;
+  - `env PWD=/srv` masqué (faux positif : `Pwd=` d'une chaîne de connexion).
 - Parallélisme (demande de l'utilisateur, 2026-10-10) : T7 (web, onglet Logs, dépend seulement de T3) en worktree isolé pendant le correctif de T4 puis T5 (Go) ; fusion de la branche du worktree dans phase/observation avant T8.
