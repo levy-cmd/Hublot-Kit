@@ -1,10 +1,12 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
+	import { onDestroy } from 'svelte';
 	import { ApiError, revealEnv, type Radiography } from '#lib/api.ts';
 	import { stateLabel } from '#lib/containers.ts';
 	import { errorMessage, t } from '#lib/i18n/index.ts';
 	import {
-		addReveal, commandLine, envValue, mountLabel, noReveals, portLabel, removeReveal, restartLabel, revealedFor, shortId
+		addReveal, askFor, commandLine, envValue, forgetReveals, mountLabel, noReveals, portLabel, removeReveal, restartLabel,
+		revealedFor, shortId
 	} from '#lib/xray.ts';
 
 	// onreload: fetch the radiography again (the Reload button of an error).
@@ -17,15 +19,17 @@
 	let reveals = $state.raw(noReveals);
 	let shown = $derived(revealedFor(reveals, radio.id));
 	let busy = $state(''); // the variable being revealed
+	// Unmount: a reveal still pending lands nowhere.
+	onDestroy(() => (reveals = forgetReveals(reveals)));
 	let error = $state('');
 
 	async function reveal(name: string) {
 		if (busy) return;
 		busy = name;
 		error = '';
-		const asked = radio.id;
+		const asked = askFor(reveals, radio.id); // before the await
 		try {
-			const value = await revealEnv(asked, name);
+			const value = await revealEnv(asked.id, name);
 			reveals = addReveal(reveals, asked, radio.id, name, value);
 		} catch (e) {
 			if (e instanceof ApiError && e.status === 401) {
@@ -39,7 +43,7 @@
 	}
 </script>
 
-<svelte:window onpagehide={() => (reveals = noReveals)} />
+<svelte:window onpagehide={() => (reveals = forgetReveals(reveals))} />
 
 <section class="xray">
 	<h2>{t('xray.identity')}</h2>

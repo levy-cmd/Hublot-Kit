@@ -43,30 +43,39 @@ export function envValue(v: EnvVar, revealed: Record<string, string>): string | 
 
 /**
  * The values the user revealed, for one container only. They live in the
- * component's state: never in localStorage, the URL or the console.
+ * component's state: never in localStorage, the URL or the console. gen
+ * counts the forgettings (pagehide, unmount): an answer asked before one is
+ * dropped.
  */
-export type Reveals = { id: string; values: Record<string, string> };
-export const noReveals: Reveals = { id: '', values: {} };
+export type Reveals = { id: string; gen: number; values: Record<string, string> };
+export const noReveals: Reveals = { id: '', gen: 0, values: {} };
+
+/** A pending reveal: the container and the generation, taken before the await. */
+export type Ask = { id: string; gen: number };
+export const askFor = (r: Reveals, id: string): Ask => ({ id, gen: r.gen });
 
 /** The values revealed for container id: none if they belong to another. */
 export const revealedFor = (r: Reveals, id: string): Record<string, string> => (r.id === id ? r.values : {});
 
 /**
- * Adds the answer to a reveal asked for container `asked` while `shown` is
- * displayed: dropped if the container changed meanwhile; a reveal on
+ * Adds the answer to a reveal asked while `shown` is displayed: dropped if
+ * the container changed or the values were forgotten meanwhile; a reveal on
  * another container starts from nothing.
  */
-export function addReveal(r: Reveals, asked: string, shown: string, name: string, value: string): Reveals {
-	if (asked !== shown) return r;
-	return { id: shown, values: { ...revealedFor(r, shown), [name]: value } };
+export function addReveal(r: Reveals, asked: Ask, shown: string, name: string, value: string): Reveals {
+	if (asked.id !== shown || asked.gen !== r.gen) return r;
+	return { id: shown, gen: r.gen, values: { ...revealedFor(r, shown), [name]: value } };
 }
 
 /** Hide: forgets one revealed value. */
 export function removeReveal(r: Reveals, name: string): Reveals {
 	const values = { ...r.values };
 	delete values[name];
-	return { id: r.id, values };
+	return { id: r.id, gen: r.gen, values };
 }
+
+/** pagehide, unmount: forgets every value, and every reveal still pending. */
+export const forgetReveals = (r: Reveals): Reveals => ({ id: '', gen: r.gen + 1, values: {} });
 
 /**
  * Stopped as the agent sees it (fsview: Running && Pid != 0, else the archive
