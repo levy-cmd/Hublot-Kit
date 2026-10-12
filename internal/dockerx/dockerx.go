@@ -7,11 +7,13 @@ import (
 	"fmt"
 	"io"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
 	cerrdefs "github.com/containerd/errdefs"
 	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/network"
 	"github.com/moby/moby/client"
 )
 
@@ -49,6 +51,46 @@ type ContainerInfo struct {
 	Tty bool
 	// LogDriver: HostConfig.LogConfig.Type ("json-file", "local", "none"…).
 	LogDriver string
+	// Details: the rest of the radiography (F7).
+	Details Details
+}
+
+// Details is what the radiography (F7) shows of `docker inspect`, beyond
+// ContainerInfo. Env, Cmd and Entrypoint are raw: package secrets masks
+// them before they leave the agent (spec §7).
+type Details struct {
+	Image        string // as asked (Config.Image: "nginx:1.27")
+	ImageID      string // "sha256:…"
+	Created      string
+	Status       string // State.Status: created, running, paused, restarting, exited, dead
+	ExitCode     int
+	Error        string
+	StartedAt    string
+	OOMKilled    bool
+	Health       string // healthy, unhealthy, starting; "" without a health check
+	RestartCount int
+	// RestartPolicy: no, always, on-failure, unless-stopped; MaxRetry for on-failure.
+	RestartPolicy string
+	MaxRetry      int
+	Entrypoint    []string
+	Cmd           []string
+	WorkingDir    string
+	User          string
+	Env           []string // "NAME=value", raw
+	// Ports: the real bindings of a running container, else the configured
+	// ones; an exposed port without binding has no Public. Sorted.
+	Ports       []Port
+	NetworkMode string
+	Networks    []Network // sorted by name
+}
+
+// Network is one network the container is attached to.
+type Network struct {
+	Name    string   `json:"name"`
+	IP      string   `json:"ip,omitempty"`
+	Gateway string   `json:"gateway,omitempty"`
+	MAC     string   `json:"mac,omitempty"`
+	Aliases []string `json:"aliases,omitempty"`
 }
 
 // Change is one entry of GET /containers/{id}/changes (F5).
@@ -64,6 +106,8 @@ type Mount struct {
 	Source      string // host path of a bind
 	Destination string // path in the container
 	Driver      string // volume driver ("local"…)
+	Mode        string // options given by the user ("ro", "z"…)
+	RW          bool
 }
 
 // ErrNotFound: no such container (or no such path, for an archive).
@@ -204,11 +248,13 @@ func fromInspect(c container.InspectResponse) ContainerInfo {
 	for _, m := range c.Mounts {
 		info.Mounts = append(info.Mounts, Mount{
 			Type: string(m.Type), Name: m.Name, Source: m.Source, Destination: m.Destination, Driver: m.Driver,
+			Mode: m.Mode, RW: m.RW,
 		})
 	}
 	if c.Config != nil {
 		info.Tty = c.Config.Tty
 	}
+	info.Details = fromInspectDetails(c)
 	if c.HostConfig != nil {
 		info.LogDriver = c.HostConfig.LogConfig.Type
 		for d := range c.HostConfig.Tmpfs {
@@ -217,6 +263,91 @@ func fromInspect(c container.InspectResponse) ContainerInfo {
 		sort.Strings(info.Tmpfs)
 	}
 	return info
+}
+
+func fromInspectDetails(c container.InspectResponse) Details {
+	d := Details{ImageID: c.Image, Created: c.Created, RestartCount: c.RestartCount}
+	if s := c.State; s != nil {
+		d.Status, d.ExitCode, d.Error, d.StartedAt, d.OOMKilled = string(s.Status), s.ExitCode, s.Error, s.StartedAt, s.OOMKilled
+		if s.Health != nil {
+			d.Health = string(s.Health.Status)
+		}
+	}
+	var exposed network.PortSet
+	if cf := c.Config; cf != nil {
+		d.Image, d.Entrypoint, d.Cmd, d.WorkingDir, d.User, d.Env = cf.Image, cf.Entrypoint, cf.Cmd, cf.WorkingDir, cf.User, cf.Env
+		exposed = cf.ExposedPorts
+	}
+	bindings := network.PortMap{}
+	if h := c.HostConfig; h != nil {
+		d.RestartPolicy, d.MaxRetry = string(h.RestartPolicy.Name), h.RestartPolicy.MaximumRetryCount
+		d.NetworkMode = string(h.NetworkMode)
+		bindings = h.PortBindings
+	}
+	if n := c.NetworkSettings; n != nil {
+		if c.State != nil && c.State.Running && len(n.Ports) > 0 {
+			bindings = n.Ports
+		}
+		for name, ep := range n.Networks {
+			nw := Network{Name: name}
+			if ep != nil {
+				nw.Aliases = ep.Aliases
+				if ep.IPAddress.IsValid() {
+					nw.IP = ep.IPAddress.String()
+				}
+				if ep.Gateway.IsValid() {
+					nw.Gateway = ep.Gateway.String()
+				}
+				if len(ep.MacAddress) > 0 {
+					nw.MAC = ep.MacAddress.String()
+				}
+			}
+			d.Networks = append(d.Networks, nw)
+		}
+		sort.Slice(d.Networks, func(i, j int) bool { return d.Networks[i].Name < d.Networks[j].Name })
+	}
+	d.Ports = portsOf(bindings, exposed)
+	return d
+}
+
+// portsOf lists each binding once (0.0.0.0 and :: are one mapping, as in
+// fromSummary), then the exposed ports without binding.
+func portsOf(bindings network.PortMap, exposed network.PortSet) []Port {
+	var out []Port
+	seen := map[Port]bool{}
+	for p, bs := range bindings {
+		for _, b := range bs {
+			ip := ""
+			if b.HostIP.IsValid() {
+				ip = b.HostIP.String()
+				if b.HostIP.IsUnspecified() {
+					ip = "0.0.0.0"
+				}
+			}
+			public, _ := strconv.ParseUint(b.HostPort, 10, 16)
+			port := Port{Private: p.Num(), Public: uint16(public), Type: string(p.Proto()), IP: ip}
+			if !seen[port] {
+				seen[port] = true
+				out = append(out, port)
+			}
+		}
+	}
+	for p := range exposed {
+		if len(bindings[p]) == 0 {
+			out = append(out, Port{Private: p.Num(), Type: string(p.Proto())})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		a, b := out[i], out[j]
+		if a.Private != b.Private {
+			return a.Private < b.Private
+		}
+		if a.Type != b.Type {
+			return a.Type < b.Type
+		}
+		return a.IP < b.IP
+	})
+	return out
 }
 
 func (e *engine) GetArchive(ctx context.Context, id, path string) (io.ReadCloser, error) {

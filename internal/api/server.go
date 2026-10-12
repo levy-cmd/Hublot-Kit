@@ -111,6 +111,8 @@ func New(d Deps) http.Handler {
 	mux.HandleFunc("POST /api/logout", s.logout)
 	mux.Handle("GET /api/meta", session(s.meta))
 	mux.Handle("GET /api/containers", session(s.containers))
+	mux.Handle("GET /api/containers/{id}", session(s.container))
+	mux.Handle("POST /api/containers/{id}/env/reveal", session(s.revealEnv))
 	mux.Handle("GET /api/containers/{id}/fs", session(s.fsList))
 	mux.Handle("GET /api/containers/{id}/fs/file", session(s.fsFile))
 	mux.Handle("GET /api/containers/{id}/fs/download", session(s.fsDownload))
