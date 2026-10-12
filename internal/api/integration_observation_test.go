@@ -7,11 +7,13 @@ package api
 // /proc access, Docker Desktop answers from macOS.
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
 	"net/http"
 	"os/exec"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -29,11 +31,32 @@ func dockerRun(t *testing.T, args ...string) {
 }
 
 // countingDocker is the real client; it counts the logs streams Docker
-// sent, those the agent closed, and the reads in progress on them, to see on
-// a real Docker that a client leaving frees everything (plan T3, for T6).
+// sent and those the agent closed (plan T3, for T6).
 type countingDocker struct {
 	dockerx.Client
-	opened, closed, reading atomic.Int32
+	opened, closed atomic.Int32
+}
+
+// logsGoroutines counts the goroutines of logs streams: a handler of GET
+// /logs, or the reader it starts. Both gone means the stream ended for
+// good: nothing blocked in a Read of Docker's body, nor in a send.
+func logsGoroutines() int {
+	buf := make([]byte, 1<<20)
+	for {
+		n := runtime.Stack(buf, true)
+		if n < len(buf) {
+			buf = buf[:n]
+			break
+		}
+		buf = make([]byte, 2*len(buf))
+	}
+	n := 0
+	for _, g := range bytes.Split(buf, []byte("\n\n")) {
+		if bytes.Contains(g, []byte("api.(*server).logsStream")) {
+			n++
+		}
+	}
+	return n
 }
 
 type countingStream struct {
@@ -51,14 +74,13 @@ func (d *countingDocker) Logs(ctx context.Context, id string, opt dockerx.LogsOp
 }
 
 func (s *countingStream) Read(p []byte) (int, error) {
-	s.d.reading.Add(1)
-	defer s.d.reading.Add(-1)
 	return s.ReadCloser.Read(p)
 }
 
 func (s *countingStream) Close() error {
+	err := s.ReadCloser.Close()
 	s.d.closed.Add(1)
-	return s.ReadCloser.Close()
+	return err
 }
 
 func TestIntegrationObservation(t *testing.T) {
@@ -148,6 +170,7 @@ func TestIntegrationObservation(t *testing.T) {
 
 	// F6, running container: past lines, then new ones as they come, both
 	// streams; then resumption from the last ID.
+	idle := logsGoroutines() // left by nothing, or by earlier tests of the package
 	s := openSSE(t, f, "/api/containers/"+live+"/logs?tail=5", c, nil)
 	// counter: the number of a "tick N" (stdout) or "warn N" (stderr) line.
 	counter := func(l logEvent) int {
@@ -178,62 +201,62 @@ func TestIntegrationObservation(t *testing.T) {
 		t.Fatalf("flux en direct : %v, dernier ID %q", seen, lastID)
 	}
 	// The client leaves while the container keeps logging: Docker's stream
-	// is closed and no read stays blocked on it (the slot is freed after).
+	// is closed, and the handler and its reader goroutine are gone.
+	if logsGoroutines() < idle+2 {
+		t.Fatalf("flux ouvert : %d goroutines de logs, %d avant", logsGoroutines(), idle)
+	}
 	s.cancel()
 	deadline := time.Now().Add(5 * time.Second)
-	for (dc.closed.Load() != 1 || dc.reading.Load() != 0) && time.Now().Before(deadline) {
+	for (dc.closed.Load() != 1 || logsGoroutines() > idle) && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
 	}
-	if dc.opened.Load() != 1 || dc.closed.Load() != 1 || dc.reading.Load() != 0 {
-		t.Fatalf("départ du client : %d flux ouverts, %d fermés, %d lectures en cours",
-			dc.opened.Load(), dc.closed.Load(), dc.reading.Load())
+	if n := logsGoroutines(); dc.opened.Load() != 1 || dc.closed.Load() != 1 || n > idle {
+		t.Fatalf("départ du client : %d flux ouverts, %d fermés, %d goroutines de logs (%d avant)",
+			dc.opened.Load(), dc.closed.Load(), n, idle)
 	}
 	r := openSSE(t, f, "/api/containers/"+live+"/logs", c, map[string]string{"Last-Event-ID": lastID})
-	// Resumption on real lines: neither duplicate nor hole. Docker stamps
-	// stdout and stderr in two goroutines, so its journal is not always in
-	// timestamp order between streams (a few % of neighbours), and since
-	// returns everything from the first line that reaches it: the agent
-	// skips up to the cut line itself.
-	first := map[string]int{}
-	for len(first) < 2 {
-		e, ok := r.next(t)
-		if !ok {
-			t.Fatal("reprise : flux fermé")
-		}
-		if e.Comment != "" {
-			continue
-		}
-		l := lineOf(t, e)
-		if e.ID == "" || e.ID == lastID || l.Stream+":"+l.Line == lastLine {
-			t.Fatalf("reprise : %q (%s) déjà reçu en dernier", e.ID, l.Line)
-		}
-		if _, ok := first[l.Stream]; !ok {
-			first[l.Stream] = counter(l)
-		}
-	}
-	for _, st := range []string{"stdout", "stderr"} {
-		if n := first[st]; n != seen[st]+1 {
-			t.Errorf("reprise de %s : première ligne n° %d, dernière reçue n° %d", st, n, seen[st])
-		}
-	}
-	// The container stops: the stream ends with "end".
-	go exec.Command("docker", "stop", "-t", "1", live).Run()
-	deadline = time.Now().Add(15 * time.Second)
-	ended := false
+	// Resumption on real lines, read up to the end of the stream: in each
+	// stream, the numbers follow on from the last one received, one by one
+	// (neither duplicate nor hole). Docker stamps stdout and stderr in two
+	// goroutines, so its journal is not always in timestamp order between
+	// streams (a few % of neighbours), and since returns everything from
+	// the first line that reaches it: the agent skips up to the cut line.
+	// After 200 lines the container stops: the stream ends with "end".
+	want := map[string]int{"stdout": seen["stdout"] + 1, "stderr": seen["stderr"] + 1}
+	deadline = time.Now().Add(20 * time.Second)
+	ended, read := false, 0
 	for !ended && time.Now().Before(deadline) {
 		e, ok := r.next(t)
 		if !ok {
-			t.Fatal("flux fermé sans événement end")
+			t.Fatal("reprise : flux fermé sans événement end")
 		}
-		switch e.Event {
-		case "end":
+		switch {
+		case e.Comment != "":
+		case e.Event == "end":
 			ended = true
-		case "failure":
-			t.Fatalf("échec à l'arrêt : %+v", e)
+		case e.Event != "":
+			t.Fatalf("reprise : %+v", e)
+		default:
+			l := lineOf(t, e)
+			if e.ID == "" || e.ID == lastID || l.Stream+":"+l.Line == lastLine {
+				t.Fatalf("reprise : %q (%s) déjà reçu en dernier", e.ID, l.Line)
+			}
+			if n := counter(l); n != want[l.Stream] {
+				t.Fatalf("reprise de %s, ligne %d : n° %d, attendu %d (doublon ou trou)", l.Stream, read, n, want[l.Stream])
+			}
+			want[l.Stream]++
+			if read++; read == 200 {
+				go exec.Command("docker", "stop", "-t", "1", live).Run()
+			}
 		}
 	}
-	if !ended {
-		t.Fatal("pas d'événement end 15 s après l'arrêt")
+	if !ended || read < 200 {
+		t.Fatalf("reprise : %d lignes, fin %v", read, ended)
+	}
+	for st, n := range want {
+		if n <= seen[st]+1 {
+			t.Errorf("reprise : aucune ligne de %s", st)
+		}
 	}
 
 	// F6, stopped container: its past logs, then end.

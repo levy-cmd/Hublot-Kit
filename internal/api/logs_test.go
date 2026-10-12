@@ -693,6 +693,18 @@ func TestLogsResumeCutGone(t *testing.T) {
 	if len(events) != 3 || lineOf(t, events[0]).Line != "f" || lineOf(t, events[1]).Line != "g" || events[2].Event != "end" {
 		t.Fatalf("coupure absente : %+v", events)
 	}
+	// The cut's stream stays silent (or the ID came from another
+	// container): a line of the other stream more than a second past the
+	// cut stops skipping too. Within that second, the lines are skipped
+	// (the largest gap measured between the streams is 2.6 ms): in doubt, a
+	// duplicate, never a hole.
+	f, c = journalFixture(t, []journalLine{
+		{2, at(5), "e"}, {2, at(4 + 1_000_000), "à une seconde"}, {2, at(5 + 1_000_000), "g"}, {2, at(6 + 1_000_000), "h"},
+	})
+	events = openSSE(t, f, "/api/containers/web/logs", c, map[string]string{"Last-Event-ID": cut}).all(t)
+	if len(events) != 3 || lineOf(t, events[0]).Line != "g" || lineOf(t, events[1]).Line != "h" || events[2].Event != "end" {
+		t.Fatalf("flux coupé muet : %+v", events)
+	}
 }
 
 // A silent stream gets a comment line now and then: proxies keep it open,
