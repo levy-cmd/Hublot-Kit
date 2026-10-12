@@ -2,14 +2,14 @@
 	import { goto } from '$app/navigation';
 	import { ApiError, getMeta, logsDownloadUrl, logsUrl, type LogLine } from '#lib/api.ts';
 	import { errorMessage, t } from '#lib/i18n/index.ts';
-	import { appendLines, filterLines, formatTs, parseCount, parseLine, streamEnd, type ShownLine } from '#lib/logs.ts';
+	import { appendLines, enqueue, filterLines, formatTs, parseCount, parseLine, streamEnd, type ShownLine } from '#lib/logs.ts';
 
 	let { id }: { id: string } = $props();
 
 	type Status = 'connecting' | 'live' | 'reconnecting' | 'paused' | 'ended' | 'error';
 	let status = $state<Status>('connecting');
 	let error = $state('');
-	let lines = $state<ShownLine[]>([]);
+	let lines = $state.raw<ShownLine[]>([]); // always replaced whole
 	let dropped = $state(0); // announced by the agent (rate)
 	let removed = $state(0); // left the view (MAX_LINES)
 	let query = $state('');
@@ -68,7 +68,8 @@
 			const l = parseLine(e.data);
 			if (!l) return;
 			if (e.lastEventId) lastId = e.lastEventId;
-			pending.push(l);
+			const cut = enqueue(pending, l); // bounded while the tab is hidden
+			if (cut) removed += cut;
 			if (!frame) frame = requestAnimationFrame(flush);
 		};
 		es.addEventListener('dropped', (e) => {

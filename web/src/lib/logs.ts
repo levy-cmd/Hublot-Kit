@@ -58,6 +58,19 @@ export function streamEnd(name: 'end' | 'failure' | 'evicted', data = ''): Strea
 	return code === 'unauthorized' ? { status: 'error', code, login: true } : { status: 'error', code };
 }
 
+/**
+ * Queues a line until the next frame. requestAnimationFrame stops in a
+ * hidden tab: past 2 × max lines, the oldest are dropped down to max (by
+ * chunks, not one shift per line). Returns how many were dropped.
+ */
+export function enqueue(pending: LogLine[], l: LogLine, max = MAX_LINES): number {
+	pending.push(l);
+	if (pending.length <= 2 * max) return 0;
+	const n = pending.length - max;
+	pending.splice(0, n);
+	return n;
+}
+
 /** Appends a batch, keeps the newest max lines; removed counts the others. */
 export function appendLines(lines: ShownLine[], batch: LogLine[], max = MAX_LINES): { lines: ShownLine[]; removed: number } {
 	let key = lines.length ? lines[lines.length - 1].key + 1 : 0;

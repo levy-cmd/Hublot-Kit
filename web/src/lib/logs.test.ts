@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { LogLine } from './api';
-import { appendLines, filterLines, formatTs, MAX_LINES, parseCount, parseFailure, parseLine, streamEnd } from './logs';
+import { appendLines, enqueue, filterLines, formatTs, MAX_LINES, parseCount, parseFailure, parseLine, streamEnd } from './logs';
 
 const line = (text: string, stream: 'stdout' | 'stderr' = 'stdout'): LogLine => ({ ts: '2026-10-10T07:14:22.769046552Z', stream, line: text });
 
@@ -18,6 +18,7 @@ describe('logs (F6)', () => {
 	it('parses the dropped and failure events', () => {
 		expect(parseCount('{"count":12}')).toBe(12);
 		expect(parseCount('{"count":"x"}')).toBe(0);
+		expect(parseCount('{"count":-3}')).toBe(0);
 		expect(parseCount('garbage')).toBe(0);
 		expect(parseFailure('{"error":"logs_unavailable","detail":"none"}')).toBe('logs_unavailable');
 		expect(parseFailure('garbage')).toBe('unknown');
@@ -30,8 +31,22 @@ describe('logs (F6)', () => {
 		const next = appendLines(first.lines, [line('c'), line('d')], 3);
 		expect(next.lines.map((l) => l.line)).toEqual(['b', 'c', 'd']);
 		expect(next.removed).toBe(1);
-		expect(next.lines.map((l) => l.key)).toEqual([1, 2, 3]); // keys never reused
+		expect(next.lines.map((l) => l.key)).toEqual([1, 2, 3]);
+		// After a trim, the next key follows the last one, not the length.
+		const third = appendLines(next.lines, [line('e')], 3);
+		expect(third.lines.map((l) => l.key)).toEqual([2, 3, 4]); // keys never reused
 		expect(MAX_LINES).toBe(5000);
+	});
+
+	// A hidden tab suspends requestAnimationFrame: the queue must stay bounded.
+	it('bounds the queue of pending lines, drops the oldest and counts them', () => {
+		const q: LogLine[] = [];
+		let removed = 0;
+		for (let i = 0; i < 10; i++) removed += enqueue(q, line(String(i)), 3);
+		expect(q.length).toBeLessThanOrEqual(6);
+		expect(q.length + removed).toBe(10);
+		expect(q[q.length - 1].line).toBe('9'); // the newest stay
+		expect(q.map((l) => Number(l.line))).toEqual([...q.keys()].map((k) => 10 - q.length + k));
 	});
 
 	it('filters by stream and by a case-insensitive text', () => {
