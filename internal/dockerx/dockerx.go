@@ -78,7 +78,10 @@ type Details struct {
 	User          string
 	Env           []string // "NAME=value", raw
 	// Ports: the real bindings of a running container, else the configured
-	// ones; an exposed port without binding has no Public. Sorted.
+	// ones; none on the host network or another container's (Docker ignores
+	// -p there). An exposed port without binding has no IP and no Public; a
+	// configured -p 90 (host port chosen at start) has an IP, no Public.
+	// Sorted.
 	Ports       []Port
 	NetworkMode string
 	Networks    []Network // sorted by name
@@ -268,7 +271,7 @@ func fromInspect(c container.InspectResponse) ContainerInfo {
 func fromInspectDetails(c container.InspectResponse) Details {
 	d := Details{ImageID: c.Image, Created: c.Created, RestartCount: c.RestartCount}
 	if s := c.State; s != nil {
-		d.Status, d.ExitCode, d.Error, d.StartedAt, d.OOMKilled = string(s.Status), s.ExitCode, s.Error, s.StartedAt, s.OOMKilled
+		d.Status, d.ExitCode, d.Error, d.StartedAt, d.OOMKilled = string(s.Status), s.ExitCode, s.Error, Date(s.StartedAt), s.OOMKilled
 		if s.Health != nil {
 			d.Health = string(s.Health.Status)
 		}
@@ -278,14 +281,19 @@ func fromInspectDetails(c container.InspectResponse) Details {
 		d.Image, d.Entrypoint, d.Cmd, d.WorkingDir, d.User, d.Env = cf.Image, cf.Entrypoint, cf.Cmd, cf.WorkingDir, cf.User, cf.Env
 		exposed = cf.ExposedPorts
 	}
-	bindings := network.PortMap{}
+	var bindings network.PortMap
 	if h := c.HostConfig; h != nil {
 		d.RestartPolicy, d.MaxRetry = string(h.RestartPolicy.Name), h.RestartPolicy.MaximumRetryCount
 		d.NetworkMode = string(h.NetworkMode)
 		bindings = h.PortBindings
 	}
+	// Host network or another container's: Docker ignores -p.
+	shared := d.NetworkMode == "host" || strings.HasPrefix(d.NetworkMode, "container:")
+	if shared {
+		bindings = nil
+	}
 	if n := c.NetworkSettings; n != nil {
-		if c.State != nil && c.State.Running && len(n.Ports) > 0 {
+		if !shared && c.State != nil && c.State.Running && len(n.Ports) > 0 {
 			bindings = n.Ports
 		}
 		for name, ep := range n.Networks {
@@ -310,19 +318,26 @@ func fromInspectDetails(c container.InspectResponse) Details {
 	return d
 }
 
+// Date is a date of Docker's State, "" for its zero date
+// ("0001-01-01T00:00:00Z": never started, or not finished yet).
+func Date(s string) string {
+	if t, err := time.Parse(time.RFC3339Nano, s); err == nil && t.IsZero() {
+		return ""
+	}
+	return s
+}
+
 // portsOf lists each binding once (0.0.0.0 and :: are one mapping, as in
-// fromSummary), then the exposed ports without binding.
+// fromSummary; HostIp "" of a configured binding is every interface too),
+// then the exposed ports without binding (no IP).
 func portsOf(bindings network.PortMap, exposed network.PortSet) []Port {
 	var out []Port
 	seen := map[Port]bool{}
 	for p, bs := range bindings {
 		for _, b := range bs {
-			ip := ""
-			if b.HostIP.IsValid() {
+			ip := "0.0.0.0"
+			if b.HostIP.IsValid() && !b.HostIP.IsUnspecified() {
 				ip = b.HostIP.String()
-				if b.HostIP.IsUnspecified() {
-					ip = "0.0.0.0"
-				}
 			}
 			public, _ := strconv.ParseUint(b.HostPort, 10, 16)
 			port := Port{Private: p.Num(), Public: uint16(public), Type: string(p.Proto()), IP: ip}

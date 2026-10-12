@@ -73,7 +73,7 @@ func toRadioJSON(c dockerx.ContainerInfo) radioJSON {
 	out := radioJSON{
 		ID: c.ID, Name: c.Name, Image: d.Image, ImageID: d.ImageID, Created: d.Created,
 		State: stateJSON{Status: d.Status, Running: c.Running, ExitCode: d.ExitCode, Error: secrets.Line(d.Error),
-			StartedAt: d.StartedAt, FinishedAt: c.FinishedAt, OOMKilled: d.OOMKilled, Health: d.Health},
+			StartedAt: d.StartedAt, FinishedAt: dockerx.Date(c.FinishedAt), OOMKilled: d.OOMKilled, Health: d.Health},
 		RestartCount: d.RestartCount, RestartPolicy: restartJSON{Name: d.RestartPolicy, MaxRetry: d.MaxRetry},
 		Entrypoint: nonNil(ep), Cmd: nonNil(cmd), CommandMasked: epMasked || cmdMasked,
 		WorkingDir: d.WorkingDir, User: d.User, Tty: c.Tty, LogDriver: c.LogDriver,
