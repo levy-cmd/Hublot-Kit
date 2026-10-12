@@ -112,3 +112,10 @@ Scan de cohérence du plan (HEAD 2576a19, seul le plan diffère de `a6ffdeb`, ba
   - JSON doublement échappé (`{\\\"password\\\":…}`) : non reconnu.
 - Task 4 (re-revue tour 2, 2026-10-12) : validée par Opus et Codex (correctif d1ee5bc/c08f4f5). Minor reporté : le cas « blancs avant masque » de `TestCost` ne mord pas (rapport 2,5 avant correctif, plafond 8).
 - Parallélisme (demande de l'utilisateur, 2026-10-10) : T7 (web, onglet Logs, dépend seulement de T3) en worktree isolé pendant le correctif de T4 puis T5 (Go) ; fusion de la branche du worktree dans phase/observation avant T8.
+- Task 5 (2026-10-12) : validée par Opus et Codex après le correctif tour 1 (8d2c627/77f1dd9, puis e13f8ba/2699953).
+  - Ruling: le `detail` d'un corps invalide de `/env/reveal` reste tel quel. Il ne reflète que le corps du client, décodé avant l'Inspect : ni oracle ni fuite (« Critical » de Codex écarté, Codex d'accord en re-revue).
+  - Ruling: l'ordre Origin → session → corps → Inspect → Lookup → journal → réponse est conforme (« Important » de Codex écarté).
+  - POUR LA T8 : un port avec une IP mais sans `public` est un port publié dont l'hôte choisit le numéro au démarrage (`-p 90` à l'arrêt). Un port seulement exposé n'a ni IP ni `public`. Les dates zéro de Docker sont déjà vidées : `startedAt` et `finishedAt` sont absents.
+  - Minor reporté : la mutation qui retire `!shared` de la condition sur `Running` survit. Le garde est redondant, puisque Docker donne `Ports: {}` en réseau partagé.
+- Task 7 (2026-10-12) : wip repris et fini (6c0be92), correctif tour 1 (2397b5e : `enqueue` borne `pending` à 2 × MAX_LINES, `$state.raw`), validée par Opus et Codex, fusionnée dans phase/observation (c7258ff).
+  - Minor reporté : `LogsView` n'a pas de test de composant (garde `current`, remise à zéro au changement de conteneur) ; à couvrir par le parcours de la T8 si possible.
