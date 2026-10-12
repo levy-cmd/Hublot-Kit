@@ -26,6 +26,7 @@ func radioFixture(t *testing.T, readOnly bool) (*fixture, *http.Cookie) {
 	web.Mounts = []dockerx.Mount{{Type: "bind", Source: "/srv/conf", Destination: "/etc/app", Mode: "ro"}}
 	web.Tmpfs = []string{"/run"}
 	web.LogDriver = "json-file"
+	web.FinishedAt = "0001-01-01T00:00:00Z" // running: Docker's zero date
 	web.Details = dockerx.Details{
 		Image: "nginx:1.27", ImageID: "sha256:feed", Created: "2026-10-10T07:00:00Z", Status: "running",
 		// Review Minor 8: Docker's message may quote the command.
@@ -69,6 +70,9 @@ func TestContainerRadiography(t *testing.T) {
 		t.Fatalf("statut %d : %s", rec.Code, rec.Body)
 	}
 	noSecret(t, rec.Body.String())
+	if strings.Contains(rec.Body.String(), "0001-01-01") || strings.Contains(rec.Body.String(), "finishedAt") {
+		t.Errorf("date zéro de Docker affichée : %s", rec.Body)
+	}
 	var got struct {
 		ID, Name, Image, ImageID, LogDriver string
 		State                               struct {

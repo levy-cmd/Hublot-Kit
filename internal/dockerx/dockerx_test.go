@@ -243,6 +243,7 @@ func TestFromInspectDetails(t *testing.T) {
 	p80 := network.MustParsePort("80/tcp")
 	p53 := network.MustParsePort("53/udp")
 	p9000 := network.MustParsePort("9000/tcp")
+	p90 := network.MustParsePort("90/tcp") // -p 90: published on a port chosen at start
 	in := container.InspectResponse{
 		ID: "abc", Name: "/web", Image: "sha256:feed", Created: "2026-10-10T07:00:00Z", RestartCount: 3,
 		State: &container.State{Status: "running", Running: true, Pid: 7, ExitCode: 0, StartedAt: "2026-10-10T07:00:01Z",
@@ -252,7 +253,7 @@ func TestFromInspectDetails(t *testing.T) {
 			ExposedPorts: network.PortSet{p80: {}, p53: {}, p9000: {}}},
 		HostConfig: &container.HostConfig{NetworkMode: "bridge",
 			RestartPolicy: container.RestartPolicy{Name: "on-failure", MaximumRetryCount: 5},
-			PortBindings:  network.PortMap{p80: {{HostPort: "8080"}}}},
+			PortBindings:  network.PortMap{p80: {{HostPort: "8080"}}, p90: {{HostPort: ""}}}},
 		NetworkSettings: &container.NetworkSettings{
 			Ports: network.PortMap{
 				p80: {{HostIP: netip.MustParseAddr("0.0.0.0"), HostPort: "8080"}, {HostIP: netip.MustParseAddr("::"), HostPort: "8080"}},
@@ -287,10 +288,38 @@ func TestFromInspectDetails(t *testing.T) {
 	if m := fromInspect(in).Mounts[0]; m.Mode != "z" || !m.RW {
 		t.Errorf("montage : %+v", m)
 	}
-	// Stopped: no real binding, the configured ones.
-	in.State.Running, in.NetworkSettings.Ports = false, nil
-	if ports := fromInspect(in).Details.Ports; !reflect.DeepEqual(ports, []Port{{Private: 53, Type: "udp"}, {Private: 80, Public: 8080, Type: "tcp"}, {Private: 9000, Type: "tcp"}}) {
+	// The cache key of the index keeps Docker's zero date (spec §5.2 step 1).
+	if f := fromInspect(in).FinishedAt; f != "0001-01-01T00:00:00Z" {
+		t.Errorf("FinishedAt brut : %q", f)
+	}
+	// Stopped, even if real bindings are left: the configured ones. HostIp ""
+	// is every interface, 0.0.0.0 as when running; -p 90 has an IP but no
+	// Public, unlike a port only exposed.
+	in.State.Running = false
+	configured := []Port{{Private: 53, Type: "udp"}, {Private: 80, Public: 8080, Type: "tcp", IP: "0.0.0.0"},
+		{Private: 90, Type: "tcp", IP: "0.0.0.0"}, {Private: 9000, Type: "tcp"}}
+	if ports := fromInspect(in).Details.Ports; !reflect.DeepEqual(ports, configured) {
 		t.Errorf("ports configurés : %+v", ports)
+	}
+	in.NetworkSettings.Ports = nil
+	if ports := fromInspect(in).Details.Ports; !reflect.DeepEqual(ports, configured) {
+		t.Errorf("ports configurés, sans liaison réelle : %+v", ports)
+	}
+	// docker create: never started, Docker's zero dates are not shown.
+	in.State.StartedAt = "0001-01-01T00:00:00Z"
+	if d := fromInspect(in).Details; d.StartedAt != "" {
+		t.Errorf("date zéro : %q", d.StartedAt)
+	}
+	// Host network or another container's: Docker ignores -p, only the
+	// exposed ports, running (Ports is {}) or not.
+	exposedOnly := []Port{{Private: 53, Type: "udp"}, {Private: 80, Type: "tcp"}, {Private: 9000, Type: "tcp"}}
+	for _, mode := range []container.NetworkMode{"host", "container:db"} {
+		for _, running := range []bool{true, false} {
+			in.HostConfig.NetworkMode, in.State.Running, in.NetworkSettings.Ports = mode, running, network.PortMap{}
+			if ports := fromInspect(in).Details.Ports; !reflect.DeepEqual(ports, exposedOnly) {
+				t.Errorf("%s, running %v : %+v", mode, running, ports)
+			}
+		}
 	}
 	if d := fromInspect(container.InspectResponse{ID: "x"}).Details; !reflect.DeepEqual(d, Details{}) {
 		t.Errorf("Inspect vide : %+v", d)
