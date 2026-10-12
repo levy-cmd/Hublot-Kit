@@ -87,7 +87,14 @@ func TestIntegrationObservation(t *testing.T) {
 	// A unique suffix: two runs (or a run and a leftover) never share a name.
 	sfx := strconv.FormatInt(time.Now().UnixNano(), 36)
 	live, past, none := "hublot-it-obs-live-"+sfx, "hublot-it-obs-past-"+sfx, "hublot-it-obs-none-"+sfx
-	rmAll := func() { exec.Command("docker", "rm", "-f", live, past, none).Run() }
+	// rmAll logs a failure of docker rm: a container left behind is said,
+	// not hidden. "No such container" is expected before the first run.
+	rmAll := func() {
+		out, err := exec.Command("docker", "rm", "-f", live, past, none).CombinedOutput()
+		if err != nil && !strings.Contains(string(out), "No such container") {
+			t.Logf("docker rm -f : %v : %s", err, out)
+		}
+	}
 	rmAll()
 	t.Cleanup(rmAll)
 	// 81 without an IP: Docker binds 0.0.0.0 and ::, one mapping for the agent.
@@ -112,8 +119,8 @@ func TestIntegrationObservation(t *testing.T) {
 	// sse opens a stream, then registers the removal of the containers
 	// again: cleanups run last in, first out, so it runs before the
 	// server's Close, which waits for every handler. A handler stuck (a
-	// regression) then blocks the test until -timeout, but leaves no
-	// container behind.
+	// regression) then fails the test within 10 s (openSSE bounds Close),
+	// and leaves no container behind.
 	sse := func(path string, headers map[string]string) *sseClient {
 		t.Helper()
 		s := openSSE(t, f, path, c, headers)

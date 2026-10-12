@@ -393,8 +393,10 @@ func (t *tarFS) CheckArchive(ctx context.Context, _ string) error {
 // of the root, as far as the path exists; runc creates the rest there
 // (review Minor 1: /dangling -> ../real, then x, gives /real/x). A path
 // the index refuses (loop, not a directory) stays as declared. Limit
-// (review M1): the index does not see inside volumes and binds, which runc
-// mounts first; a link planted in one is not followed (spec §13).
+// (review M1): runc mounts volumes and binds first, and the index shows
+// them as they were when it was built; a link planted there afterwards (by
+// the host or another container, the cache key unchanged) is not followed
+// (spec §13).
 func (t *tarFS) CheckWriteRoot(context.Context) ([]string, error) {
 	points := tmpfsPoints(withTmpfs(t.mounts, t.tmpfs))
 	for i, d := range points {

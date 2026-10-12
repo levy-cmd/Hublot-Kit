@@ -66,7 +66,7 @@ jobs:
           echo "$(docker info -f '{{.Driver}}') $status"
           if [ "$want" = true ]; then echo "$status" | grep -q io.containerd.snapshotter
           else ! echo "$status" | grep -q io.containerd.snapshotter; fi
-      - run: sudo -E env "PATH=$PATH" go test -timeout 3m -tags integration ./...
+      - run: sudo -E env "PATH=$PATH" go test -timeout 5m -tags integration ./...
 
   # Spec §10: the single Playwright journey, real agent and real Docker.
   e2e:

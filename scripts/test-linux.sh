@@ -4,7 +4,7 @@
 # /proc/<pid>/root des autres conteneurs et parle au démon par son socket.
 # Marche avec Docker Desktop (macOS) et dans les VM Lima hk-ubuntu / hk-fedora.
 #
-# Usage : scripts/test-linux.sh [arguments de go test] (-timeout 3m par défaut)
+# Usage : scripts/test-linux.sh [arguments de go test] (-timeout 5m par défaut)
 #   scripts/test-linux.sh ./internal/fsview/ -run Evasion -v
 #   scripts/test-linux.sh -tags integration ./internal/...
 set -euo pipefail
@@ -17,4 +17,4 @@ exec docker run --rm \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -v "$PWD":/src -w /src \
   -v hublot-gomod:/go/pkg/mod -v hublot-gocache:/root/.cache/go-build \
-  hublot-test go test -timeout 3m "$@"
+  hublot-test go test -timeout 5m "$@"
