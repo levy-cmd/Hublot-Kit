@@ -122,8 +122,9 @@ var valueAt = regexp.MustCompile(`^` + value)
 // bearer: the credential of an Authorization header (round 1, Minor).
 var bearer = regexp.MustCompile(`(?i)\b((?:bearer|authorization\s*[:=]\s*basic)\s+)[^\s'"]+`)
 
-// jsonKey: what follows a word of §7 that is a JSON key ("password":"x").
-var jsonKey = regexp.MustCompile(`^"\s*:\s*(?:["\d\[{]|true|false|null)`)
+// jsonKey: what follows a word of §7 that is a JSON key ("password":"x"),
+// escaped too inside a shell line (\"password\":\"x\", round 2).
+var jsonKey = regexp.MustCompile(`^"\s*:\s*\\?(?:["\d\[{]|true|false|null)`)
 
 // pwd: Pwd=, the password key of ODBC and .NET connection strings. Only
 // as an assignment inside a text: the variable PWD is the working
@@ -214,8 +215,12 @@ func leaks(s string) bool {
 	}
 	// One pass: the token (a run without blank or quote) is found once, and
 	// its first "/" and the next "=" or ":" are tracked as the words go by
-	// (round 1, I1: linear).
-	var st, slash, sep int
+	// (round 1, I1: linear). What only depends on the separator or on the
+	// token is checked once: covered remembers a separator followed by a
+	// mask, nextMask whether the token is followed by a mask (round 2, I:
+	// many words before one separator must not rescan the tail each).
+	var st, slash, sep, covered int
+	var nextMask int8 // 0 unknown, 1 yes, -1 no
 	tokEn := 0
 	for _, loc := range word.FindAllStringIndex(s, -1) {
 		if loc[0] >= tokEn {
@@ -224,7 +229,7 @@ func leaks(s string) bool {
 			if i := strings.IndexAny(s[loc[1]:], blank); i >= 0 {
 				tokEn = loc[1] + i
 			}
-			slash, sep = -1, -1
+			slash, sep, covered, nextMask = -1, -1, -1, 0
 			if i := strings.IndexByte(s[st:tokEn], '/'); i >= 0 {
 				slash = st + i
 			}
@@ -236,11 +241,21 @@ func leaks(s string) bool {
 			}
 		}
 		bound := sep < tokEn
+		if bound && sep == covered {
+			continue
+		}
 		if bound && strings.HasPrefix(s[sep+1:tokEn], Mask) && !alnum.MatchString(s[sep+1+len(Mask):tokEn]) {
+			covered = sep
 			continue
 		}
 		isFlag := s[st] == '-'
-		if isFlag && !bound && strings.HasPrefix(strings.TrimLeft(s[tokEn:], " \t"), Mask) {
+		if isFlag && !bound && nextMask == 0 {
+			nextMask = -1
+			if strings.HasPrefix(strings.TrimLeft(s[tokEn:], " \t"), Mask) {
+				nextMask = 1
+			}
+		}
+		if isFlag && !bound && nextMask == 1 {
 			continue
 		}
 		if tokEn < len(s) && s[tokEn] == '"' && jsonKey.MatchString(s[tokEn:min(len(s), tokEn+64)]) {
