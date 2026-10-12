@@ -15,6 +15,10 @@ describe('i18n', () => {
 		}
 	});
 
+	it('knows the code of an unreadable log driver (F6)', () => {
+		expect(API_ERROR_CODES).toContain('logs_unavailable');
+	});
+
 	it('unknown codes fall back to a generic message', () => {
 		expect(errorMessage('nope')).toBe(errorMessage('unknown'));
 	});

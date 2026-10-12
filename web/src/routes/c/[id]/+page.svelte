@@ -7,6 +7,7 @@
 	import { errorMessage, t } from '#lib/i18n/index.ts';
 	import ChangesList from '#lib/components/ChangesList.svelte';
 	import FileBrowser from '#lib/components/FileBrowser.svelte';
+	import LogsView from '#lib/components/LogsView.svelte';
 
 	let id = $derived(page.params.id ?? '');
 	let container = $state<Container | null>(null);
@@ -14,7 +15,8 @@
 	let reloads = $state(0); // bumped by the Reload button
 	// From the layout's /api/meta: true until it answers (spec §9).
 	const readOnly = getContext<() => boolean>('readOnly');
-	let tab = $derived(page.url.searchParams.get('tab') === 'changes' ? 'changes' : 'files');
+	const TABS = ['files', 'changes', 'logs'] as const;
+	let tab = $derived(TABS.find((x) => x === page.url.searchParams.get('tab')) ?? 'files');
 
 	// The list gives the name, image and state; GET /api/containers/{id}
 	// arrives with the X-ray tab (phase Observation).
@@ -56,11 +58,13 @@
 		<nav class="tabs">
 			<a class="tab" class:active={tab === 'files'} aria-current={tab === 'files' ? 'page' : undefined} href="?">{t('container.tab.files')}</a>
 			<a class="tab" class:active={tab === 'changes'} aria-current={tab === 'changes' ? 'page' : undefined} href="?tab=changes">{t('container.tab.changes')}</a>
-			<span class="tab soon">{t('container.tab.logs')} ({t('container.soon')})</span>
+			<a class="tab" class:active={tab === 'logs'} aria-current={tab === 'logs' ? 'page' : undefined} href="?tab=logs">{t('container.tab.logs')}</a>
 			<span class="tab soon">{t('container.tab.xray')} ({t('container.soon')})</span>
 		</nav>
 		{#if tab === 'changes'}
 			<ChangesList id={container.id} />
+		{:else if tab === 'logs'}
+			<LogsView id={container.id} />
 		{:else}
 			<FileBrowser
 				id={container.id}

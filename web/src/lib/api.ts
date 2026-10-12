@@ -135,3 +135,17 @@ export function uploadFile(id: string, dir: string, file: File): Promise<{ path:
 		headers: { 'If-None-Match': '*' }
 	});
 }
+
+// F6 (spec §6): an SSE stream, one event per line; "end", "dropped" and
+// "failure" events. after resumes after a line ID (pause, "follow again").
+export type LogLine = { ts?: string; stream: 'stdout' | 'stderr'; line: string; truncated?: boolean };
+
+export function logsUrl(id: string, opts: { tail?: number; after?: string } = {}): string {
+	const q = new URLSearchParams();
+	if (opts.tail !== undefined) q.set('tail', String(opts.tail));
+	if (opts.after) q.set('after', opts.after);
+	const query = q.toString();
+	return `/api/containers/${encodeURIComponent(id)}/logs${query ? '?' + query : ''}`;
+}
+
+export const logsDownloadUrl = (id: string) => `/api/containers/${encodeURIComponent(id)}/logs/download`;
