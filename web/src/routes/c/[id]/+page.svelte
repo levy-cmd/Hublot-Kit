@@ -2,35 +2,35 @@
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import { getContext } from 'svelte';
-	import { ApiError, listContainers, type Container } from '#lib/api.ts';
+	import { ApiError, getContainer, type Radiography } from '#lib/api.ts';
 	import { stateLabel } from '#lib/containers.ts';
 	import { errorMessage, t } from '#lib/i18n/index.ts';
 	import ChangesList from '#lib/components/ChangesList.svelte';
 	import FileBrowser from '#lib/components/FileBrowser.svelte';
 	import LogsView from '#lib/components/LogsView.svelte';
+	import XrayView from '#lib/components/XrayView.svelte';
+	import { isStopped } from '#lib/xray.ts';
 
 	let id = $derived(page.params.id ?? '');
-	let container = $state<Container | null>(null);
+	let container = $state<Radiography | null>(null);
 	let error = $state('');
 	let reloads = $state(0); // bumped by the Reload button
 	// From the layout's /api/meta: true until it answers (spec §9).
 	const readOnly = getContext<() => boolean>('readOnly');
-	const TABS = ['files', 'changes', 'logs'] as const;
+	const TABS = ['files', 'changes', 'logs', 'xray'] as const;
 	let tab = $derived(TABS.find((x) => x === page.url.searchParams.get('tab')) ?? 'files');
 
-	// The list gives the name, image and state; GET /api/containers/{id}
-	// arrives with the X-ray tab (phase Observation).
+	// GET /api/containers/{id} (F7): the header and the X-ray tab, secrets
+	// already masked by the agent.
 	$effect(() => {
 		const wanted = id;
 		void reloads;
 		let current = true;
 		error = '';
 		container = null;
-		listContainers()
-			.then((list) => {
-				if (!current) return;
-				container = list.find((c) => c.id === wanted || c.name === wanted) ?? null;
-				if (!container) error = errorMessage('not_found');
+		getContainer(wanted)
+			.then((c) => {
+				if (current) container = c;
 			})
 			.catch((e) => {
 				if (!current) return;
@@ -53,24 +53,26 @@
 		<button type="button" onclick={() => reloads++}>{t('files.reload')}</button>
 	{/if}
 	{#if container}
-		<h1>{container.name} <small class="state {container.state}">{stateLabel(container.state)}</small></h1>
+		<h1>{container.name} <small class="state {container.state.status}">{stateLabel(container.state.status)}</small></h1>
 		<p class="image">{container.image}</p>
 		<nav class="tabs">
 			<a class="tab" class:active={tab === 'files'} aria-current={tab === 'files' ? 'page' : undefined} href="?">{t('container.tab.files')}</a>
 			<a class="tab" class:active={tab === 'changes'} aria-current={tab === 'changes' ? 'page' : undefined} href="?tab=changes">{t('container.tab.changes')}</a>
 			<a class="tab" class:active={tab === 'logs'} aria-current={tab === 'logs' ? 'page' : undefined} href="?tab=logs">{t('container.tab.logs')}</a>
-			<span class="tab soon">{t('container.tab.xray')} ({t('container.soon')})</span>
+			<a class="tab" class:active={tab === 'xray'} aria-current={tab === 'xray' ? 'page' : undefined} href="?tab=xray">{t('container.tab.xray')}</a>
 		</nav>
 		{#if tab === 'changes'}
 			<ChangesList id={container.id} />
 		{:else if tab === 'logs'}
 			<LogsView id={container.id} />
+		{:else if tab === 'xray'}
+			<XrayView radio={container} onreload={() => reloads++} />
 		{:else}
 			<FileBrowser
 				id={container.id}
 				name={container.name}
 				readOnly={readOnly()}
-				stopped={container.state !== 'running' && container.state !== 'paused'}
+				stopped={isStopped(container.state)}
 			/>
 		{/if}
 	{/if}
@@ -84,7 +86,6 @@
 	.tabs { display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 1rem 0; border-bottom: 1px solid #ddd; }
 	.tab { padding: 0.4rem 0.8rem; }
 	.tab.active { border-bottom: 2px solid currentColor; font-weight: 600; }
-	.tab.soon { opacity: 0.5; }
 	.state.running { color: #1b7f3b; }
 	.state.exited, .state.dead { color: #b00020; }
 	[role='alert'] { color: #b00020; }

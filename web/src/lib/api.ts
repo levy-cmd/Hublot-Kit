@@ -149,3 +149,56 @@ export function logsUrl(id: string, opts: { tail?: number; after?: string } = {}
 }
 
 export const logsDownloadUrl = (id: string) => `/api/containers/${encodeURIComponent(id)}/logs/download`;
+
+// F7 (spec §6, §7): the radiography, as internal/api/container.go writes it.
+// A masked variable has value null; the command's masked parts are "••••••"
+// (the agent masks, the UI only shows). Optional fields are omitted by the
+// agent when empty: startedAt and finishedAt for Docker's zero date.
+export type EnvVar = { name: string; value: string | null; masked: boolean };
+export type Network = { name: string; ip?: string; gateway?: string; mac?: string; aliases?: string[] };
+export type Mount = { type: string; name?: string; source?: string; destination: string; driver?: string; mode?: string; rw: boolean };
+export type ContainerState = {
+	status: string;
+	running: boolean;
+	exitCode: number;
+	error?: string;
+	startedAt?: string;
+	finishedAt?: string;
+	oomKilled: boolean;
+	health?: string;
+};
+export type Radiography = {
+	id: string;
+	name: string;
+	image: string;
+	imageId: string;
+	created: string;
+	state: ContainerState;
+	restartCount: number;
+	restartPolicy: { name: string; maxRetry?: number };
+	entrypoint: string[];
+	cmd: string[];
+	commandMasked: boolean;
+	workingDir?: string;
+	user?: string;
+	tty: boolean;
+	logDriver: string;
+	env: EnvVar[];
+	ports: Port[];
+	networkMode?: string;
+	networks: Network[];
+	mounts: Mount[];
+	tmpfs: string[];
+};
+
+export const getContainer = (id: string) => api<Radiography>(`/containers/${encodeURIComponent(id)}`);
+
+// The agent journals the reveal (env.reveal) before it answers. The value is
+// only returned: never logged, never stored by the caller beyond its state.
+export async function revealEnv(id: string, name: string): Promise<string> {
+	const res = await api<{ name: string; value: string }>(`/containers/${encodeURIComponent(id)}/env/reveal`, {
+		method: 'POST',
+		body: JSON.stringify({ name })
+	});
+	return res.value;
+}
