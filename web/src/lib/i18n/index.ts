@@ -8,7 +8,7 @@ export type Lang = 'fr' | 'en';
 export const API_ERROR_CODES = [
 	'unauthorized', 'invalid_name', 'forbidden_origin', 'rate_limited', 'not_found', 'read_only',
 	'conflict', 'container_changed', 'indexing', 'too_large', 'not_regular', 'forbidden_path',
-	'link_in_path', 'docker_unavailable', 'internal', 'network', 'unknown'
+	'link_in_path', 'docker_unavailable', 'logs_unavailable', 'internal', 'network', 'unknown'
 ] as const;
 
 const dicts: Record<Lang, Record<Key, string>> = { fr, en };

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { api, ApiError, checkDownload, downloadUrl, listDir, login, previewFile, saveFile, uploadFile } from './api';
+import { api, ApiError, checkDownload, downloadUrl, listDir, login, logsDownloadUrl, logsUrl, previewFile, saveFile, uploadFile } from './api';
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -149,5 +149,16 @@ describe('writes (F4)', () => {
 	it('maps a refused write', async () => {
 		stubFetch(async () => new Response(JSON.stringify({ error: 'conflict' }), { status: 409 }));
 		await expect(saveFile('web', '/f', 'x', '"a"')).rejects.toMatchObject({ status: 409, code: 'conflict' });
+	});
+});
+
+describe('logs routes (F6)', () => {
+	it('builds the stream and download URLs', () => {
+		expect(logsUrl('web')).toBe('/api/containers/web/logs');
+		expect(logsUrl('web', { tail: 200 })).toBe('/api/containers/web/logs?tail=200');
+		expect(logsUrl('a b', { after: '2026-10-10T07:14:22.769Z/0' })).toBe(
+			'/api/containers/a%20b/logs?after=2026-10-10T07%3A14%3A22.769Z%2F0'
+		);
+		expect(logsDownloadUrl('web')).toBe('/api/containers/web/logs/download');
 	});
 });
