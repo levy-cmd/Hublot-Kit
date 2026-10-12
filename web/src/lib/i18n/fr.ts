@@ -165,7 +165,7 @@ export const fr = {
 	'xray.portAuto': '(port choisi au démarrage)',
 	'xray.exposedOnly': 'exposé, non publié',
 	'xray.networks': 'Réseaux',
-	'xray.networkMode': 'Mode réseau',
+	'xray.networkMode': 'Mode réseau :',
 	'xray.gateway': 'passerelle',
 	'xray.mounts': 'Volumes et montages',
 	'xray.tmpfs': 'tmpfs',

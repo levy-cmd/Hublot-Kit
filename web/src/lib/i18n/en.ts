@@ -162,7 +162,7 @@ export const en: Record<Key, string> = {
 	'xray.portAuto': '(port chosen at start)',
 	'xray.exposedOnly': 'exposed, not published',
 	'xray.networks': 'Networks',
-	'xray.networkMode': 'Network mode',
+	'xray.networkMode': 'Network mode:',
 	'xray.gateway': 'gateway',
 	'xray.mounts': 'Volumes and mounts',
 	'xray.tmpfs': 'tmpfs',

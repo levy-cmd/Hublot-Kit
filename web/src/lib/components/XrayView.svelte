@@ -3,14 +3,19 @@
 	import { ApiError, revealEnv, type Radiography } from '#lib/api.ts';
 	import { stateLabel } from '#lib/containers.ts';
 	import { errorMessage, t } from '#lib/i18n/index.ts';
-	import { commandLine, envValue, mountLabel, portLabel, restartLabel, shortId } from '#lib/xray.ts';
+	import {
+		addReveal, commandLine, envValue, mountLabel, noReveals, portLabel, removeReveal, restartLabel, revealedFor, shortId
+	} from '#lib/xray.ts';
 
 	// onreload: fetch the radiography again (the Reload button of an error).
 	let { radio, onreload }: { radio: Radiography; onreload: () => void } = $props();
 
-	// A revealed value lives here only: never in localStorage, the URL or the
-	// console; Hide forgets it, and so does leaving the tab.
-	let revealed = $state<Record<string, string>>({});
+	// A revealed value lives here only, tied to the container's ID: never in
+	// localStorage, the URL or the console. Hide forgets it, and so do
+	// leaving the tab, another container, and pagehide (no return from the
+	// back-forward cache with values shown).
+	let reveals = $state.raw(noReveals);
+	let shown = $derived(revealedFor(reveals, radio.id));
 	let busy = $state(''); // the variable being revealed
 	let error = $state('');
 
@@ -18,10 +23,10 @@
 		if (busy) return;
 		busy = name;
 		error = '';
-		const id = radio.id;
+		const asked = radio.id;
 		try {
-			const value = await revealEnv(id, name);
-			if (radio.id === id) revealed = { ...revealed, [name]: value };
+			const value = await revealEnv(asked, name);
+			reveals = addReveal(reveals, asked, radio.id, name, value);
 		} catch (e) {
 			if (e instanceof ApiError && e.status === 401) {
 				goto('/login').catch(() => {});
@@ -32,13 +37,9 @@
 			busy = '';
 		}
 	}
-
-	function hide(name: string) {
-		const next = { ...revealed };
-		delete next[name];
-		revealed = next;
-	}
 </script>
+
+<svelte:window onpagehide={() => (reveals = noReveals)} />
 
 <section class="xray">
 	<h2>{t('xray.identity')}</h2>
@@ -82,7 +83,7 @@
 	{:else}
 		<ul class="env">
 			{#each radio.env as v, i (i)}
-				{@const value = envValue(v, revealed)}
+				{@const value = envValue(v, shown)}
 				<li>
 					<code class="name">{v.name}</code>
 					{#if value === null}
@@ -90,7 +91,7 @@
 						<button type="button" disabled={busy !== ''} onclick={() => reveal(v.name)}>{t('xray.reveal')}</button>
 					{:else}
 						<code class="value">{value}</code>
-						{#if v.masked}<button type="button" onclick={() => hide(v.name)}>{t('xray.hide')}</button>{/if}
+						{#if v.masked}<button type="button" onclick={() => (reveals = removeReveal(reveals, v.name))}>{t('xray.hide')}</button>{/if}
 					{/if}
 				</li>
 			{/each}
@@ -107,7 +108,7 @@
 	{/if}
 
 	<h2>{t('xray.networks')}</h2>
-	{#if radio.networkMode}<p>{t('xray.networkMode')} : <code>{radio.networkMode}</code></p>{/if}
+	{#if radio.networkMode}<p>{t('xray.networkMode')} <code>{radio.networkMode}</code></p>{/if}
 	{#if radio.networks.length > 0}
 		<ul>
 			{#each radio.networks as n (n.name)}
