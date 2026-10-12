@@ -7,14 +7,18 @@ package api
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -219,9 +223,9 @@ func TestLogsStreamPastLines(t *testing.T) {
 			t.Errorf("ligne %d : %+v, attendu %+v", i, got, w)
 		}
 	}
-	// The ID of a line: its timestamp, and its rank among the lines of the
-	// same timestamp (resumption, spec §3).
-	if ids := []string{events[0].ID, events[1].ID, events[2].ID}; !slices.Equal(ids, []string{lts1 + "/0", lts1 + "/1", lts2 + "/0"}) {
+	// The ID of a line: its timestamp, its stream, and its rank among the
+	// lines of that stream with the same timestamp (resumption, spec §3).
+	if ids := []string{events[0].ID, events[1].ID, events[2].ID}; !slices.Equal(ids, []string{lts1 + "/stdout/0", lts1 + "/stderr/0", lts2 + "/stdout/0"}) {
 		t.Errorf("identifiants : %q", ids)
 	}
 	if calls := f.docker.LogsCalls(); !slices.Equal(calls, []dockerx.LogsOptions{{Tail: "500", Follow: true}}) {
@@ -253,38 +257,41 @@ func TestLogsTail(t *testing.T) {
 }
 
 // Resumption after a cut (browser: Last-Event-ID; UI after a pause:
-// ?after=): Docker's since is inclusive, so the lines of the same timestamp
-// already sent are skipped by their rank.
+// ?after=): Docker's since is inclusive, so the lines up to the cut line
+// itself are skipped.
 func TestLogsResume(t *testing.T) {
 	stream := muxAll(mux(1, lts2+" a\n"), mux(1, lts2+" b\n"), mux(2, lts3+" c\n"))
 	for name, h := range map[string]map[string]string{
-		"Last-Event-ID": {"Last-Event-ID": lts2 + "/0"},
+		"Last-Event-ID": {"Last-Event-ID": lts2 + "/stdout/0"},
 		"after":         nil,
-		"les deux":      {"Last-Event-ID": lts2 + "/0"},
+		"les deux":      {"Last-Event-ID": lts2 + "/stdout/0"},
 	} {
 		f, c := logsFixture(t)
 		f.docker.LogStreams[webID] = stream
 		path := "/api/containers/web/logs"
 		switch name {
 		case "after":
-			path += "?after=" + lts2 + "/0"
+			path += "?after=" + lts2 + "/stdout/0"
 		case "les deux":
-			path += "?after=" + lts1 + "/0" // the header, newer, wins
+			path += "?after=" + lts1 + "/stdout/0" // the header, newer, wins
 		}
 		events := openSSE(t, f, path, c, h).all(t)
-		if len(events) != 3 || lineOf(t, events[0]).Line != "b" || events[0].ID != lts2+"/1" ||
-			lineOf(t, events[1]).Line != "c" || events[1].ID != lts3+"/0" {
+		if len(events) != 3 || lineOf(t, events[0]).Line != "b" || events[0].ID != lts2+"/stdout/1" ||
+			lineOf(t, events[1]).Line != "c" || events[1].ID != lts3+"/stderr/0" {
 			t.Errorf("%s : %+v", name, events)
 		}
 		if calls := f.docker.LogsCalls(); len(calls) != 1 || calls[0].Since != lts2 || calls[0].Tail != "all" {
 			t.Errorf("%s : appels %+v", name, calls)
 		}
 	}
-	// A malformed ID is ignored: an ordinary start.
-	f, c := logsFixture(t)
-	openSSE(t, f, "/api/containers/web/logs?after=hier/0", c, nil).all(t)
-	if calls := f.docker.LogsCalls(); calls[0].Since != "" || calls[0].Tail != "500" {
-		t.Errorf("identifiant invalide : %+v", calls)
+	// A malformed ID, or one of the former "ts/rank" form, is ignored: an
+	// ordinary start.
+	for _, id := range []string{"hier/stdout/0", lts2 + "/0", lts2 + "/stdin/0", lts2 + "/stdout/x"} {
+		f, c := logsFixture(t)
+		openSSE(t, f, "/api/containers/web/logs?after="+url.QueryEscape(id), c, nil).all(t)
+		if calls := f.docker.LogsCalls(); calls[0].Since != "" || calls[0].Tail != "500" {
+			t.Errorf("identifiant invalide %q : %+v", id, calls)
+		}
 	}
 }
 
@@ -542,7 +549,7 @@ func TestLogsRateLimit(t *testing.T) {
 		t.Fatalf("événements : %+v", events)
 	}
 	// The ranks go on through the dropped lines: a resumption skips them.
-	if events[2].ID != lts1+"/2" {
+	if events[2].ID != lts1+"/stdout/2" {
 		t.Errorf("identifiant : %q", events[2].ID)
 	}
 }
@@ -555,13 +562,136 @@ func TestLogsResumeAfterDrops(t *testing.T) {
 	f, c := logsFixture(t)
 	f.docker.LogStreams[webID] = muxAll(mux(1, lts1+" a\n"), mux(2, lts1+" b\n"), mux(1, lts1+" c\n"), mux(1, lts2+" d\n"))
 	events := openSSE(t, f, "/api/containers/web/logs", c, nil).all(t)
-	if len(events) != 4 || events[1].ID != lts1+"/1" || events[2].Data != `{"count":2}` {
+	if len(events) != 4 || events[1].ID != lts1+"/stderr/0" || events[2].Data != `{"count":2}` {
 		t.Fatalf("premier flux : %+v", events)
 	}
 	events = openSSE(t, f, "/api/containers/web/logs", c, map[string]string{"Last-Event-ID": events[1].ID}).all(t)
-	if len(events) != 3 || lineOf(t, events[0]).Line != "c" || events[0].ID != lts1+"/2" ||
-		lineOf(t, events[1]).Line != "d" || events[1].ID != lts2+"/0" || events[2].Event != "end" {
+	if len(events) != 3 || lineOf(t, events[0]).Line != "c" || events[0].ID != lts1+"/stdout/1" ||
+		lineOf(t, events[1]).Line != "d" || events[1].ID != lts2+"/stdout/0" || events[2].Event != "end" {
 		t.Fatalf("reprise : %+v", events)
+	}
+}
+
+// journalDocker imitates Docker's since on a journal written by two
+// goroutines (stdout, stderr): each stream's timestamps rise, but the file
+// is not in timestamp order between streams, and two streams may share a
+// timestamp. Docker returns every line from the first one, in file order,
+// whose timestamp reaches since (moby's forwarder stops filtering there).
+type journalDocker struct {
+	*dockerx.Fake
+	lines []journalLine
+}
+
+type journalLine struct {
+	stream byte
+	ts     time.Time
+	text   string
+}
+
+func (d *journalDocker) Logs(_ context.Context, _ string, opt dockerx.LogsOptions) (io.ReadCloser, error) {
+	var since time.Time
+	if opt.Since != "" {
+		var err error
+		if since, err = time.Parse(time.RFC3339Nano, opt.Since); err != nil {
+			return nil, err
+		}
+	}
+	var frames [][]byte
+	reached := since.IsZero()
+	for _, l := range d.lines {
+		if !reached && l.ts.Before(since) {
+			continue
+		}
+		reached = true
+		frames = append(frames, mux(l.stream, l.ts.Format(time.RFC3339Nano)+" "+l.text+"\n"))
+	}
+	if n, err := strconv.Atoi(opt.Tail); err == nil && n < len(frames) {
+		frames = frames[len(frames)-n:]
+	}
+	return io.NopCloser(bytes.NewReader(muxAll(frames...))), nil
+}
+
+func journalFixture(t *testing.T, lines []journalLine) (*fixture, *http.Cookie) {
+	t.Helper()
+	f := newFixture(t, false)
+	f.init(t, false, &journalDocker{Fake: f.docker, lines: lines}, nil)
+	return f, f.session(t)
+}
+
+// Review of T6: a resumption after any line gives exactly the lines that
+// followed it, neither duplicate nor hole, though Docker's journal is not
+// in timestamp order between streams and since returns from the first line
+// that reaches it.
+func TestLogsResumeJournal(t *testing.T) {
+	t0 := time.Date(2026, 10, 12, 8, 0, 0, 0, time.UTC)
+	at := func(n int) time.Time { return t0.Add(time.Duration(n) * time.Microsecond) }
+	// A burst: stderr lags 50 lines behind stdout in the file, so each
+	// stderr line comes after many stdout lines of later timestamps.
+	var burst []journalLine
+	const n, lag = 150, 50
+	for i := 0; i < n+lag; i++ {
+		if i < n {
+			burst = append(burst, journalLine{1, at(2 * i), fmt.Sprintf("o%d", i)})
+		}
+		if j := i - lag; j >= 0 {
+			burst = append(burst, journalLine{2, at(2*j + 1), fmt.Sprintf("e%d", j)})
+		}
+	}
+	journals := map[string][]journalLine{
+		"désordre entre flux": {
+			{1, at(2), "o1"}, {2, at(1), "e1"}, {2, at(3), "e2"}, {1, at(5), "o2"}, {2, at(4), "e3"}, {1, at(6), "o3"},
+		},
+		// X(T, stdout), then W, then V(T, stderr) written later: V must not
+		// be taken for X.
+		"horodatages égaux entre flux": {
+			{1, at(10), "X"}, {2, at(9), "W"}, {2, at(10), "V"}, {1, at(11), "Y"}, {2, at(11), "Z"},
+		},
+		"rafale": burst,
+	}
+	for name, lines := range journals {
+		f, c := journalFixture(t, lines)
+		all := openSSE(t, f, "/api/containers/web/logs?tail=10000", c, nil).all(t)
+		if len(all) != len(lines)+1 || all[len(all)-1].Event != "end" {
+			t.Fatalf("%s : premier flux de %d événements, attendu %d lignes et end", name, len(all), len(lines))
+		}
+		all = all[:len(lines)]
+		ids := map[string]bool{}
+		for _, e := range all {
+			if e.ID == "" || ids[e.ID] {
+				t.Fatalf("%s : identifiant vide ou en double %q", name, e.ID)
+			}
+			ids[e.ID] = true
+		}
+		text := func(es []sseEvent) []string {
+			var out []string
+			for _, e := range es {
+				l := lineOf(t, e)
+				out = append(out, l.Stream+":"+l.Line)
+			}
+			return out
+		}
+		for k := range all {
+			got := openSSE(t, f, "/api/containers/web/logs", c, map[string]string{"Last-Event-ID": all[k].ID}).all(t)
+			if len(got) == 0 || got[len(got)-1].Event != "end" {
+				t.Fatalf("%s, coupure après %q : %+v", name, all[k].ID, got)
+			}
+			if g, w := text(got[:len(got)-1]), text(all[k+1:]); !slices.Equal(g, w) {
+				t.Fatalf("%s, coupure après %s : %q, attendu %q", name, text(all[k:k+1]), g, w)
+			}
+		}
+	}
+}
+
+// The cut line is gone (the journal rotated): skipping stops at the first
+// line of its stream past it, rather than skipping the rest of the logs.
+func TestLogsResumeCutGone(t *testing.T) {
+	t0 := time.Date(2026, 10, 12, 8, 0, 0, 0, time.UTC)
+	at := func(n int) time.Time { return t0.Add(time.Duration(n) * time.Microsecond) }
+	f, c := journalFixture(t, []journalLine{{2, at(5), "e"}, {1, at(6), "f"}, {2, at(7), "g"}})
+	cut := at(4).Format(time.RFC3339Nano) + "/stdout/0"
+	events := openSSE(t, f, "/api/containers/web/logs", c, map[string]string{"Last-Event-ID": cut}).all(t)
+	if len(events) != 3 || lineOf(t, events[0]).Line != "f" || lineOf(t, events[1]).Line != "g" || events[2].Event != "end" {
+		t.Fatalf("coupure absente : %+v", events)
 	}
 }
 

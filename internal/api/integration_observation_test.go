@@ -29,17 +29,16 @@ func dockerRun(t *testing.T, args ...string) {
 }
 
 // countingDocker is the real client; it counts the logs streams Docker
-// sent, those the agent closed, and those whose reading ended, to see on a
-// real Docker that a client leaving frees everything (plan T3, for T6).
+// sent, those the agent closed, and the reads in progress on them, to see on
+// a real Docker that a client leaving frees everything (plan T3, for T6).
 type countingDocker struct {
 	dockerx.Client
-	opened, closed, readEnded atomic.Int32
+	opened, closed, reading atomic.Int32
 }
 
 type countingStream struct {
 	io.ReadCloser
-	d     *countingDocker
-	ended atomic.Bool
+	d *countingDocker
 }
 
 func (d *countingDocker) Logs(ctx context.Context, id string, opt dockerx.LogsOptions) (io.ReadCloser, error) {
@@ -52,11 +51,9 @@ func (d *countingDocker) Logs(ctx context.Context, id string, opt dockerx.LogsOp
 }
 
 func (s *countingStream) Read(p []byte) (int, error) {
-	n, err := s.ReadCloser.Read(p)
-	if err != nil && s.ended.CompareAndSwap(false, true) {
-		s.d.readEnded.Add(1)
-	}
-	return n, err
+	s.d.reading.Add(1)
+	defer s.d.reading.Add(-1)
+	return s.ReadCloser.Read(p)
 }
 
 func (s *countingStream) Close() error {
@@ -65,13 +62,17 @@ func (s *countingStream) Close() error {
 }
 
 func TestIntegrationObservation(t *testing.T) {
-	live, past, none := "hublot-it-obs-live", "hublot-it-obs-past", "hublot-it-obs-none"
+	// A unique suffix: two runs (or a run and a leftover) never share a name.
+	sfx := strconv.FormatInt(time.Now().UnixNano(), 36)
+	live, past, none := "hublot-it-obs-live-"+sfx, "hublot-it-obs-past-"+sfx, "hublot-it-obs-none-"+sfx
 	exec.Command("docker", "rm", "-f", live, past, none).Run()
 	t.Cleanup(func() { exec.Command("docker", "rm", "-f", live, past, none).Run() })
 	// 81 without an IP: Docker binds 0.0.0.0 and ::, one mapping for the agent.
+	// Bursts of 50 lines per stream: the journal is often out of timestamp
+	// order between stdout and stderr, as for a busy service.
 	dockerRun(t, "run", "-d", "--name", live, "-e", "DB_PASSWORD=s3cr3t-env", "-e", "PLAIN=visible",
 		"-p", "127.0.0.1::80", "-p", "81", "alpine:3", "sh", "-c",
-		`echo "start s3cr3t-in-logs"; i=0; while true; do i=$((i+1)); echo "tick $i"; echo "warn $i" >&2; sleep 0.2; done`)
+		`echo "start s3cr3t-in-logs"; i=0; while true; do i=$((i+1)); echo "tick $i"; echo "warn $i" >&2; [ $((i % 50)) -ne 0 ] || sleep 0.1; done`)
 	// Stopped, with a binding configured without IP nor host port (HostIp "").
 	dockerRun(t, "run", "--name", past, "-p", "80", "alpine:3", "sh", "-c", "echo un; echo deux >&2")
 	// Host network: Docker keeps the -p in PortBindings but ignores it.
@@ -159,14 +160,16 @@ func TestIntegrationObservation(t *testing.T) {
 	}
 	seen := map[string]int{} // stream → highest counter received
 	var lastID, lastLine string
-	for i := 0; i < 12; i++ {
+	// At least 12 lines, and both streams (a burst comes stream by stream).
+	for n := 0; n < 12 || seen["stdout"] <= 0 || seen["stderr"] <= 0; {
 		e, ok := s.next(t)
 		if !ok {
 			t.Fatal("flux fermé trop tôt")
 		}
 		if e.Comment != "" {
-			continue
+			continue // only lines count
 		}
+		n++
 		l := lineOf(t, e)
 		seen[l.Stream] = max(seen[l.Stream], counter(l))
 		lastID, lastLine = e.ID, l.Stream+":"+l.Line
@@ -175,23 +178,22 @@ func TestIntegrationObservation(t *testing.T) {
 		t.Fatalf("flux en direct : %v, dernier ID %q", seen, lastID)
 	}
 	// The client leaves while the container keeps logging: Docker's stream
-	// is closed and its reading ends (the slot is freed after both).
+	// is closed and no read stays blocked on it (the slot is freed after).
 	s.cancel()
 	deadline := time.Now().Add(5 * time.Second)
-	for (dc.closed.Load() != 1 || dc.readEnded.Load() != 1) && time.Now().Before(deadline) {
+	for (dc.closed.Load() != 1 || dc.reading.Load() != 0) && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
 	}
-	if dc.opened.Load() != 1 || dc.closed.Load() != 1 || dc.readEnded.Load() != 1 {
-		t.Fatalf("départ du client : %d flux ouverts, %d fermés, %d lectures finies",
-			dc.opened.Load(), dc.closed.Load(), dc.readEnded.Load())
+	if dc.opened.Load() != 1 || dc.closed.Load() != 1 || dc.reading.Load() != 0 {
+		t.Fatalf("départ du client : %d flux ouverts, %d fermés, %d lectures en cours",
+			dc.opened.Load(), dc.closed.Load(), dc.reading.Load())
 	}
 	r := openSSE(t, f, "/api/containers/"+live+"/logs", c, map[string]string{"Last-Event-ID": lastID})
-	// Resumption on real lines: no line lost, the last one received not sent
-	// again. Docker stamps stdout and stderr in two goroutines, so its
-	// journal is not always in timestamp order (a few % of neighbours), and
-	// since returns everything from the first line at or after it: the
-	// other stream's line just before the cut may come again (counter equal
-	// to the highest received), never one further back.
+	// Resumption on real lines: neither duplicate nor hole. Docker stamps
+	// stdout and stderr in two goroutines, so its journal is not always in
+	// timestamp order between streams (a few % of neighbours), and since
+	// returns everything from the first line that reaches it: the agent
+	// skips up to the cut line itself.
 	first := map[string]int{}
 	for len(first) < 2 {
 		e, ok := r.next(t)
@@ -210,7 +212,7 @@ func TestIntegrationObservation(t *testing.T) {
 		}
 	}
 	for _, st := range []string{"stdout", "stderr"} {
-		if n := first[st]; n != seen[st]+1 && n != seen[st] {
+		if n := first[st]; n != seen[st]+1 {
 			t.Errorf("reprise de %s : première ligne n° %d, dernière reçue n° %d", st, n, seen[st])
 		}
 	}
