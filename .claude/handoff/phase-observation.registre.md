@@ -106,5 +106,9 @@ Scan de cohérence du plan (HEAD 2576a19, seul le plan diffère de `a6ffdeb`, ba
   - fin non alphanumérique laissée visible après un masque (`Password=ab(üü)` → `Password=••••••(üü)`) ;
   - barre oblique inverse suivie d'un saut de ligne (continuation de ligne shell) : la valeur s'arrête au saut de ligne ;
   - `--pwd s3cr3t` en deux arguments : non masqué (conforme à Q27 : `pwd` n'est un mot secret que dans une affectation) ;
-  - `env PWD=/srv` masqué (faux positif : `Pwd=` d'une chaîne de connexion).
+  - `env PWD=/srv` masqué (faux positif : `Pwd=` d'une chaîne de connexion) ;
+  - JSON dans la valeur d'une variable au nom anodin (`BODY={"password":"s3cr3t"}`, échappé ou non) : en clair dans `Env` (conforme à §7 : nom ou URL à identifiants seulement ; plan Q36) ;
+  - drapeau secret suivi de JSON (`app --token {"password": "s3cr3t"}` → `--token •••••• "s3cr3t"}`) : le masque du drapeau mange la clé JSON ;
+  - JSON doublement échappé (`{\\\"password\\\":…}`) : non reconnu.
+- Task 4 (re-revue tour 2, 2026-10-12) : validée par Opus et Codex (correctif d1ee5bc/c08f4f5). Minor reporté : le cas « blancs avant masque » de `TestCost` ne mord pas (rapport 2,5 avant correctif, plafond 8).
 - Parallélisme (demande de l'utilisateur, 2026-10-10) : T7 (web, onglet Logs, dépend seulement de T3) en worktree isolé pendant le correctif de T4 puis T5 (Go) ; fusion de la branche du worktree dans phase/observation avant T8.
