@@ -54,6 +54,13 @@ const sseWriteTimeout = 30 * time.Second
 // skips up to the cut line itself (see logsStream).
 var lineID = regexp.MustCompile(`^(\d{4}-\d\d-\d\dT[0-9:.]+Z)/(stdout|stderr)/(\d{1,9})$`)
 
+// maxStreamSkew bounds the skip of a resumption whose cut line is gone and
+// whose stream stays silent (journal rotated, or an ID from another
+// container): a line of the other stream this far past the cut stops it.
+// The largest gap measured between stdout and stderr is 2.6 ms; too small a
+// bound gives a duplicate, never a hole.
+const maxStreamSkew = time.Second
+
 // linePos is where a line stands in its stream: its timestamp and rank.
 type linePos struct {
 	ts   time.Time
@@ -359,12 +366,14 @@ func (s *server) logsStream(w http.ResponseWriter, r *http.Request) {
 			if skipping {
 				// Every line before the cut line, in journal order, was sent
 				// (or announced as dropped). A line of the cut's stream past
-				// the cut means the cut line is gone (journal rotated): stop
-				// skipping there rather than skip the rest.
+				// the cut, or of the other stream past it by more than
+				// maxStreamSkew, means the cut line is gone (journal rotated):
+				// stop skipping there rather than skip the rest.
 				if l.Stream != cut.stream {
-					continue
-				}
-				if c := p.compare(cut.linePos); c <= 0 {
+					if l.TS.Sub(cut.ts) <= maxStreamSkew {
+						continue
+					}
+				} else if c := p.compare(cut.linePos); c <= 0 {
 					skipping = c < 0
 					continue
 				}
