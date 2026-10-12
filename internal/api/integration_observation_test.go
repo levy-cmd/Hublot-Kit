@@ -87,8 +87,9 @@ func TestIntegrationObservation(t *testing.T) {
 	// A unique suffix: two runs (or a run and a leftover) never share a name.
 	sfx := strconv.FormatInt(time.Now().UnixNano(), 36)
 	live, past, none := "hublot-it-obs-live-"+sfx, "hublot-it-obs-past-"+sfx, "hublot-it-obs-none-"+sfx
-	exec.Command("docker", "rm", "-f", live, past, none).Run()
-	t.Cleanup(func() { exec.Command("docker", "rm", "-f", live, past, none).Run() })
+	rmAll := func() { exec.Command("docker", "rm", "-f", live, past, none).Run() }
+	rmAll()
+	t.Cleanup(rmAll)
 	// 81 without an IP: Docker binds 0.0.0.0 and ::, one mapping for the agent.
 	// Bursts of 50 lines per stream: the journal is often out of timestamp
 	// order between stdout and stderr, as for a busy service.
@@ -108,6 +109,17 @@ func TestIntegrationObservation(t *testing.T) {
 	f := &fixture{}
 	f.init(t, false, dc, nil)
 	c := f.session(t)
+	// sse opens a stream, then registers the removal of the containers
+	// again: cleanups run last in, first out, so it runs before the
+	// server's Close, which waits for every handler. A handler stuck (a
+	// regression) then blocks the test until -timeout, but leaves no
+	// container behind.
+	sse := func(path string, headers map[string]string) *sseClient {
+		t.Helper()
+		s := openSSE(t, f, path, c, headers)
+		t.Cleanup(rmAll)
+		return s
+	}
 	radioOf := func(name string) radioJSON {
 		t.Helper()
 		rec := f.do("GET", "/api/containers/"+name, "", c)
@@ -171,7 +183,7 @@ func TestIntegrationObservation(t *testing.T) {
 	// F6, running container: past lines, then new ones as they come, both
 	// streams; then resumption from the last ID.
 	idle := logsGoroutines() // left by nothing, or by earlier tests of the package
-	s := openSSE(t, f, "/api/containers/"+live+"/logs?tail=5", c, nil)
+	s := sse("/api/containers/"+live+"/logs?tail=5", nil)
 	// counter: the number of a "tick N" (stdout) or "warn N" (stderr) line.
 	counter := func(l logEvent) int {
 		_, n, _ := strings.Cut(l.Line, " ")
@@ -214,7 +226,7 @@ func TestIntegrationObservation(t *testing.T) {
 		t.Fatalf("départ du client : %d flux ouverts, %d fermés, %d goroutines de logs (%d avant)",
 			dc.opened.Load(), dc.closed.Load(), n, idle)
 	}
-	r := openSSE(t, f, "/api/containers/"+live+"/logs", c, map[string]string{"Last-Event-ID": lastID})
+	r := sse("/api/containers/"+live+"/logs", map[string]string{"Last-Event-ID": lastID})
 	// Resumption on real lines, read up to the end of the stream: in each
 	// stream, the numbers follow on from the last one received, one by one
 	// (neither duplicate nor hole). Docker stamps stdout and stderr in two
@@ -260,7 +272,7 @@ func TestIntegrationObservation(t *testing.T) {
 	}
 
 	// F6, stopped container: its past logs, then end.
-	events := openSSE(t, f, "/api/containers/"+past+"/logs", c, nil).all(t)
+	events := sse("/api/containers/"+past+"/logs", nil).all(t)
 	if len(events) != 3 || events[2].Event != "end" {
 		t.Fatalf("conteneur arrêté : %+v", events)
 	}
@@ -274,7 +286,7 @@ func TestIntegrationObservation(t *testing.T) {
 	}
 
 	// A driver Docker cannot read: a clear code, in the stream and on the download.
-	if code := failureOf(t, openSSE(t, f, "/api/containers/"+none+"/logs", c, nil).all(t)); code != "logs_unavailable" {
+	if code := failureOf(t, sse("/api/containers/"+none+"/logs", nil).all(t)); code != "logs_unavailable" {
 		t.Errorf("--log-driver none : %s", code)
 	}
 	if rec := f.do("GET", "/api/containers/"+none+"/logs/download", "", c); rec.Code != http.StatusUnprocessableEntity {

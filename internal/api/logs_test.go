@@ -67,7 +67,18 @@ type sseClient struct {
 func openSSE(t *testing.T, f *fixture, path string, c *http.Cookie, headers map[string]string) *sseClient {
 	t.Helper()
 	srv := httptest.NewServer(f.h)
-	t.Cleanup(srv.Close)
+	// Close waits for every handler: a stuck one (a regression) fails the
+	// test within 10 s instead of blocking it until -timeout, and the
+	// cleanups registered before still run.
+	t.Cleanup(func() {
+		done := make(chan struct{})
+		go func() { srv.Close(); close(done) }()
+		select {
+		case <-done:
+		case <-time.After(10 * time.Second):
+			t.Error("serveur de test non fermé en 10 s : un gestionnaire de flux reste bloqué")
+		}
+	})
 	ctx, cancel := context.WithCancel(context.Background())
 	req, _ := http.NewRequestWithContext(ctx, "GET", srv.URL+path, nil)
 	if c != nil {
