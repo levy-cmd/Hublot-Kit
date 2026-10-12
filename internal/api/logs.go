@@ -45,26 +45,51 @@ var errTooManyStreams = errors.New("trop de flux de logs ouverts")
 // that no longer reads cannot hold the goroutine.
 const sseWriteTimeout = 30 * time.Second
 
-// lineID is the SSE ID of a line: its timestamp and its rank among the
-// lines of that same timestamp. Docker's since is inclusive: resuming
-// asks from the timestamp and skips the ranks already seen.
-var lineID = regexp.MustCompile(`^(\d{4}-\d\d-\d\dT[0-9:.]+Z)/(\d{1,9})$`)
+// lineID is the SSE ID of a line: its timestamp, its stream, and its rank
+// among the lines of that stream with that same timestamp. Within one
+// stream Docker's timestamps rise; between stdout and stderr its journal is
+// not in timestamp order (two goroutines stamp them), and two streams may
+// share a timestamp. Docker's since returns every line, in journal order,
+// from the first one that reaches it: resuming asks from the timestamp and
+// skips up to the cut line itself (see logsStream).
+var lineID = regexp.MustCompile(`^(\d{4}-\d\d-\d\dT[0-9:.]+Z)/(stdout|stderr)/(\d{1,9})$`)
+
+// linePos is where a line stands in its stream: its timestamp and rank.
+type linePos struct {
+	ts   time.Time
+	rank int
+}
+
+// cutPoint is the last line a client received.
+type cutPoint struct {
+	stream string
+	linePos
+}
 
 // resumePoint reads a line ID (Last-Event-ID first: the browser's own
-// reconnection, newer than the page's ?after=); ok false when none valid.
-func resumePoint(r *http.Request) (ts time.Time, rank int, ok bool) {
+// reconnection, newer than the page's ?after=); ok false when none valid
+// (an ID of the former "ts/rank" form is not valid: an ordinary start).
+func resumePoint(r *http.Request) (cut cutPoint, ok bool) {
 	for _, id := range []string{r.Header.Get("Last-Event-ID"), r.URL.Query().Get("after")} {
 		m := lineID.FindStringSubmatch(id)
 		if m == nil {
 			continue
 		}
 		t, err := time.Parse(time.RFC3339Nano, m[1])
-		n, err2 := strconv.Atoi(m[2])
+		n, err2 := strconv.Atoi(m[3])
 		if err == nil && err2 == nil {
-			return t, n, true
+			return cutPoint{m[2], linePos{t, n}}, true
 		}
 	}
-	return time.Time{}, 0, false
+	return cutPoint{}, false
+}
+
+// compare orders two positions of one stream.
+func (p linePos) compare(q linePos) int {
+	if c := p.ts.Compare(q.ts); c != 0 {
+		return c
+	}
+	return p.rank - q.rank
 }
 
 // tailOf: the tail parameter, DefaultTail when absent or invalid, at most
@@ -247,9 +272,9 @@ func (s *server) logsStream(w http.ResponseWriter, r *http.Request) {
 	}
 	defer release()
 	opt := dockerx.LogsOptions{Tail: lim.tailOf(r), Follow: true}
-	since, skip, resume := resumePoint(r)
-	if resume {
-		opt = dockerx.LogsOptions{Tail: "all", Since: since.Format(time.RFC3339Nano), Follow: true}
+	cut, skipping := resumePoint(r)
+	if skipping {
+		opt = dockerx.LogsOptions{Tail: "all", Since: cut.ts.Format(time.RFC3339Nano), Follow: true}
 	}
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
@@ -283,8 +308,8 @@ func (s *server) logsStream(w http.ResponseWriter, r *http.Request) {
 	tick := time.NewTicker(lim.Heartbeat)
 	defer tick.Stop()
 	b := &bucket{tokens: float64(lim.Burst), max: float64(lim.Burst), rate: lim.Rate, last: time.Now()}
-	var cur time.Time // timestamp of the last line read, and its rank
-	rank, dropped := -1, 0
+	pos := map[string]linePos{} // per stream: the last line read
+	dropped := 0
 	flushDropped := func() error {
 		if dropped == 0 {
 			return nil
@@ -324,13 +349,26 @@ func (s *server) logsStream(w http.ResponseWriter, r *http.Request) {
 				}
 				return
 			}
-			if l.TS.Equal(cur) {
-				rank++
+			p, seen := pos[l.Stream]
+			if seen && l.TS.Equal(p.ts) {
+				p.rank++
 			} else {
-				cur, rank = l.TS, 0
+				p = linePos{l.TS, 0}
 			}
-			if resume && l.TS.Equal(since) && rank <= skip {
-				continue // sent before the cut
+			pos[l.Stream] = p
+			if skipping {
+				// Every line before the cut line, in journal order, was sent
+				// (or announced as dropped). A line of the cut's stream past
+				// the cut means the cut line is gone (journal rotated): stop
+				// skipping there rather than skip the rest.
+				if l.Stream != cut.stream {
+					continue
+				}
+				if c := p.compare(cut.linePos); c <= 0 {
+					skipping = c < 0
+					continue
+				}
+				skipping = false
 			}
 			if !b.take(time.Now()) {
 				dropped++
@@ -342,7 +380,7 @@ func (s *server) logsStream(w http.ResponseWriter, r *http.Request) {
 			id, ts := "", ""
 			if !l.TS.IsZero() {
 				ts = l.TS.Format(time.RFC3339Nano)
-				id = ts + "/" + strconv.Itoa(rank)
+				id = ts + "/" + l.Stream + "/" + strconv.Itoa(p.rank)
 			}
 			if out.event("", id, logJSON{TS: ts, Stream: l.Stream, Line: l.Text, Truncated: l.Truncated}) != nil {
 				return
