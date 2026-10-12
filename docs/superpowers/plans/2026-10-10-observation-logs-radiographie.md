@@ -106,10 +106,10 @@ Le plan suit la recommandation de chaque question ; une réponse différente cha
 
 ## Global Constraints
 
-- **Module et dépendances Go** : module `github.com/levy-cmd/hublot-kit` ; dépendances autorisées (§3) : SDK Docker `github.com/moby/moby/client` (et `github.com/moby/moby/api` pour les types), `github.com/cyphar/filepath-securejoin` **v0.7.0** (`pathrs-lite`), `golang.org/x/sys` **v0.48.0**. Aucune autre. Interface : aucune dépendance nouvelle.
+- **Module et dépendances Go** : module `github.com/levy-cmd/hublot-kit` ; dépendances autorisées (§3) : SDK Docker `github.com/moby/moby/client` (et `github.com/moby/moby/api` pour les types), `github.com/cyphar/filepath-securejoin` **v0.7.0** (`pathrs-lite`), `golang.org/x/sys` **v0.48.0**, et `github.com/containerd/errdefs`, déjà importé par `dockerx` (arbitrage P7). Aucune autre. Interface : aucune dépendance nouvelle.
 - **Accès aux fichiers d'un conteneur (CLAUDE.md, §5).** La tâche 1 ne lit le conteneur que par `pathrs` (`mountIdent`), `openat2` et l'index ; **jamais** `filepath.Join`, `path.Join` ni `os.Open` sur un chemin du conteneur. Le reste du plan ne touche pas aux fichiers.
 - **Tests d'abord (CLAUDE.md)** : à chaque tâche, l'étape 1 écrit les tests, l'étape 2 les voit échouer, l'étape 3 écrit le code. Tests d'évasion (tâche 1) et de masquage (tâches 4 et 5) avant le code qu'ils protègent ; un piège a son contrôle (un cas qui doit passer) ; un test ne se saute que sur une condition exacte, nommée dans le message.
-- **Aucun secret ne quitte l'agent non masqué par défaut** : ni dans une réponse (tests `noSecret`, « FUITE »), ni dans le journal d'audit (le nom, jamais la valeur), ni dans les journaux de l'agent (`slog` ne reçoit jamais une valeur d'environnement).
+- **Aucun secret d'environnement, de commande ou de message d'erreur ne quitte l'agent non masqué par défaut** (les logs ne sont pas masqués : spec §13, arbitrage P7) : ni dans une réponse (tests `noSecret`, « FUITE »), ni dans le journal d'audit (le nom, jamais la valeur), ni dans les journaux de l'agent (`slog` ne reçoit jamais une valeur d'environnement).
 - **Code Linux** testé sous Linux (`scripts/test-linux.sh`, VM) ; `go test ./cmd/... ./internal/...` reste vert sur macOS. **Jamais** de conteneur qui monte le `/proc`, le `/sys` ou le `/` de l'hôte suivi d'un tar.
 - **Erreurs API** : `{"error": "<code>", "detail": "<texte>"}`, codes de §6, plus `logs_unavailable` (Q34, ajouté à §6 par la tâche 9).
 - **Interface** : `{@html}` interdit ; contenu du conteneur (lignes de logs, variables, commande) toujours échappé par Svelte ; bouton « Recharger » sur les états d'erreur ; grilles en `minmax(0,1fr)` ; textes dans `fr.ts` et `en.ts` (mêmes clés) ; imports `#lib/….ts` dans les `.svelte` ; consultation au téléphone (§9 : 390 px sans défilement horizontal).
@@ -191,7 +191,7 @@ docs/superpowers/specs/2026-10-07-hublot-kit-v0.1-design.md   §5.3, §5.4, §6,
 
 > **À comprendre :** compose `tmpfs: [/var/run]` sur une image où `/var/run` est un lien vers `../run` (alpine, Debian…) : runc monte le tmpfs là où le lien mène, sur `/run`, et la table des montages ne montre jamais `/var/run`. `CheckVisibleMounts` refusait donc **toute** écriture dans ce conteneur (échec fermé, §13). La tâche le retrouve comme `LocateMounts` retrouve déjà un bind ou un volume : par l'identifiant de montage de la destination résolue dans le conteneur (`pathrs`, jamais hors de la racine). Un tmpfs n'a pas de source qui le lie à une ligne : le lien est la forme de la ligne (type `tmpfs`, racine `/`), avec trois gardes contre les pièges (Q24) : P n'est pas `/` (prison), P n'est pas déjà pris (leurre : autre tmpfs, bind), P n'est pas sous `/dev`, `/proc`, `/sys` (leurre : montages du runtime). Retrouver le point ne suffit pas : Docker n'écrit jamais dans un tmpfs (mesuré au plan 3), donc `files` refuse d'écrire **sous** le point retrouvé, sinon l'écriture réussirait sans que le conteneur la voie. Pour un conteneur arrêté, l'index résout la destination comme runc le fera au démarrage, et une fin de chemin absente est recollée sous la partie résolue (Q25, R8). `LocateMounts` sert aussi au contrôle du tar d'un dossier (`CheckArchive`, §5.4 b) : un `--mount type=tmpfs` sous un lien n'y fait plus refuser tout tar, et la prison y reste refusée (Q38, R5).
 
-- [ ] **Step 1: Tests d'évasion qui échouent** — prison, leurre, lien vers un autre montage ; et le défaut de §13 sur un vrai Docker :
+- [x] **Step 1: Tests d'évasion qui échouent** — prison, leurre, lien vers un autre montage ; et le défaut de §13 sur un vrai Docker :
 
 ```diff
 diff --git a/internal/api/integration_write_linux_test.go b/internal/api/integration_write_linux_test.go
@@ -605,7 +605,7 @@ diff --git a/internal/fsview/tarindex_test.go b/internal/fsview/tarindex_test.go
 +}
 ```
 
-- [ ] **Step 2: Vérifier qu'ils échouent**
+- [x] **Step 2: Vérifier qu'ils échouent**
 
 Run: `go vet ./internal/fsview/ 2>&1 | tail -n 3 ; go test ./internal/files/ 2>&1 | tail -n 6`
 Expected: `not enough arguments in call to newTarFS` ; `--- FAIL: TestWriteRefusedWhenRootIsNotContainerRoot` et `--- FAIL: TestWriteRefusedUnderResolvedTmpfs` (la vue de test n'implémente plus l'ancienne interface).
@@ -613,7 +613,7 @@ Expected: `not enough arguments in call to newTarFS` ; `--- FAIL: TestWriteRefus
 Run: `GOOS=linux go vet -tags integration ./internal/fsview/ 2>&1 | tail -n 3 ; scripts/test-linux.sh -tags integration ./internal/api/ -run TmpfsUnderLink 2>&1 | tail -n 5`
 Expected: échec de compilation (`assignment mismatch: 2 variables but w.CheckWriteRoot returns 1 value`, ou d'abord `not enough arguments in call to newTarFS`) ; `--- FAIL: TestIntegrationWriteTmpfsUnderLink` — `envoi dans /etc : 403 {"error":"forbidden_path","detail":"… ne montre pas la destination /var/run …"}` : le défaut de §13, reproduit.
 
-- [ ] **Step 3: Implémenter**
+- [x] **Step 3: Implémenter**
 
 ```diff
 diff --git a/internal/files/files.go b/internal/files/files.go
@@ -968,14 +968,14 @@ diff --git a/internal/fsview/views.go b/internal/fsview/views.go
  // Forget drops every index of container id (full ID): plan Explorateur 3
 ```
 
-- [ ] **Step 4: Vérifier**
+- [x] **Step 4: Vérifier**
 
 Run: `go test ./internal/fsview/ ./internal/files/ 2>&1 | tail -n 3 && scripts/test-linux.sh -tags integration ./internal/fsview/ ./internal/files/ ./internal/api/ -run 'Tmpfs|CheckWriteRoot|LocateMounts|WriteRunning|WriteRefused' -v 2>&1 | grep -E '^(---|ok|FAIL)|SKIP|ÉVASION' | tail -n 20`
 Expected: `ok` ; sous Linux, `PASS` pour `TestLocateMountsTmpfs`, `TestCheckWriteRoot`, `TestCheckWriteRootJail`, `TestCheckArchiveTmpfsJail`, `TestTarCheckWriteRootTmpfs`, `TestIntegrationCheckWriteRoot`, `TestIntegrationCheckWriteRootTmpfsUnderLink`, `TestIntegrationCheckArchiveTmpfsUnderLink`, `TestWriteRefusedUnderResolvedTmpfs`, `TestIntegrationWriteRunning`, `TestIntegrationWriteTmpfsUnderLink`, aucun SKIP, aucune ligne `ÉVASION`. Le motif `-run` ci-dessus attrape aussi `TestCheckArchiveTmpfsJail` (`Tmpfs`).
 
 Mutations à rejouer (une fois, puis annuler) : retirer `l.Point == "/" ||` de `LocateMounts` → `TestLocateMountsTmpfs` (« prison dans le tmpfs acceptée »), `TestCheckArchiveTmpfsJail` (« tar accepté dans une prison tmpfs ») et `TestIntegrationCheckWriteRootTmpfsUnderLink` échouent ; retirer `&& !runtimeMount(l.Point)` → `TestLocateMountsTmpfs` (« leurre : /dev/shm du runtime accepté ») ; remplacer `return underTmpfs(target, points)` par `return nil` dans `checkRoot` → `TestWriteRefusedUnderResolvedTmpfs`.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add internal/fsview internal/files internal/api/integration_write_linux_test.go
@@ -1003,7 +1003,7 @@ EOF
 
 > **À comprendre :** `GET /containers/{id}/logs` rend un flux d'octets. Sans TTY, il est **multiplexé** : chaque message est une trame de 8 octets d'en-tête (type : 1 stdout, 2 stderr, 3 erreur du démon ; taille en gros-boutiste) puis la charge, `"<horodatage> <texte>\n"`. Avec un TTY, pas de trame : un seul flux, des fins de ligne `\r\n`. Docker coupe une ligne de plus de 16 Kio en parties qui portent **le même horodatage** (mesuré) ; en TTY, ces parties sont collées l'une à l'autre avec leur horodatage au milieu. `ReadLogs` recolle les parties (en TTY, l'horodatage n'est retiré qu'à la frontière exacte de 16 384 octets, et seulement s'il est identique à celui de la ligne), plafonne le texte à `max` et lit une trame par morceaux de 32 Kio : un en-tête qui annonce 1 Gio n'alloue rien. Il ne lit jamais plus d'octets que le flux n'en a envoyé : une ligne en direct part dès son `\n`.
 
-- [ ] **Step 1: Tests qui échouent** — formats mesurés, lignes longues, TTY, erreurs ; un vrai Docker pour les mesures :
+- [x] **Step 1: Tests qui échouent** — formats mesurés, lignes longues, TTY, erreurs ; un vrai Docker pour les mesures :
 
 ```diff
 diff --git a/internal/dockerx/integration_test.go b/internal/dockerx/integration_test.go
@@ -1370,12 +1370,12 @@ new file mode 100644
 +}
 ```
 
-- [ ] **Step 2: Vérifier qu'ils échouent**
+- [x] **Step 2: Vérifier qu'ils échouent**
 
 Run: `go vet ./internal/dockerx/ 2>&1 | tail -n 3`
 Expected: échec de compilation (`undefined: LogLine`, puis `LogsOptions`, `ReadLogs`…).
 
-- [ ] **Step 3: Implémenter**
+- [x] **Step 3: Implémenter**
 
 ```diff
 diff --git a/internal/dockerx/dockerx.go b/internal/dockerx/dockerx.go
@@ -1790,12 +1790,12 @@ new file mode 100644
 +}
 ```
 
-- [ ] **Step 4: Vérifier**
+- [x] **Step 4: Vérifier**
 
 Run: `go test -race ./internal/dockerx/ 2>&1 | tail -n 3 && DOCKER_HOST=unix://$HOME/.docker/run/docker.sock go test -tags integration ./internal/dockerx/ -run LogsRealDocker -v 2>&1 | grep -E '^(---|ok|FAIL)' | tail -n 5`
 Expected: `ok` ; `--- PASS: TestLogsRealDocker` (stdout et stderr séparés, ligne de 40 000 octets recollée et coupée à 16 Kio, TTY sur stdout, `Since` inclusif, `Tail 1`, `--log-driver none` → `ErrNoLogs`). Mutation : supprimer `if part++; part == dockerPartial && len(tsText) > 0 { match = 0 }` (garder `part++`) → `TestReadLogsTTYPartialMessages` échoue (« ligne de 16 Kio exactement »).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add internal/dockerx
@@ -1822,7 +1822,7 @@ EOF
 
 > **À comprendre :** un flux SSE est une réponse qui ne finit pas : `text/event-stream`, puis des blocs `champ: valeur` séparés par une ligne vide, poussés par `Flush`. `EventSource` se reconnecte seul et renvoie le dernier `id` reçu dans `Last-Event-ID` ; il ne sait pas lire une réponse d'erreur HTTP, d'où les erreurs dans le flux (Q29). Une goroutine lit Docker et pousse les lignes dans un canal ; la boucle principale attend une ligne, le battement ou la fin de la requête. En partant, elle annule le contexte, ferme le flux de Docker, vide le canal (la goroutine se termine) et seulement alors rend le créneau (Q33). Le seau de débit (Q31) compte les lignes refusées ; elles avancent quand même le rang. Le battement fait deux choses : `: ping`, et la relecture de la session (R3) ; une session finie ferme le flux par `failure` `unauthorized`. Chaque écriture pose un délai de 30 s (`SetWriteDeadline`, R4). Les créneaux (`streamSlots`) se comptent par flux ; quand ils sont pris, le flux SSE le plus ancien est évincé : son canal `evicted` se ferme, il envoie `event: evicted` et rend la main (Q33, Q37). Côté `main`, `srv.Shutdown` attendait des flux qui ne finissent jamais : l'arrêt annule désormais le contexte des requêtes.
 
-- [ ] **Step 1: Tests qui échouent** — un vrai serveur HTTP lit le flux événement par événement, comme un navigateur :
+- [x] **Step 1: Tests qui échouent** — un vrai serveur HTTP lit le flux événement par événement, comme un navigateur :
 
 ```diff
 diff --git a/internal/api/logs_test.go b/internal/api/logs_test.go
@@ -2470,12 +2470,12 @@ new file mode 100644
 +}
 ```
 
-- [ ] **Step 2: Vérifier qu'ils échouent**
+- [x] **Step 2: Vérifier qu'ils échouent**
 
 Run: `go vet ./internal/api/ 2>&1 | tail -n 3`
 Expected: échec de compilation (`undefined: logLimits`).
 
-- [ ] **Step 3: Implémenter**
+- [x] **Step 3: Implémenter**
 
 ```diff
 diff --git a/cmd/hublot/main.go b/cmd/hublot/main.go
@@ -2960,12 +2960,12 @@ diff --git a/internal/api/server.go b/internal/api/server.go
  	})
 ```
 
-- [ ] **Step 4: Vérifier**
+- [x] **Step 4: Vérifier**
 
 Run: `go test -race -count=20 ./internal/api/ -run Logs 2>&1 | tail -n 3 && go test ./cmd/... ./internal/... 2>&1 | tail -n 12`
 Expected: `ok` (vingt passages sans course ni test instable). Mutations : retirer `rc.Close()` du `defer` de `logsStream` → `TestLogsClientGone` (« le flux de Docker n'est pas fermé après le départ du client ») ; neutraliser `sessionValid` → `TestLogsSessionEnds` (« flux encore ouvert 2 s après la déconnexion ») ; retirer `e.deadline()` de `event` → `TestLogsWriteDeadline` ; remplacer `if len(s.live) == 0 {` par `if true {` → `TestStreamSlots`, `TestLogsEvictsOldest`.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add internal/api cmd/hublot/main.go
@@ -2991,7 +2991,7 @@ EOF
 
 > **À comprendre :** §7 masque une variable dont le **nom** contient l'un de neuf mots (sans tenir compte de la casse) ou dont la **valeur** contient une URL avec identifiants. La règle est une sous-chaîne : `KEYBOARD` et `COMPASS` sont masqués aussi, et c'est voulu (côté sûr ; la valeur se révèle). `Env` ne copie jamais une valeur masquée : `Value` reste `nil`, donc le JSON n'a rien à fuir. `Args` (Q27) travaille sur une copie et ne masque que des morceaux (`--password=••••••`, `postgres://••••••@db`), pour que la commande reste lisible ; une valeur peut être entre guillemets, ou cacher une autre affectation (`--env=DB_PASSWORD=x`). Les règles sont des heuristiques : d'où le repli fermé de `Line` (R1), jugé **localement** (R11, R12) : un mot de §7 dont la valeur, dans son propre mot, n'est pas masquée (drapeau, ou `=`/`:` après lui) masque l'argument entier ; un masque ailleurs dans la ligne ne compte pas ; un mot de §7 dans un chemin ou un mot ordinaire reste lisible, sinon la commande de Keycloak ou un `sh -c` qui lit `/run/secrets/…` disparaîtraient.
 
-- [ ] **Step 1: Tests qui échouent**
+- [x] **Step 1: Tests qui échouent**
 
 ```diff
 diff --git a/internal/secrets/secrets_test.go b/internal/secrets/secrets_test.go
@@ -3213,12 +3213,12 @@ new file mode 100644
 +}
 ```
 
-- [ ] **Step 2: Vérifier qu'ils échouent**
+- [x] **Step 2: Vérifier qu'ils échouent**
 
 Run: `go vet ./internal/secrets/ 2>&1 | tail -n 3`
 Expected: `undefined: SecretName`.
 
-- [ ] **Step 3: Implémenter**
+- [x] **Step 3: Implémenter**
 
 ```diff
 diff --git a/internal/secrets/secrets.go b/internal/secrets/secrets.go
@@ -3464,12 +3464,12 @@ new file mode 100644
 +}
 ```
 
-- [ ] **Step 4: Vérifier**
+- [x] **Step 4: Vérifier**
 
 Run: `go test -race ./internal/secrets/ 2>&1 | tail -n 3`
 Expected: `ok`. Mutations : `Masked` réduit à `SecretName(name)` → `TestEnv` et `TestEnvNeverLeaks` (« FUITE : s3cr3t-3 ») échouent ; `leaks` qui rend toujours `false` → `TestArgs` (« FUITE : "mysql -ps3cr3t --password" ») ; test de fuite global (`strings.Contains(s[loc[1]:], Mask)` au lieu du masque en fin de mot) → `TestArgs` (« FUITE : "echo --password=••••••(cat /f) …" ») ; exemption des chemins neutralisée → `TestArgs` (`--cert=/etc/ssl/private/x.pem` masqué à tort).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add internal/secrets
@@ -3497,7 +3497,7 @@ EOF
 
 > **À comprendre :** un seul `Inspect` donne tout. `Env`, `Cmd` et `Entrypoint` restent bruts dans `dockerx` (le code de l'agent en a besoin, par exemple pour révéler) et ne sortent que par `toRadioJSON`, qui passe par `secrets`. La révélation suit l'ordre d'une écriture : contrôles, journal, puis seulement la réponse ; le journal ne reçoit que le nom (Q28). Le contrôle d'`Origin` de §7 s'applique déjà à toute requête `POST`.
 
-- [ ] **Step 1: Tests qui échouent** — aucune réponse ne contient un secret ; la révélation est journalisée sans sa valeur :
+- [x] **Step 1: Tests qui échouent** — aucune réponse ne contient un secret ; la révélation est journalisée sans sa valeur :
 
 ```diff
 diff --git a/internal/api/container_test.go b/internal/api/container_test.go
@@ -3816,12 +3816,12 @@ diff --git a/internal/dockerx/dockerx_test.go b/internal/dockerx/dockerx_test.go
 +}
 ```
 
-- [ ] **Step 2: Vérifier qu'ils échouent**
+- [x] **Step 2: Vérifier qu'ils échouent**
 
 Run: `go vet ./internal/dockerx/ ./internal/api/ 2>&1 | tail -n 4`
 Expected: échec de compilation (`fromInspect(in).Details undefined`, `unknown field Mode in struct literal of type dockerx.Mount`).
 
-- [ ] **Step 3: Implémenter**
+- [x] **Step 3: Implémenter**
 
 ```diff
 diff --git a/internal/api/container.go b/internal/api/container.go
@@ -4166,12 +4166,12 @@ diff --git a/internal/dockerx/dockerx.go b/internal/dockerx/dockerx.go
  	if err != nil {
 ```
 
-- [ ] **Step 4: Vérifier**
+- [x] **Step 4: Vérifier**
 
 Run: `go test -race ./internal/dockerx/ ./internal/api/ 2>&1 | tail -n 3`
 Expected: `ok`. Mutations : passer `d.Cmd` et `d.Entrypoint` bruts à `radioJSON` → `TestContainerRadiography` (« FUITE : s3cr3t-cmd ») ; `Error: d.Error` brut → `TestContainerRadiography` (« FUITE : s3cr3t-err ») ; ignorer l'erreur du journal dans `revealEnv` → `TestRevealEnvRefusals` (« journal en échec : 200 … s3cr3t-env »).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add internal/dockerx internal/api
@@ -4197,7 +4197,7 @@ EOF
 
 > **À comprendre :** ce test ne protège pas un code à venir : il vérifie, contre un vrai démon, ce que les faux des tâches 3 et 5 supposent (format du flux, `since`, fin du flux à l'arrêt, pilote `none`, ports réels, réseau). Il est portable : ni les logs ni l'`Inspect` ne lisent `/proc`.
 
-- [ ] **Step 1: Écrire le test**
+- [x] **Step 1: Écrire le test**
 
 ```diff
 diff --git a/internal/api/integration_observation_test.go b/internal/api/integration_observation_test.go
@@ -4343,17 +4343,17 @@ new file mode 100644
 +}
 ```
 
-- [ ] **Step 2: Le lancer**
+- [x] **Step 2: Le lancer**
 
 Run: `DOCKER_HOST=unix://$HOME/.docker/run/docker.sock go test -tags integration -count=1 ./internal/api/ -run Observation -v 2>&1 | grep -E '^(---|ok|FAIL)' | tail -n 3`
 Expected: `--- PASS: TestIntegrationObservation` (environ 3 s).
 
-- [ ] **Step 3: Suite complète sous Linux**
+- [x] **Step 3: Suite complète sous Linux**
 
 Run: `scripts/test-linux.sh -race -tags integration -count=1 ./cmd/... ./internal/... 2>&1 | tail -n 12`
 Expected: `ok` pour chaque paquet, `internal/secrets` compris.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add internal/api/integration_observation_test.go
@@ -4381,7 +4381,7 @@ EOF
 
 > **À comprendre :** `EventSource` rappelle `onmessage` pour chaque ligne (événement sans nom) et `addEventListener(nom)` pour `end`, `dropped`, `failure`. Son `onerror` sert à deux choses : `readyState === CONNECTING`, le navigateur se reconnecte seul (avec `Last-Event-ID`) ; `CLOSED`, une réponse non SSE (session expirée) : on demande `/api/meta` pour savoir si c'est un `401`. Les lignes arrivent par centaines : elles attendent dans `pending` et rejoignent `lines` une fois par image (`requestAnimationFrame`), sinon Svelte rendrait la liste à chaque ligne. La pause ferme le flux et garde `lastId` ; reprendre rouvre avec `after` (Q30). `failure` `unauthorized` (session finie) renvoie à la connexion ; `evicted` ferme le flux sans reconnexion et propose « Recharger » (Q37). Le lien de téléchargement disparaît quand le flux est en erreur : le navigateur enregistrerait sinon le JSON de l'erreur dans un `.log` (R9). L'effet ne lit pas `status` (il l'écrit) : sinon chaque changement d'état rouvrirait le flux.
 
-- [ ] **Step 1: Tests qui échouent**
+- [x] **Step 1: Tests qui échouent**
 
 ```diff
 diff --git a/web/src/lib/api.test.ts b/web/src/lib/api.test.ts
@@ -4489,12 +4489,12 @@ new file mode 100644
 +});
 ```
 
-- [ ] **Step 2: Vérifier qu'ils échouent**
+- [x] **Step 2: Vérifier qu'ils échouent**
 
 Run: `cd web && npx vitest run 2>&1 | tail -n 6`
 Expected: `Test Files  3 failed` (`logs.test.ts` ne trouve pas `./logs`, `api.test.ts` ne trouve pas `logsUrl`, `i18n.test.ts` : `logs_unavailable` absent de `API_ERROR_CODES`).
 
-- [ ] **Step 3: Implémenter**
+- [x] **Step 3: Implémenter**
 
 ```diff
 diff --git a/web/src/lib/api.ts b/web/src/lib/api.ts
@@ -4899,12 +4899,12 @@ diff --git a/web/src/routes/c/[id]/+page.svelte b/web/src/routes/c/[id]/+page.sv
  				id={container.id}
 ```
 
-- [ ] **Step 4: Vérifier**
+- [x] **Step 4: Vérifier**
 
 Run: `cd web && npx vitest run 2>&1 | tail -n 4 && npm run check 2>&1 | tail -n 2 && npm run lint 2>&1 | tail -n 4`
 Expected: 77 tests verts une fois la tâche 8 faite (70 ici, dont `decides what an end of stream does`) ; `0 ERRORS 0 WARNINGS` ; `lint` sans message.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add web/src
@@ -4932,7 +4932,7 @@ EOF
 
 > **À comprendre :** l'interface ne masque rien : elle montre ce que l'agent envoie (`null` → `•••••• (masquée)`, et les `••••••` de la commande tels quels). Une valeur révélée vit dans l'état du composant, jamais dans `localStorage` ni dans l'URL, et « Masquer » l'oublie. `commandLine` met entre apostrophes ce qu'un shell couperait, pour qu'on lise la commande comme on la taperait.
 
-- [ ] **Step 1: Tests qui échouent**
+- [x] **Step 1: Tests qui échouent**
 
 ```diff
 diff --git a/web/src/lib/api.test.ts b/web/src/lib/api.test.ts
@@ -5025,12 +5025,12 @@ new file mode 100644
 +});
 ```
 
-- [ ] **Step 2: Vérifier qu'ils échouent**
+- [x] **Step 2: Vérifier qu'ils échouent**
 
 Run: `cd web && npx vitest run 2>&1 | tail -n 6`
 Expected: `Test Files  2 failed` (`xray.test.ts` ne trouve pas `./xray` ; `api.test.ts` : `getContainer` et `revealEnv` absents).
 
-- [ ] **Step 3: Implémenter**
+- [x] **Step 3: Implémenter**
 
 ```diff
 diff --git a/web/src/lib/api.ts b/web/src/lib/api.ts
@@ -5466,12 +5466,12 @@ diff --git a/web/src/routes/c/[id]/+page.svelte b/web/src/routes/c/[id]/+page.sv
  	[role='alert'] { color: #b00020; }
 ```
 
-- [ ] **Step 4: Vérifier**
+- [x] **Step 4: Vérifier**
 
 Run: `cd web && npx vitest run 2>&1 | tail -n 4 && npm run check 2>&1 | tail -n 2 && npm run lint 2>&1 | tail -n 4 && npm run build 2>&1 | tail -n 3`
 Expected: 77 tests verts ; `0 ERRORS 0 WARNINGS` ; `lint` sans message ; `✔ done`.
 
-- [ ] **Step 5: Parcours jetable contre un vrai agent (non commité)** — créer `web/e2e/obs-jetable.e2e.ts` et `scripts/e2e-obs-jetable.sh`, les lancer, puis les supprimer :
+- [x] **Step 5: Parcours jetable contre un vrai agent (non commité)** — créer `web/e2e/obs-jetable.e2e.ts` et `scripts/e2e-obs-jetable.sh`, les lancer, puis les supprimer :
 
 ```ts
 import { expect, test } from '@playwright/test';
@@ -5577,7 +5577,7 @@ echo "MESURE début du flux lu par curl :"; head -c 200 "$sse"; echo
 Run: `export PATH=/opt/homebrew/bin:$PATH DOCKER_HOST=unix://$HOME/.docker/run/docker.sock && bash scripts/e2e-obs-jetable.sh 2>&1 | tail -n 12 ; rm web/e2e/obs-jetable.e2e.ts scripts/e2e-obs-jetable.sh`
 Expected: `2 passed` (le parcours unique et le jetable) ; `MESURE arrêt de l'agent avec un flux ouvert : 1 s, code 0` (6 s et code 1 sans le `RegisterOnShutdown` de la tâche 3) ; le début du flux montre des lignes `id: <horodatage>/0` et `data: {"ts":…,"stream":"stdout","line":"tick …"}`.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git status --short web/e2e scripts   # rien : le parcours jetable n'est pas commité
@@ -5598,7 +5598,7 @@ EOF
 **Files:**
 - Modify: `docs/superpowers/specs/2026-10-07-hublot-kit-v0.1-design.md` (§5.3, §5.4, §6, §7, §13), `docs/superpowers/plans/2026-10-10-observation-logs-radiographie.md` (cases cochées, constats)
 
-- [ ] **Step 1: Reporter les décisions dans la spec** — remplacer chaque passage par le suivant (chacun est unique dans la spec ; vérifier par `grep -c`).
+- [x] **Step 1: Reporter les décisions dans la spec** — remplacer chaque passage par le suivant (chacun est unique dans la spec ; vérifier par `grep -c`).
 
 1. §5.3 étape 2, tmpfs retrouvé (tâche 1, Q24, Q25) — remplacer :
 
@@ -5755,14 +5755,14 @@ EOF
    | Éviction d'un flux de logs par un autre : les créneaux sont communs à toutes les sessions | la v0.1 n'a qu'un utilisateur (§2), avec une session exigée et un cookie `SameSite=Strict`, et un onglet évincé ne se reconnecte pas : non exploitable ; à revoir si l'agent devient multi-utilisateur (v0.2) |
    ```
 
-- [ ] **Step 2: Suite complète sur les deux VM**
+- [x] **Step 2: Suite complète sur les deux VM**
 
 Run (pour chaque VM) : `limactl start hk-ubuntu >/dev/null && limactl shell --workdir "$PWD" hk-ubuntu -- sudo scripts/test-linux.sh -race -tags integration -count=1 ./cmd/... ./internal/... 2>&1 | grep -E '^(ok|FAIL|---)' | tail -n 30`, puis idem `hk-fedora`.
 Expected: `ok` pour chaque paquet ; `TestIntegrationWriteTmpfsUnderLink`, `TestIntegrationCheckWriteRootTmpfsUnderLink`, `TestIntegrationCheckArchiveTmpfsUnderLink`, `TestCheckArchiveTmpfsJail`, `TestLogsRealDocker` et `TestIntegrationObservation` passent sans SKIP (vérifier par `-run 'Tmpfs|Logs|Observation' -v` ; seul `TestIntegrationDockerSocketUnderVarRun` peut se sauter, et seulement sur Docker Desktop). Sur `hk-fedora`, aucun AVC (`sudo ausearch -m avc -ts recent`, vide) ; sur `hk-ubuntu`, aucun `apparmor="DENIED"` dans `dmesg`. Vérifier en particulier que `/var/run` → `../run` dans `alpine:3` sur les deux (sinon le test se saute en le disant).
 
-- [ ] **Step 3: Revue de branche** — demander la revue complète de la branche (sous-agent indépendant + Codex), corriger, puis cocher les cases de ce plan et noter les constats sous « Constats de la tâche 9 » : résultat des deux VM, AVC éventuels, verdict de la revue, réponses de l'utilisateur aux questions Q24 à Q35.
+- [ ] **Step 3: Revue de branche** — demander la revue complète de la branche (sous-agent indépendant + Codex), corriger, puis cocher les cases de ce plan et noter les constats sous « Constats de la tâche 9 » : résultat des deux VM, AVC éventuels, verdict de la revue, réponses de l'utilisateur aux questions Q24 à Q38.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add docs/superpowers
@@ -5791,4 +5791,11 @@ EOF
 
 #### Constats de la tâche 9
 
-- Remplis par l'étape 3 : résultat des deux VM, AVC, verdict de la revue, réponses de l'utilisateur aux questions Q24 à Q35.
+- Spec (étape 1, commit de la tâche 9) : les 12 remplacements, adaptés au livré. §5.3 étape 2 et §5.4 (b) : un tmpfs ne se lie que s'il est fils d'une ligne `/` (revue I1 de la tâche 1). §6 : l'ID de ligne est `<ts>/<flux>/<rang>` (arbitrage de la tâche 6, l'ancien `<ts>/<rang>` vaut départ ordinaire), `tail` hors bornes ramené à 500 ou 10 000, téléchargement : erreur JSON avant le premier octet, coupure après, abandon après 1 min sans ligne. §7 : sosies Unicode, `Bearer`/`Basic`, clé JSON, plafond de 8 Kio, cycle de vie des valeurs révélées. §13 : tmpfs sous un tmpfs ou un volume (faux refus), limite M1 de l'index, rotation du journal et recul d'horloge (tâche 6), les 10 limites de masquage de la tâche 4. Aussi §3 (`containerd/errdefs`), §4, §9 (Logs, Radiographie, critère « arrêté »), §10.
+- Petits correctifs de test (tâche 6) : `rmAll` journalise un échec de `docker rm` ; commentaire de `sse` corrigé (échec en 10 s, plus « jusqu'au -timeout ») ; `-timeout 5m` dans `scripts/test-linux.sh` et le job CI d'intégration (plutôt qu'un pré-tirage des images) ; commentaire M1 de `tarFS.CheckWriteRoot` aligné sur §13.
+- `hk-ubuntu` (AppArmor ; noyau 7.0.0-34-generic, Docker 29.8.2, API 1.56, overlayfs, cgroup systemd) : `scripts/test-linux.sh -race -tags integration -count=1 -v ./cmd/... ./internal/...` → 10 paquets `ok`, 387 tests `PASS`, aucun `SKIP` ; `dmesg` : 0 `apparmor="DENIED"`. `alpine:3` : `/var/run -> ../run`.
+- `hk-fedora` (SELinux `Enforcing` ; Fedora 44, noyau 6.19.10-300.fc44, Docker 29.8.2, API 1.56) : 10 paquets `ok`, 387 `PASS`, aucun `SKIP` ; `ausearch -m avc` depuis le lancement de la suite et depuis le démarrage : aucun AVC. `alpine:3` : `/var/run -> ../run`.
+- Docker Desktop (29.7.2, API 1.55) : 10 paquets `ok`, 386 `PASS`, un seul `SKIP` attendu, `TestIntegrationDockerSocketUnderVarRun` (socket mandataire).
+- Sur les trois : `TestIntegrationWriteTmpfsUnderLink`, `TestIntegrationCheckWriteRootTmpfsUnderLink`, `TestIntegrationCheckArchiveTmpfsUnderLink`, `TestCheckArchiveTmpfsJail`, `TestLogsRealDocker` et `TestIntegrationObservation` passent sans `SKIP` ; aucun conteneur `hublot-it-*` laissé. Paquet `api` en 9 à 11 s, toute la suite loin des 5 min.
+- Réponses de l'utilisateur : Q24 à Q38 confirmées le 2026-10-10 (Q34 `logs_unavailable`, Q27 sans révélation de la commande, Q28 révélation permise en lecture seule).
+- Revue de branche (étape 3) : *à remplir — verdict du sous-agent indépendant et de Codex, correctifs éventuels.*
