@@ -198,6 +198,10 @@ func TestArgs(t *testing.T) {
 		{[]string{"sh", "-c", `app --password s3\ cr3t --x`}, []string{"sh", "-c", "app --password " + Mask + " --x"}, true},
 		{[]string{"curl", "-H", "Authorization: Bearer s3cr3t", "http://x"}, []string{"curl", "-H", "Authorization: Bearer " + Mask, "http://x"}, true},
 		{[]string{"sh", "-c", "curl -H 'Authorization: Basic s3cr3t' http://x"}, []string{"sh", "-c", "curl -H 'Authorization: Basic " + Mask + "' http://x"}, true},
+		// Fix round 2, Minor: JSON escaped inside a shell line (\"password\":\"x\").
+		{[]string{"sh", "-c", `curl -d "{\"password\":\"s3cr3t\"}" http://x`}, []string{"sh", "-c", Mask}, true},
+		{[]string{"curl", "-d", `{\"password\":\"s3cr3t\"}`, "http://x"}, []string{"curl", "-d", Mask, "http://x"}, true},
+		{[]string{"sh", "-c", `curl -d "{\"password\": \"s3cr3t\", \"a\": 1}" http://x`}, []string{"sh", "-c", Mask}, true},
 		// Over the cap: masked whole (fail closed).
 		{[]string{"app", strings.Repeat("a", maxLen+1)}, []string{"app", Mask}, true},
 	}
@@ -233,6 +237,12 @@ func TestLine(t *testing.T) {
 	// Fix round 1: JSON, and the cap.
 	if got := Line(`{"password":"s3cr3t"}`); got != Mask {
 		t.Errorf("JSON : %q", got)
+	}
+	// Fix round 2, Minor: escaped JSON.
+	for _, m := range []string{`{\"password\":\"s3cr3t\"}`, `{\"token\" : \"s3cr3t\"}`, `{\"key\":\"s3cr3t\"}`} {
+		if got := Line(m); got != Mask {
+			t.Errorf("JSON échappé %q : %q", m, got)
+		}
 	}
 	if got := Line(strings.Repeat("a", maxLen+1)); got != Mask {
 		t.Errorf("au-dessus du plafond : %.20q", got)
@@ -284,4 +294,41 @@ func TestCost(t *testing.T) {
 	within(t, "Masked k=v, sous le plafond", 250*time.Millisecond, func() { Masked("X", strings.Repeat("k=v,", maxLen/4-1)) })
 	within(t, "Line key sous le plafond", 250*time.Millisecond, func() { Line(strings.Repeat("key", maxLen/3-1)) })
 	within(t, "Args sous le plafond", 250*time.Millisecond, func() { Args([]string{"app", "--attrs=" + strings.Repeat("service.name=x,", 500)}) })
+
+	// Fix round 2, I: many words of §7 that share one separator, then a long
+	// tail; and a flag made of many words, then many blanks before a mask.
+	// Each word must not rescan the tail. The cost is compared with a plain
+	// input of the same size (ratio, not a duration: CI machines differ).
+	pad := func(s, fill string) string { return s + strings.Repeat(fill, (maxLen-len(s))/len(fill)) }
+	sep := pad(":"+strings.Repeat("key", 700)+"=x;", ";")
+	blanks := pad("-"+strings.Repeat("key", 700), " ")
+	blanks = blanks[:maxLen-len(Mask)] + Mask
+	plain := pad("", "abc ")
+	if Line(sep) == sep || Line(blanks) != blanks || Line(plain) != plain {
+		t.Error("entrées du test de coût : masquage inattendu")
+	}
+	for _, k := range []struct{ name, in string }{{"séparateur partagé", sep}, {"blancs avant le masque", blanks}} {
+		r := costRatio(k.in, plain)
+		t.Logf("Line %s : rapport %.1f", k.name, r)
+		if r > 8 {
+			t.Errorf("Line %s : %.1f fois le coût d'une entrée banale de même taille, plafond 8", k.name, r)
+		}
+	}
+}
+
+// costRatio: the best time of Line on s over the best time on ref, over a
+// few runs (the best time is the least noisy).
+func costRatio(s, ref string) float64 {
+	best := func(in string) time.Duration {
+		b := time.Duration(1 << 62)
+		for range 5 {
+			st := time.Now()
+			for range 16 {
+				Line(in)
+			}
+			b = min(b, time.Since(st))
+		}
+		return b
+	}
+	return float64(best(s)) / float64(best(ref))
 }
