@@ -2,7 +2,8 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import type { Radiography } from './api';
 import {
-	addReveal, commandLine, envValue, isStopped, mountLabel, noReveals, portLabel, removeReveal, restartLabel, revealedFor, shortId
+	addReveal, askFor, commandLine, envValue, forgetReveals, isStopped, mountLabel, noReveals, portLabel, removeReveal, restartLabel,
+	revealedFor, shortId
 } from './xray';
 
 describe('xray (F7)', () => {
@@ -51,26 +52,42 @@ describe('xray (F7)', () => {
 
 	it('keeps a revealed value for its container only, and Hide forgets it', () => {
 		const masked = (name: string) => ({ name, value: null, masked: true });
-		const a = addReveal(noReveals, 'a', 'a', 'DB_PASSWORD', 's3cr3t');
+		const a = addReveal(noReveals, askFor(noReveals, 'a'), 'a', 'DB_PASSWORD', 's3cr3t');
 		expect(envValue(masked('DB_PASSWORD'), revealedFor(a, 'a'))).toBe('s3cr3t');
 		// Same variable name, another container: nothing shown.
 		expect(envValue(masked('DB_PASSWORD'), revealedFor(a, 'b'))).toBeNull();
 		// An answer for a container no longer shown is dropped.
-		const late = addReveal(noReveals, 'a', 'b', 'DB_PASSWORD', 's3cr3t');
+		const late = addReveal(noReveals, askFor(noReveals, 'a'), 'b', 'DB_PASSWORD', 's3cr3t');
 		expect(envValue(masked('DB_PASSWORD'), revealedFor(late, 'b'))).toBeNull();
 		expect(envValue(masked('DB_PASSWORD'), revealedFor(late, 'a'))).toBeNull();
 		// A reveal on another container starts from nothing.
-		const b = addReveal(a, 'b', 'b', 'TOKEN', 't0k');
+		const b = addReveal(a, askFor(a, 'b'), 'b', 'TOKEN', 't0k');
 		expect(revealedFor(b, 'b')).toEqual({ TOKEN: 't0k' });
 		expect(revealedFor(b, 'a')).toEqual({});
 		// Hide forgets one value, keeps the others.
-		const two = addReveal(a, 'a', 'a', 'TOKEN', 't0k');
+		const two = addReveal(a, askFor(a, 'a'), 'a', 'TOKEN', 't0k');
 		const hidden = removeReveal(two, 'DB_PASSWORD');
 		expect(envValue(masked('DB_PASSWORD'), revealedFor(hidden, 'a'))).toBeNull();
 		expect(envValue(masked('TOKEN'), revealedFor(hidden, 'a'))).toBe('t0k');
 		// Nothing above changed the earlier states.
 		expect(revealedFor(a, 'a')).toEqual({ DB_PASSWORD: 's3cr3t' });
 		expect(revealedFor(noReveals, '')).toEqual({});
+	});
+
+	it('drops an answer that comes back after pagehide or unmount (generation)', () => {
+		const masked = { name: 'DB_PASSWORD', value: null, masked: true };
+		const a = addReveal(noReveals, askFor(noReveals, 'a'), 'a', 'TOKEN', 't0k');
+		const asked = askFor(a, 'a'); // before the await
+		const forgotten = forgetReveals(a); // pagehide while the reveal is pending
+		expect(revealedFor(forgotten, 'a')).toEqual({});
+		const late = addReveal(forgotten, asked, 'a', 'DB_PASSWORD', 's3cr3t');
+		expect(envValue(masked, revealedFor(late, 'a'))).toBeNull();
+		// A reveal asked after the forgetting is kept.
+		const again = addReveal(forgotten, askFor(forgotten, 'a'), 'a', 'DB_PASSWORD', 's3cr3t');
+		expect(envValue(masked, revealedFor(again, 'a'))).toBe('s3cr3t');
+		// Hide keeps the generation: a pending reveal of another variable still lands.
+		const hid = removeReveal(a, 'TOKEN');
+		expect(revealedFor(addReveal(hid, askFor(a, 'a'), 'a', 'DB_PASSWORD', 's3cr3t'), 'a')).toEqual({ DB_PASSWORD: 's3cr3t' });
 	});
 
 	it('treats a restarting container as stopped, like the agent (Running && Pid != 0)', () => {
