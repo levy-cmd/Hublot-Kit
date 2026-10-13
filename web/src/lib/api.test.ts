@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { api, ApiError, checkDownload, downloadUrl, listDir, login, previewFile, saveFile, uploadFile } from './api';
+import {
+	api, ApiError, checkDownload, downloadUrl, getContainer, listDir, login, logsDownloadUrl, logsUrl, previewFile, revealEnv, saveFile, uploadFile
+} from './api';
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -149,5 +151,41 @@ describe('writes (F4)', () => {
 	it('maps a refused write', async () => {
 		stubFetch(async () => new Response(JSON.stringify({ error: 'conflict' }), { status: 409 }));
 		await expect(saveFile('web', '/f', 'x', '"a"')).rejects.toMatchObject({ status: 409, code: 'conflict' });
+	});
+});
+
+describe('logs routes (F6)', () => {
+	it('builds the stream and download URLs', () => {
+		expect(logsUrl('web')).toBe('/api/containers/web/logs');
+		expect(logsUrl('web', { tail: 200 })).toBe('/api/containers/web/logs?tail=200');
+		expect(logsUrl('a b', { after: '2026-10-10T07:14:22.769Z/0' })).toBe(
+			'/api/containers/a%20b/logs?after=2026-10-10T07%3A14%3A22.769Z%2F0'
+		);
+		expect(logsDownloadUrl('web')).toBe('/api/containers/web/logs/download');
+	});
+});
+
+describe('radiography (F7)', () => {
+	it('gets a container by an encoded id', async () => {
+		const fetchMock = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ id: 'abc', name: 'web' })));
+		vi.stubGlobal('fetch', fetchMock);
+		await expect(getContainer('a b')).resolves.toMatchObject({ name: 'web' });
+		expect(fetchMock.mock.calls[0][0]).toBe('/api/containers/a%20b');
+	});
+
+	it('reveals one variable by a JSON POST', async () => {
+		const fetchMock = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ name: 'DB_PASSWORD', value: 's3cr3t' })));
+		vi.stubGlobal('fetch', fetchMock);
+		await expect(revealEnv('web', 'DB_PASSWORD')).resolves.toBe('s3cr3t');
+		const [url, init] = fetchMock.mock.calls[0];
+		expect(url).toBe('/api/containers/web/env/reveal');
+		expect(init?.method).toBe('POST');
+		expect(init?.body).toBe('{"name":"DB_PASSWORD"}');
+		expect(new Headers(init?.headers).get('Content-Type')).toBe('application/json');
+	});
+
+	it('reports a refused reveal as an ApiError', async () => {
+		stubFetch(async () => new Response(JSON.stringify({ error: 'not_found', detail: 'variable inconnue' }), { status: 404 }));
+		await expect(revealEnv('web', 'NOPE')).rejects.toMatchObject({ status: 404, code: 'not_found' });
 	});
 });

@@ -16,6 +16,7 @@ import (
 	"io/fs"
 	"log/slog"
 	"path"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -109,7 +110,7 @@ func (w *Writer) Edit(ctx context.Context, c dockerx.ContainerInfo, p string, co
 		return "", err
 	}
 	defer fsys.Close()
-	if err := checkRoot(ctx, fsys); err != nil {
+	if err := checkRoot(ctx, fsys, target); err != nil {
 		return "", err
 	}
 	e, err := fsys.StatNoLinks(ctx, target)
@@ -182,7 +183,7 @@ func (w *Writer) Upload(ctx context.Context, c dockerx.ContainerInfo, dir, name 
 		return "", err
 	}
 	defer fsys.Close()
-	if err := checkRoot(ctx, fsys); err != nil {
+	if err := checkRoot(ctx, fsys, target); err != nil {
 		return "", err
 	}
 	d, err := fsys.StatNoLinks(ctx, parent)
@@ -244,12 +245,19 @@ func (w *Writer) put(ctx context.Context, action, id, target string, tarball []b
 }
 
 // checkRoot: the view must show the container's own root, else it checks a
-// tree Docker does not write in (a chrooted PID 1; review I1).
-func checkRoot(ctx context.Context, fsys fsview.FS) error {
-	if rc, ok := fsys.(fsview.WriteRootChecker); ok {
-		return rc.CheckWriteRoot(ctx)
+// tree Docker does not write in (a chrooted PID 1; review I1). target must
+// not be under a tmpfs where the view finds it (spec §13: a --tmpfs under a
+// link, /var/run -> ../run, is at /run): Docker would write unseen.
+func checkRoot(ctx context.Context, fsys fsview.FS, target string) error {
+	rc, ok := fsys.(fsview.WriteRootChecker)
+	if !ok {
+		return nil
 	}
-	return nil
+	points, err := rc.CheckWriteRoot(ctx)
+	if err != nil {
+		return err
+	}
+	return underTmpfs(target, points)
 }
 
 // readCapped reads the current file through the view (regular files only),
@@ -308,17 +316,23 @@ func (w *Writer) writable(ctx context.Context, c dockerx.ContainerInfo, target s
 	case "/etc/hosts", "/etc/hostname", "/etc/resolv.conf":
 		return fmt.Errorf("%w : %s est géré et monté par Docker", fsview.ErrForbiddenPath, target)
 	}
+	tmpfs := slices.Clone(c.Tmpfs)
 	for _, m := range c.Mounts {
 		d := fsview.CleanPath(m.Destination)
 		if d == target {
 			return fmt.Errorf("%w : %s est monté (%s %s) : modifiez sa source", fsview.ErrForbiddenPath, target, m.Type, m.Source+m.Name)
 		}
-		if m.Type == "tmpfs" && under(target, d) {
-			return fmt.Errorf("%w : %s est sous le tmpfs %s, Docker n'y écrit pas", fsview.ErrForbiddenPath, target, d)
+		if m.Type == "tmpfs" {
+			tmpfs = append(tmpfs, d)
 		}
 	}
-	for _, d := range c.Tmpfs {
-		if under(target, fsview.CleanPath(d)) {
+	return underTmpfs(target, tmpfs)
+}
+
+// underTmpfs refuses target on or under one of the tmpfs mount points.
+func underTmpfs(target string, points []string) error {
+	for _, d := range points {
+		if d := fsview.CleanPath(d); under(target, d) {
 			return fmt.Errorf("%w : %s est sous le tmpfs %s, Docker n'y écrit pas", fsview.ErrForbiddenPath, target, d)
 		}
 	}

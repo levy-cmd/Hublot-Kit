@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -52,6 +53,31 @@ func TestCheckArchiveMountTable(t *testing.T) {
 	}
 	if err := p.CheckArchive(ctx, "/etc"); err != nil {
 		t.Errorf("/etc : %v", err)
+	}
+}
+
+// Review I5: the tar check (spec §5.4 b) locates a tmpfs of Inspect.Mounts
+// (--mount type=tmpfs) under a link too. A PID 1 chrooted into that tmpfs,
+// with a link planted to its root, leads the destination to "/": refused.
+// The table is faked (a whole tmpfs on "/", with the real root's mount ID);
+// the destination is a real link to "/" in the test machine.
+func TestCheckArchiveTmpfsJail(t *testing.T) {
+	p, _ := childView(t)
+	st, err := statxMountID(int(p.root.Fd()), 0, 0)
+	must(t, err)
+	link := filepath.Join(t.TempDir(), "var-run")
+	must(t, os.Symlink("/", link))
+	if _, err := p.mountIdent(link); err != nil {
+		t.Skipf("précondition absente : %s illisible dans la vue (%v) ; lancer par scripts/test-linux.sh", link, err)
+	}
+	old := readMountinfo
+	t.Cleanup(func() { readMountinfo = old })
+	readMountinfo = func(int) ([]byte, error) {
+		return []byte(fmt.Sprintf("%d 1 0:50 / / rw - tmpfs tmpfs rw\n", st.Mnt_id)), nil
+	}
+	p.mounts = []dockerx.Mount{{Type: "tmpfs", Destination: link}}
+	if err := p.CheckArchive(ctx, "/etc"); !errors.Is(err, ErrForbiddenPath) {
+		t.Fatalf("ÉVASION : tar accepté dans une prison tmpfs (%v)", err)
 	}
 }
 
@@ -180,7 +206,7 @@ func TestCheckArchiveDestinationUnderSymlink(t *testing.T) {
 // table is faked: a real chrooted child needs a binary inside the jail.
 func TestCheckWriteRoot(t *testing.T) {
 	p, _ := childView(t)
-	if err := p.CheckWriteRoot(ctx); err != nil {
+	if _, err := p.CheckWriteRoot(ctx); err != nil {
 		t.Fatalf("process non chrooté : %v", err)
 	}
 	old := readMountinfo
@@ -188,12 +214,12 @@ func TestCheckWriteRoot(t *testing.T) {
 	readMountinfo = func(int) ([]byte, error) {
 		return []byte("36 35 8:1 / /etc rw - ext4 /dev/sda1 rw\n"), nil
 	}
-	err := p.CheckWriteRoot(ctx)
+	_, err := p.CheckWriteRoot(ctx)
 	if !errors.Is(err, ErrForbiddenPath) || !strings.Contains(err.Error(), "racine") {
 		t.Fatalf("racine déplacée : %v, attendu ErrForbiddenPath", err)
 	}
 	readMountinfo = func(int) ([]byte, error) { return nil, errors.New("illisible") }
-	if err := p.CheckWriteRoot(ctx); err == nil {
+	if _, err := p.CheckWriteRoot(ctx); err == nil {
 		t.Fatal("mountinfo illisible : doit échouer fermé")
 	}
 }
@@ -220,24 +246,24 @@ func TestCheckWriteRootJail(t *testing.T) {
 	p.tmpfs = []string{"/run"}
 
 	readMountinfo = table(st.Mnt_id, "/data", "/jail", "/run")
-	if err := p.CheckWriteRoot(ctx); err != nil {
-		t.Fatalf("conteneur ordinaire, tout est visible : %v", err)
+	if points, err := p.CheckWriteRoot(ctx); err != nil || !slices.Equal(points, []string{"/run"}) {
+		t.Fatalf("conteneur ordinaire, tout est visible : %v %v, attendu le tmpfs /run", points, err)
 	}
 	readMountinfo = table(st.Mnt_id, "/data", "/run") // chroot /jail in a volume
-	if err := p.CheckWriteRoot(ctx); !errors.Is(err, ErrForbiddenPath) || !strings.Contains(err.Error(), "/jail") {
+	if _, err := p.CheckWriteRoot(ctx); !errors.Is(err, ErrForbiddenPath) || !strings.Contains(err.Error(), "/jail") {
 		t.Fatalf("prison dans un volume : %v, attendu ErrForbiddenPath nommant /jail", err)
 	}
 	p.mounts = []dockerx.Mount{{Type: "volume", Destination: "/data"}}
 	p.tmpfs = []string{"/jail"}
 	readMountinfo = table(st.Mnt_id, "/data") // chroot /jail in a tmpfs
-	if err := p.CheckWriteRoot(ctx); !errors.Is(err, ErrForbiddenPath) || !strings.Contains(err.Error(), "/jail") {
+	if _, err := p.CheckWriteRoot(ctx); !errors.Is(err, ErrForbiddenPath) || !strings.Contains(err.Error(), "/jail") {
 		t.Fatalf("prison dans un tmpfs : %v, attendu ErrForbiddenPath nommant /jail", err)
 	}
 	// The root pinned when the view was opened is not the root of the table
 	// any more (chroot after the open).
 	p.tmpfs = nil
 	readMountinfo = table(st.Mnt_id+1000, "/data")
-	if err := p.CheckWriteRoot(ctx); !errors.Is(err, ErrForbiddenPath) || !strings.Contains(err.Error(), "racine épinglée") {
+	if _, err := p.CheckWriteRoot(ctx); !errors.Is(err, ErrForbiddenPath) || !strings.Contains(err.Error(), "racine épinglée") {
 		t.Fatalf("racine épinglée différente : %v, attendu ErrForbiddenPath", err)
 	}
 }

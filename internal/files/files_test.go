@@ -809,14 +809,15 @@ func TestEditRefusesMountPoint(t *testing.T) {
 	}
 }
 
-// rootView is MemFS plus the root check of a running container
-// (fsview.WriteRootChecker, implemented by procfs).
+// rootView is MemFS plus the root check of a view (fsview.WriteRootChecker,
+// implemented by procfs and tarindex): err, or the tmpfs mount points.
 type rootView struct {
 	*fsview.MemFS
-	err error
+	err    error
+	points []string
 }
 
-func (v rootView) CheckWriteRoot(context.Context) error { return v.err }
+func (v rootView) CheckWriteRoot(context.Context) ([]string, error) { return v.points, v.err }
 
 // Review I1: with a chrooted PID 1 the view shows another tree than the one
 // Docker writes in. The view says so: no edit, no upload, no audit line, no
@@ -837,5 +838,35 @@ func TestWriteRefusedWhenRootIsNotContainerRoot(t *testing.T) {
 	r.w.Open = func(context.Context, string) (fsview.FS, error) { return view, nil }
 	if _, err := r.w.Edit(ctx, ctr, "/etc/app.conf", []byte("x"), confTag); err != nil {
 		t.Fatalf("contrôle, racine du conteneur : %v", err)
+	}
+}
+
+// Spec §13: a --tmpfs under a link (/var/run -> ../run) is mounted at /run;
+// the view finds it there (CheckWriteRoot). Docker never writes into a
+// tmpfs: a write under /run would succeed where the container never sees
+// it. Refused before any intent; the rest of the container stays writable.
+func TestWriteRefusedUnderResolvedTmpfs(t *testing.T) {
+	r := newRig(t, false)
+	r.mem.AddDir("/run").AddFile("/run/app.pid", []byte("1\n"))
+	r.mem.Entries["/run/app.pid"] = fsview.Entry{Name: "app.pid", Type: fsview.TypeFile, Mode: 0o644}
+	view := rootView{MemFS: r.mem, points: []string{"/run"}}
+	r.w.Open = func(context.Context, string) (fsview.FS, error) { return view, nil }
+	c := ctr
+	c.Tmpfs = []string{"/var/run"}
+	if _, err := r.w.Edit(ctx, c, "/run/app.pid", []byte("2\n"), ETag([]byte("1\n"))); !errors.Is(err, fsview.ErrForbiddenPath) || !strings.Contains(err.Error(), "/run") {
+		t.Fatalf("édition sous le tmpfs résolu : %v, attendu ErrForbiddenPath nommant /run", err)
+	}
+	r.nothingWritten(t)
+	for _, dir := range []string{"/run", "/run/sub"} {
+		if _, err := r.w.Upload(ctx, c, dir, "x", []byte("x"), "*"); !errors.Is(err, fsview.ErrForbiddenPath) {
+			t.Fatalf("envoi dans %s : %v, attendu ErrForbiddenPath", dir, err)
+		}
+	}
+	r.nothingWritten(t)
+	if _, err := r.w.Upload(ctx, c, "/", "run2", []byte("x"), "*"); err != nil {
+		t.Fatalf("/run2 n'est pas sous /run : %v", err)
+	}
+	if _, err := r.w.Edit(ctx, c, "/etc/app.conf", []byte("x"), confTag); err != nil {
+		t.Fatalf("le reste du conteneur reste inscriptible : %v", err)
 	}
 }

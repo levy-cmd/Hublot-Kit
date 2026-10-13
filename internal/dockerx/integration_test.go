@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os/exec"
 	"slices"
@@ -230,5 +231,92 @@ func TestPutArchiveRealDocker(t *testing.T) {
 	}
 	if err := c.PutArchive(ctx, run, "/absent", oneFileTar(t, "x", "x", 0o644, 0, 0)); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("dossier absent : %v, attendu ErrNotFound", err)
+	}
+}
+
+// collect reads a logs stream of container id to its end (or 20 s).
+func collect(t *testing.T, c Client, id string, opt LogsOptions, tty bool) []LogLine {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	rc, err := c.Logs(ctx, id, opt)
+	if err != nil {
+		t.Fatalf("Logs(%s) : %v", id, err)
+	}
+	defer rc.Close()
+	var out []LogLine
+	if err := ReadLogs(rc, tty, MaxLogLine, func(l LogLine) error { out = append(out, l); return nil }); err != nil {
+		t.Fatalf("ReadLogs(%s) : %v", id, err)
+	}
+	return out
+}
+
+// texts: "stream:text" per line, a long text shortened to its length (the
+// test output stays readable). The first two lines are sorted: stdout and
+// stderr written at the same instant reach the log file in either order.
+func texts(ls []LogLine) []string {
+	var out []string
+	for _, l := range ls {
+		s := l.Stream + ":" + l.Text
+		if len(l.Text) > 64 {
+			s = fmt.Sprintf("%s:%d×%c tronquée=%v", l.Stream, len(l.Text), l.Text[0], l.Truncated)
+		}
+		out = append(out, s)
+	}
+	if len(out) >= 2 {
+		slices.Sort(out[:2])
+	}
+	return out
+}
+
+// F6 on a real daemon: stdout and stderr apart (multiplexed), one stream
+// with a TTY, a 40 000-byte line joined back, a stopped container's past
+// logs (Follow ends by itself), Since inclusive, a driver without reading.
+func TestLogsRealDocker(t *testing.T) {
+	plain, tty, none := "hublot-it-logs", "hublot-it-logs-tty", "hublot-it-logs-none"
+	exec.Command("docker", "rm", "-f", plain, tty, none).Run()
+	t.Cleanup(func() { exec.Command("docker", "rm", "-f", plain, tty, none).Run() })
+	script := `echo out1; echo err1 >&2; head -c 40000 /dev/zero | tr "\0" a; echo; echo out2`
+	for _, args := range [][]string{
+		{"run", "-d", "--name", plain, "alpine:3", "sh", "-c", script},
+		{"run", "-d", "-t", "--name", tty, "alpine:3", "sh", "-c", script},
+		{"run", "-d", "--name", none, "--log-driver", "none", "alpine:3", "true"},
+	} {
+		if out, err := exec.Command("docker", args...).CombinedOutput(); err != nil {
+			t.Fatalf("docker %v : %v %s", args, err, out)
+		}
+	}
+	exec.Command("docker", "wait", plain, tty).Run() // stopped: past logs only
+	c, err := New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	info, err := c.Inspect(ctx, tty)
+	if err != nil || !info.Tty || info.LogDriver != "json-file" {
+		t.Fatalf("Inspect TTY : %+v %v", info, err)
+	}
+
+	long := fmt.Sprintf("stdout:%d×a tronquée=true", MaxLogLine)
+	got := collect(t, c, plain, LogsOptions{Tail: "all", Follow: true}, false)
+	if want := []string{"stderr:err1", "stdout:out1", long, "stdout:out2"}; !slices.Equal(texts(got), want) || got[0].TS.IsZero() {
+		t.Fatalf("sans TTY : %q, attendu %q", texts(got), want)
+	}
+	// Since is inclusive: from the timestamp of the long line, it comes again.
+	again := collect(t, c, plain, LogsOptions{Tail: "all", Since: got[2].TS.Format(time.RFC3339Nano), Follow: true}, false)
+	if want := []string{long, "stdout:out2"}; !slices.Equal(texts(again), want) {
+		t.Fatalf("Since inclusif : %q, attendu %q", texts(again), want)
+	}
+	if tail := collect(t, c, plain, LogsOptions{Tail: "1"}, false); !slices.Equal(texts(tail), []string{"stdout:out2"}) {
+		t.Fatalf("Tail 1 : %q", texts(tail))
+	}
+
+	got = collect(t, c, tty, LogsOptions{Tail: "all", Follow: true}, true)
+	if want := []string{"stdout:err1", "stdout:out1", long, "stdout:out2"}; !slices.Equal(texts(got), want) {
+		t.Fatalf("TTY : %q, attendu %q", texts(got), want)
+	}
+
+	if _, err := c.Logs(ctx, none, LogsOptions{Tail: "all"}); !errors.Is(err, ErrNoLogs) {
+		t.Fatalf("--log-driver none : %v, attendu ErrNoLogs", err)
 	}
 }

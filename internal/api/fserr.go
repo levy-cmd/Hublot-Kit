@@ -38,12 +38,14 @@ func writeFSError(w http.ResponseWriter, err error) {
 // errors first (a missing socket is ENOENT too, it is not a missing file).
 func fsErrorStatus(err error) (int, string) {
 	switch {
-	case errors.Is(err, errBusy):
+	case errors.Is(err, errBusy), errors.Is(err, errTooManyStreams):
 		return http.StatusServiceUnavailable, "internal"
 	case errors.Is(err, errTimeout):
 		return http.StatusGatewayTimeout, "internal"
 	case errors.Is(err, dockerx.ErrNotFound):
 		return http.StatusNotFound, "not_found"
+	case errors.Is(err, dockerx.ErrNoLogs): // F6: --log-driver none, syslog… (Q34)
+		return http.StatusUnprocessableEntity, "logs_unavailable"
 	case errors.Is(err, files.ErrReadOnly), errors.Is(err, dockerx.ErrRefused): // Q15: Docker's read-only rootfs or volume
 		return http.StatusForbidden, "read_only"
 	case errors.Is(err, files.ErrConflict), errors.Is(err, dockerx.ErrPutInvalid): // the path changed after the checks

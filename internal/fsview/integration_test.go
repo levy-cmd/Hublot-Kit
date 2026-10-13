@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"path"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -310,8 +311,8 @@ func TestIntegrationCheckWriteRoot(t *testing.T) {
 	if !ok {
 		t.Fatal("la vue procfs doit implémenter WriteRootChecker")
 	}
-	if err := w.CheckWriteRoot(ctx); err != nil {
-		t.Fatalf("conteneur ordinaire avec volume et tmpfs : %v", err)
+	if points, err := w.CheckWriteRoot(ctx); err != nil || !slices.Equal(points, []string{"/scratch"}) {
+		t.Fatalf("conteneur ordinaire avec volume et tmpfs : %v %v", points, err)
 	}
 	for name, args := range map[string][]string{
 		"volume": {"-v", "/jail"},
@@ -322,7 +323,7 @@ func TestIntegrationCheckWriteRoot(t *testing.T) {
 		var err error
 		for i := 0; i < 25; i++ { // PID 1 chroots a moment after the start
 			time.Sleep(200 * time.Millisecond)
-			err = openFor(t, id).(WriteRootChecker).CheckWriteRoot(ctx)
+			_, err = openFor(t, id).(WriteRootChecker).CheckWriteRoot(ctx)
 			if err != nil {
 				break
 			}
@@ -330,5 +331,75 @@ func TestIntegrationCheckWriteRoot(t *testing.T) {
 		if !errors.Is(err, ErrForbiddenPath) {
 			t.Errorf("prison dans un %s : %v, attendu ErrForbiddenPath", name, err)
 		}
+	}
+}
+
+// Spec §13: alpine has /var/run -> ../run; a --tmpfs /var/run (compose
+// "tmpfs: [/var/run]") is mounted at /run. CheckWriteRoot finds it by mount
+// ID and returns /run, where package files refuses to write. A PID 1
+// chrooted into that tmpfs, with a link var/run -> / planted in the jail,
+// leads the destination to the jail's root: refused.
+func TestIntegrationCheckWriteRootTmpfsUnderLink(t *testing.T) {
+	needRoot(t)
+	ctx := context.Background()
+	id := runTarget(t, "hublot-it-fs-tmpfs-link", "--tmpfs", "/var/run", "alpine:3", "sleep", "300")
+	if got := docker(t, "exec", id, "readlink", "/var/run"); got != "../run" {
+		t.Skipf("précondition absente : /var/run -> %q dans alpine:3, attendu ../run", got)
+	}
+	points, err := openFor(t, id).(WriteRootChecker).CheckWriteRoot(ctx)
+	if err != nil || !slices.Equal(points, []string{"/run"}) {
+		t.Fatalf("tmpfs sous un lien : %v %v, attendu [/run]", points, err)
+	}
+	jail := runTarget(t, "hublot-it-fs-tmpfs-jail", "--tmpfs", "/var/run:exec", "alpine:3", "sh", "-c",
+		"mkdir /run/lib /run/var && ln -s / /run/var/run && cp /lib/ld-musl-* /run/lib/ && cp /bin/busybox /run/ && exec chroot /run /busybox sleep 300")
+	for i := 0; i < 25; i++ { // PID 1 chroots a moment after the start
+		time.Sleep(200 * time.Millisecond)
+		if _, err = openFor(t, jail).(WriteRootChecker).CheckWriteRoot(ctx); err != nil {
+			break
+		}
+	}
+	if !errors.Is(err, ErrForbiddenPath) {
+		t.Errorf("ÉVASION : prison dans le tmpfs sous un lien acceptée (%v)", err)
+	}
+}
+
+// Review I5: a --mount type=tmpfs under a link is in Inspect.Mounts; the tar
+// of a directory (spec §5.4 b) locates it on /run like a write does, instead
+// of refusing every tar of the container.
+func TestIntegrationCheckArchiveTmpfsUnderLink(t *testing.T) {
+	needRoot(t)
+	id := runTarget(t, "hublot-it-fs-mount-tmpfs", "--mount", "type=tmpfs,dst=/var/run", "alpine:3", "sleep", "300")
+	if got := docker(t, "exec", id, "readlink", "/var/run"); got != "../run" {
+		t.Skipf("précondition absente : /var/run -> %q dans alpine:3, attendu ../run", got)
+	}
+	if err := openFor(t, id).CheckArchive(context.Background(), "/etc"); err != nil {
+		t.Fatalf("tar de /etc refusé à cause du tmpfs /var/run : %v", err)
+	}
+}
+
+// Review I1: a whole tmpfs mounted under a volume, declared by nobody, must
+// not be taken for the --tmpfs /var/run once the container points the link
+// /var/run at it: Docker would write in /run, unseen. The container mounts
+// it itself (CAP_SYS_ADMIN); a bind of a host tmpfs submount has the same
+// shape in the table (parent: the volume, not the root).
+func TestIntegrationCheckWriteRootTmpfsDecoy(t *testing.T) {
+	needRoot(t)
+	vol := "hublot-it-fs-decoy-vol"
+	exec.Command("docker", "volume", "rm", "-f", vol).Run()
+	t.Cleanup(func() { exec.Command("docker", "volume", "rm", "-f", vol).Run() })
+	id := runTarget(t, "hublot-it-fs-tmpfs-decoy", "--cap-add", "SYS_ADMIN", "--security-opt", "apparmor=unconfined",
+		"--tmpfs", "/var/run", "-v", vol+":/data", "alpine:3", "sh", "-c",
+		"mkdir /data/inner && mount -t tmpfs tmpfs /data/inner && rm /var/run && ln -s /data/inner /var/run && exec sleep 300")
+	ready := false
+	for i := 0; i < 25 && !ready; i++ {
+		time.Sleep(200 * time.Millisecond)
+		out, err := exec.Command("docker", "exec", id, "readlink", "/var/run").Output()
+		ready = err == nil && strings.TrimSpace(string(out)) == "/data/inner"
+	}
+	if !ready {
+		t.Skip("précondition absente : le conteneur n'a pas pu monter le tmpfs sous le volume")
+	}
+	if points, err := openFor(t, id).(WriteRootChecker).CheckWriteRoot(context.Background()); !errors.Is(err, ErrForbiddenPath) {
+		t.Errorf("ÉVASION : tmpfs non déclaré sous un volume pris pour le --tmpfs (%v %v)", points, err)
 	}
 }

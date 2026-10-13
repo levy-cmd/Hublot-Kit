@@ -1,0 +1,83 @@
+{
+	"id": "c0ffee0123456789",
+	"name": "cache",
+	"image": "redis:7",
+	"imageId": "sha256:0123456789abcdef",
+	"created": "2026-10-10T07:00:00Z",
+	"state": {
+		"status": "created",
+		"running": false,
+		"exitCode": 0,
+		"oomKilled": false
+	},
+	"restartCount": 0,
+	"restartPolicy": {
+		"name": "on-failure",
+		"maxRetry": 5
+	},
+	"entrypoint": [],
+	"cmd": [
+		"redis-server",
+		"--requirepass",
+		"••••••"
+	],
+	"commandMasked": true,
+	"workingDir": "/data",
+	"tty": false,
+	"logDriver": "json-file",
+	"env": [
+		{
+			"name": "DB_PASSWORD",
+			"value": null,
+			"masked": true
+		},
+		{
+			"name": "PLAIN",
+			"value": "visible",
+			"masked": false
+		}
+	],
+	"ports": [
+		{
+			"private": 80,
+			"public": 8080,
+			"type": "tcp",
+			"ip": "::1"
+		},
+		{
+			"private": 90,
+			"type": "tcp",
+			"ip": "0.0.0.0"
+		},
+		{
+			"private": 9000,
+			"type": "tcp"
+		}
+	],
+	"networkMode": "bridge",
+	"networks": [
+		{
+			"name": "bridge"
+		}
+	],
+	"mounts": [
+		{
+			"type": "volume",
+			"name": "data",
+			"source": "/var/lib/docker/volumes/data/_data",
+			"destination": "/data",
+			"driver": "local",
+			"mode": "ro",
+			"rw": false
+		},
+		{
+			"type": "bind",
+			"source": "/srv/conf",
+			"destination": "/etc/app",
+			"rw": true
+		}
+	],
+	"tmpfs": [
+		"/run"
+	]
+}

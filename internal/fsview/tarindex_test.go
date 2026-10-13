@@ -132,7 +132,7 @@ func newTarView(t *testing.T, mounts []dockerx.Mount, hs ...hdr) tarView {
 	}
 	f := trapDocker(t)
 	stale := new(atomic.Int32)
-	return tarView{newTarFS(f, tarID, mounts, idx, func() { stale.Add(1) }), f, stale}
+	return tarView{newTarFS(f, dockerx.ContainerInfo{ID: tarID, Mounts: mounts}, idx, func() { stale.Add(1) }), f, stale}
 }
 
 func readTar(fsys FS, p string) ([]byte, error) {
@@ -585,5 +585,30 @@ func TestMeasureIndexMemory(t *testing.T) {
 	t.Logf("MESURE : %.0f octets par entrée, soit %.0f Mo pour 1 000 000 d'entrées", per, per)
 	if per < 50 || per > 2000 {
 		t.Fatalf("mesure implausible : %.0f octets par entrée", per)
+	}
+}
+
+// Spec §13, stopped container: runc mounts a --tmpfs at its destination
+// resolved in the root filesystem, links followed. CheckWriteRoot resolves
+// it the same way in the index (never out of the root), so package files
+// refuses /run for a "tmpfs: [/var/run]" with /var/run -> ../run. A path
+// that stops existing midway is resolved as far as it goes, the rest
+// appended (runc creates it there: /dangling -> ../real gives /real/x).
+func TestTarCheckWriteRootTmpfs(t *testing.T) {
+	idx, err := buildIndex(tctx, bytes.NewReader(mkTar(t,
+		tdir("/"), tdir("/run/"), tdir("/var/"), tlink("/var/run", "../run"),
+		tlink("/var/lock", "/../../run/lock"), tdir("/run/lock/"), tdir("/tmp/"),
+		tlink("/dangling", "../real"),
+	)), DefaultIndexLimits, new(atomic.Int64))
+	if err != nil {
+		t.Fatal(err)
+	}
+	info := dockerx.ContainerInfo{ID: tarID, Tmpfs: []string{"/var/run", "/absent/x", "/dangling/x", "/var/run/new/../sub"},
+		Mounts: []dockerx.Mount{{Type: "tmpfs", Destination: "/var/lock"}, {Type: "volume", Name: "v", Destination: "/tmp"}}}
+	var w WriteRootChecker = newTarFS(&dockerx.Fake{}, info, idx, func() {})
+	points, err := w.CheckWriteRoot(tctx)
+	want := []string{"/run/lock", "/run", "/absent/x", "/real/x", "/run/sub"}
+	if err != nil || !slices.Equal(points, want) {
+		t.Fatalf("tmpfs résolus par l'index : %v %v, attendu %v", points, err, want)
 	}
 }

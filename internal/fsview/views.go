@@ -114,7 +114,7 @@ func (v *Views) For(ctx context.Context, id string) (FS, error) {
 	if err != nil {
 		return nil, err
 	}
-	return newTarFS(v.docker, info.ID, info.Mounts, idx, func() { v.drop(key, nil) }), nil
+	return newTarFS(v.docker, info, idx, func() { v.drop(key, nil) }), nil
 }
 
 // Forget drops every index of container id (full ID): plan Explorateur 3
