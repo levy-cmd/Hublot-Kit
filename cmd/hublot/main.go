@@ -208,7 +208,7 @@ func prepareDataDir(dir string) error {
 		// The open already refused; Lstat only picks the message (Linux
 		// answers ELOOP for a link, macOS ENOTDIR).
 		if li, lerr := os.Lstat(dir); lerr == nil && li.Mode()&fs.ModeSymlink != 0 {
-			return errors.New("it is a symbolic link: refused; give a dedicated directory directly, for example /var/lib/hublot-kit")
+			return errors.New("it is a symbolic link: refused; use a dedicated directory instead, for example /var/lib/hublot-kit")
 		}
 		return errors.New("not a directory")
 	}

@@ -55,7 +55,7 @@ var errTooManyBytes = errors.New("byte cap reached")
 
 // errTooSlow marks a too_large of the time cap: it expires (Q11), the
 // bytes and entries caps stay.
-var errTooSlow = errors.New("time cap")
+var errTooSlow = errors.New("time cap reached")
 
 // countingReader counts the bytes of GET /archive (progress, MaxBytes) and
 // stops at the end of ctx even if the reader below ignores it.

@@ -19,7 +19,7 @@ import (
 	"testing"
 )
 
-var frenchText = regexp.MustCompile(`(?i)[àâçéèêëîïôûùüœ]|\s:(\s|$)|\b(le|la|les|des|du|de|un|une|est|pas|sans|sur|ou|et|au|aux|ce|dans|pour|par|avec|jeton|dossier|lien|chemin|fichier|conteneur|montage|refus|ensemble|journal|indisponible|lecture|seule|trop|volumineux|indexation|cours|plafond|atteint|certificat|octets|client Docker)\b`)
+var frenchText = regexp.MustCompile(`(?i)[àâçéèêëîïôûùüœ]|\s:(\s|$)|\b(le|la|les|des|du|de|un|une|est|pas|sans|sur|ou|et|au|aux|ce|dans|pour|par|avec|jeton|dossier|lien|chemin|fichier|conteneur|montage|refus|inconnue?|invalide|illisibles?|introuvable|delai|depasse|impossible de|echec|ensemble|journal|indisponible|lecture|seule|trop|volumineux|indexation|cours|plafond|atteint|certificat|octets|client Docker)\b`)
 
 func TestAgentMessagesInEnglish(t *testing.T) {
 	var found []string
