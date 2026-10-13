@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"os/exec"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -23,10 +24,28 @@ import (
 	"github.com/levy-cmd/hublot-kit/internal/dockerx"
 )
 
+// dockerRun runs docker with args. A "docker run --name x -p …" whose host
+// port Docker picked is already taken (a known race: the kernel hands the
+// same port to an outgoing connection, packages run in parallel) is retried
+// a few times, the half-created container removed in between; Docker's
+// allocator moves on to the next port. Any other error fails at once.
 func dockerRun(t *testing.T, args ...string) {
 	t.Helper()
-	if out, err := exec.Command("docker", args...).CombinedOutput(); err != nil {
-		t.Fatalf("docker %v : %v %s", args, err, out)
+	name := ""
+	if i := slices.Index(args, "--name"); i >= 0 && i+1 < len(args) {
+		name = args[i+1]
+	}
+	for try := 1; ; try++ {
+		out, err := exec.Command("docker", args...).CombinedOutput()
+		if err == nil {
+			return
+		}
+		if try == 5 || name == "" || !strings.Contains(string(out), "address already in use") {
+			t.Fatalf("docker %v (essai %d) : %v %s", args, try, err, out)
+		}
+		t.Logf("docker run %s, essai %d : port de l'hôte déjà pris, nouvel essai", name, try)
+		exec.Command("docker", "rm", "-f", name).Run()
+		time.Sleep(time.Duration(try) * 200 * time.Millisecond)
 	}
 }
 
