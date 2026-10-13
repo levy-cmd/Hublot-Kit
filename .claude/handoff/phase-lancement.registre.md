@@ -17,3 +17,9 @@ Plan : `docs/superpowers/plans/2026-10-13-lancement.md`. Décisions de l'utilisa
   - Vérifiée sur hk-ubuntu et hk-fedora, en lecture et en écriture, sans AVC ni refus AppArmor.
   - `systemd-analyze security` : 8.9 EXPOSED. Le durcissement est limité par Q41.
   - Ruling: les drapeaux « créé par le script » de `check-systemd.sh` sont posés juste avant chaque création. La course avec un autre processus entre la garde et l'installation est acceptée : elle ne touche que la VM de vérification. Poser le drapeau après la création laisserait un fichier partiel si l'installation échouait (Important de Codex, écarté).
+- Task 4 (image `scratch` et `check-image.sh`) : d249a89, 546c5c7. Validée par Opus et Codex.
+  - Image de 3,8 Mo. Docker Desktop, hk-ubuntu et hk-fedora : lecture et écriture OK, sans AVC ni refus AppArmor.
+  - La commande de §8 passe par un tableau d'arguments, plus par `sh -c`. `hk_spec_args` vérifie qu'elle fait 8 lignes, que la dernière est la référence d'image, et que ses caractères sont dans une liste blanche.
+  - `scripts/test-release-lib.sh` joue 11 mutations et fait partie de `make test`. `hk_redact` masque le jeton, en supposant le format de 43 caractères en base64url.
+  - Étiquettes OCI reportées à la tâche 6 (`dockers_v2`).
+  - En attente de l'utilisateur : la mutation « retirer `--cgroupns=host` » n'a pas été jouée. Le classifieur de permissions a refusé la modification ; personne ne l'a contourné.
