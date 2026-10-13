@@ -30,7 +30,7 @@ func TestResetTokenSubcommand(t *testing.T) {
 	dir := t.TempDir()
 	var out, errb bytes.Buffer
 	code := run(context.Background(), []string{"reset-token", "--data-dir", dir}, noenv, &out, &errb)
-	if code != 0 || !strings.Contains(out.String(), "jeton") {
+	if code != 0 || !strings.Contains(out.String(), "New access token") {
 		t.Fatalf("code %d, out %q, err %q", code, out.String(), errb.String())
 	}
 	if _, err := os.Stat(filepath.Join(dir, "token.sha256")); err != nil {
@@ -131,7 +131,7 @@ func TestRunStartsAndStops(t *testing.T) {
 	if code := <-done; code != 0 {
 		t.Fatalf("code %d, stderr %q", code, errb.String())
 	}
-	if !strings.Contains(out.String(), "Jeton d'accès") {
+	if !strings.Contains(out.String(), "Access token") {
 		t.Fatalf("first launch must print the token once: %q", out.String())
 	}
 }
@@ -145,7 +145,7 @@ func TestRunListenFailureKeepsNoOrphanToken(t *testing.T) {
 	dir := t.TempDir()
 	var out, errb bytes.Buffer
 	code := run(context.Background(), []string{"--data-dir", dir, "--listen", busy.Addr().String()}, noenv, &out, &errb)
-	if code != 1 || strings.Contains(out.String(), "Jeton d'accès") {
+	if code != 1 || strings.Contains(out.String(), "Access token") {
 		t.Fatalf("code %d, out %q, err %q", code, out.String(), errb.String())
 	}
 	if _, err := os.Stat(filepath.Join(dir, "token.sha256")); !os.IsNotExist(err) {
@@ -215,7 +215,7 @@ func runRefused(t *testing.T, dataDir, checkDir, want string) {
 		if code != 1 || !strings.Contains(errb.String(), dataDir) || !strings.Contains(errb.String(), want) {
 			t.Fatalf("%v: code %d, stderr %q (want %q)", sub, code, errb.String(), want)
 		}
-		if strings.Contains(out.String(), "Jeton d'accès") || strings.Contains(out.String(), "Nouveau jeton") {
+		if strings.Contains(out.String(), "Access token") || strings.Contains(out.String(), "New access token") {
 			t.Fatalf("%v: no token may be shown: %q", sub, out.String())
 		}
 		if checkDir == "" {
@@ -243,7 +243,7 @@ func TestRunRefusesSymlinkDataDir(t *testing.T) {
 	if err := os.Symlink(target, link); err != nil {
 		t.Fatal(err)
 	}
-	runRefused(t, link, target, "lien symbolique")
+	runRefused(t, link, target, "symbolic link")
 	if m := modeOf(t, target); m != 0o750 {
 		t.Fatalf("link target mode changed to %v", m)
 	}
@@ -254,7 +254,7 @@ func TestRunRefusesSymlinkDataDir(t *testing.T) {
 	if err := os.Symlink(missing, dangling); err != nil {
 		t.Fatal(err)
 	}
-	runRefused(t, dangling, "", "lien symbolique")
+	runRefused(t, dangling, "", "symbolic link")
 	if _, err := os.Lstat(missing); !os.IsNotExist(err) {
 		t.Fatalf("dangling link target must not be created, lstat err: %v", err)
 	}
@@ -265,7 +265,7 @@ func TestRunRefusesDataDirThatIsAFile(t *testing.T) {
 	if err := os.WriteFile(f, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	runRefused(t, f, "", "pas un dossier")
+	runRefused(t, f, "", "not a directory")
 }
 
 // A directory pre-created by another local user (e.g. /tmp/hublot) must be
@@ -284,7 +284,7 @@ func TestRunRefusesDataDirOwnedByAnotherUser(t *testing.T) {
 	if err := os.Chown(dir, 65534, 65534); err != nil {
 		t.Fatal(err)
 	}
-	runRefused(t, dir, dir, "appartient")
+	runRefused(t, dir, dir, "owned by uid")
 	if m := modeOf(t, dir); m != 0o755 {
 		t.Fatalf("mode changed to %v", m)
 	}
@@ -308,7 +308,7 @@ func TestRunBadTLSCert(t *testing.T) {
 	var out, errb bytes.Buffer
 	code := run(context.Background(), []string{"--data-dir", dir, "--listen", "127.0.0.1:0",
 		"--tls-cert", filepath.Join(dir, "no.crt"), "--tls-key", filepath.Join(dir, "no.key")}, noenv, &out, &errb)
-	if code != 1 || strings.Contains(out.String(), "écoute sur") {
+	if code != 1 || strings.Contains(out.String(), "listening on") {
 		t.Fatalf("code %d, out %q, err %q", code, out.String(), errb.String())
 	}
 }

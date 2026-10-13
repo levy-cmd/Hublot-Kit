@@ -51,7 +51,7 @@ describe('writeErrorMessage', () => {
 		expect(writeErrorMessage('upload', 'invalid_name')).toBe(t('error.invalid_name'));
 		expect(writeErrorMessage('upload', 'forbidden_path', 'tmpfs /scratch')).toBe(`${t('write.forbidden')} (tmpfs /scratch)`);
 		// 504: the guard gave up, the write may still happen (Q17).
-		expect(writeErrorMessage('edit', 'internal', 'délai dépassé', 504)).toBe(t('write.maybeWritten'));
+		expect(writeErrorMessage('edit', 'internal', 'timed out', 504)).toBe(t('write.maybeWritten'));
 		expect(writeErrorMessage('edit', 'internal', undefined, 500)).toBe(t('error.internal'));
 		// Network error during the write: the request may have reached the agent.
 		expect(writeErrorMessage('edit', 'network', undefined, 0)).toBe(t('write.maybeWrittenNetwork'));

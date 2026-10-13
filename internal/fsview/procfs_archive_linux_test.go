@@ -97,7 +97,7 @@ func TestCheckArchiveContainerWideRule(t *testing.T) {
 	p, _ := childView(t)
 	p.mounts = []dockerx.Mount{{Type: "tmpfs", Destination: "/sys"}}
 	err := p.CheckArchive(ctx, "/etc")
-	if !errors.Is(err, ErrForbiddenPath) || !strings.Contains(err.Error(), "sous le montage /sys") {
+	if !errors.Is(err, ErrForbiddenPath) || !strings.Contains(err.Error(), "under the container mount /sys") {
 		t.Fatalf("montage dangereux sous un montage Docker : %v", err)
 	}
 }
@@ -154,7 +154,7 @@ func TestCheckArchiveDestinationNotVisible(t *testing.T) {
 	p, _ := childView(t)
 	p.mounts = []dockerx.Mount{{Type: "tmpfs", Destination: "/link/m"}}
 	err := p.CheckArchive(ctx, "/etc")
-	if !errors.Is(err, ErrForbiddenPath) || !strings.Contains(err.Error(), "ne montre pas la destination /link/m") {
+	if !errors.Is(err, ErrForbiddenPath) || !strings.Contains(err.Error(), "does not show the destination /link/m") {
 		t.Fatalf("destination invisible : %v", err)
 	}
 }
@@ -168,7 +168,7 @@ func TestCheckArchiveDestinationUnderSymlink(t *testing.T) {
 	must(t, os.WriteFile(filepath.Join(dir, "real", "f"), nil, 0o644))
 	must(t, os.Symlink("real", filepath.Join(dir, "link")))
 	p.mounts = []dockerx.Mount{{Type: "bind", Source: "/x/f", Destination: filepath.Join(dir, "link", "f")}}
-	if err := p.CheckArchive(ctx, "/etc"); !errors.Is(err, ErrForbiddenPath) || !strings.Contains(err.Error(), "ne montre pas la destination") {
+	if err := p.CheckArchive(ctx, "/etc"); !errors.Is(err, ErrForbiddenPath) || !strings.Contains(err.Error(), "does not show the destination") {
 		t.Fatalf("lien sans montage : %v", err)
 	}
 	// The real case: scripts/test-linux.sh mounts the Docker socket at
@@ -215,7 +215,7 @@ func TestCheckWriteRoot(t *testing.T) {
 		return []byte("36 35 8:1 / /etc rw - ext4 /dev/sda1 rw\n"), nil
 	}
 	_, err := p.CheckWriteRoot(ctx)
-	if !errors.Is(err, ErrForbiddenPath) || !strings.Contains(err.Error(), "racine") {
+	if !errors.Is(err, ErrForbiddenPath) || !strings.Contains(err.Error(), `has no "/" root`) {
 		t.Fatalf("racine déplacée : %v, attendu ErrForbiddenPath", err)
 	}
 	readMountinfo = func(int) ([]byte, error) { return nil, errors.New("illisible") }
@@ -263,7 +263,7 @@ func TestCheckWriteRootJail(t *testing.T) {
 	// any more (chroot after the open).
 	p.tmpfs = nil
 	readMountinfo = table(st.Mnt_id+1000, "/data")
-	if _, err := p.CheckWriteRoot(ctx); !errors.Is(err, ErrForbiddenPath) || !strings.Contains(err.Error(), "racine épinglée") {
+	if _, err := p.CheckWriteRoot(ctx); !errors.Is(err, ErrForbiddenPath) || !strings.Contains(err.Error(), "root pinned") {
 		t.Fatalf("racine épinglée différente : %v, attendu ErrForbiddenPath", err)
 	}
 }

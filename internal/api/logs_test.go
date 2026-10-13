@@ -469,7 +469,7 @@ func TestLogsDownloadSlots(t *testing.T) {
 		t.Fatalf("flux évincé par un téléchargement : %+v", events)
 	}
 	refused := openSSE(t, f, "/api/containers/web/logs", c, nil).all(t)
-	if failureOf(t, refused) != "internal" || !strings.Contains(refused[len(refused)-1].Data, "flux de logs") {
+	if failureOf(t, refused) != "internal" || !strings.Contains(refused[len(refused)-1].Data, "log streams") {
 		t.Fatalf("créneaux pris par des téléchargements : %+v", refused)
 	}
 	close(f.docker.LogsGate)

@@ -86,7 +86,7 @@ func TestIntegrationWriteRunning(t *testing.T) {
 		// only the STATX_MNT_ID check sees it (Q21).
 		{"montage absent d'Inspect (--init)", func() (int, string) {
 			r := f.send("PUT", base+"/fs/file?path=/sbin/docker-init", []byte("x"), c, map[string]string{"If-Match": tag})
-			if !strings.Contains(r.Body.String(), "point de montage") {
+			if !strings.Contains(r.Body.String(), "mount point") {
 				t.Errorf("docker-init : refus attendu par le point de montage : %s", r.Body)
 			}
 			return r.Code, errCode(t, r)

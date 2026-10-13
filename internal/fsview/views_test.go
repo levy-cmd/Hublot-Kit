@@ -134,8 +134,8 @@ func TestViewsHostBindBuildsNothing(t *testing.T) {
 		{dockerx.Mount{Type: "bind", Source: "/dev", Destination: "/dev"}, nil, "bind /dev -> /dev"},
 		{vol("local"), map[string]string{"o": "bind", "device": "/proc"}, "bind /proc -> /v (volume v)"},
 		{vol("local"), map[string]string{"type": "fuse.sshfs"}, "volume v (type=fuse.sshfs) -> /v"},
-		{vol("rexray"), map[string]string{}, `pilote "rexray" inconnu`},
-		{vol("local"), nil, "options illisibles"}, // no options for v: unreadable
+		{vol("rexray"), map[string]string{}, `unknown driver "rexray"`},
+		{vol("local"), nil, "unreadable options"}, // no options for v: unreadable
 	}
 	for _, c := range refused {
 		f := stoppedDocker(t, c.m)
