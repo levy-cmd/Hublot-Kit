@@ -86,6 +86,27 @@ func TestRunVersion(t *testing.T) {
 	}
 }
 
+// --version answers only when alone: with another argument it stays a
+// configuration error, and the data directory is not created.
+func TestRunVersionWithOtherArgs(t *testing.T) {
+	for _, args := range [][]string{{"--version", "--nope"}, {"--version", "extra"}} {
+		dataDir := filepath.Join(t.TempDir(), "data")
+		env := func(k string) string {
+			if k == "HUBLOT_DATA_DIR" {
+				return dataDir
+			}
+			return ""
+		}
+		var out, errb bytes.Buffer
+		if code := run(context.Background(), args, env, &out, &errb); code != 2 {
+			t.Errorf("%q: want exit 2, got %d (out %q)", args, code, out.String())
+		}
+		if _, err := os.Lstat(dataDir); !os.IsNotExist(err) {
+			t.Errorf("%q: data directory touched (%v)", args, err)
+		}
+	}
+}
+
 func TestRunDataDirUnwritable(t *testing.T) {
 	parent := t.TempDir()
 	blocker := filepath.Join(parent, "file")
