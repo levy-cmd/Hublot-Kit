@@ -10,7 +10,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
+	"math/rand/v2"
 	"net/http"
 	"os/exec"
 	"runtime"
@@ -24,18 +26,25 @@ import (
 	"github.com/levy-cmd/hublot-kit/internal/dockerx"
 )
 
-// dockerRun runs docker with args. A "docker run --name x -p …" whose host
-// port Docker picked is already taken (a known race: the kernel hands the
-// same port to an outgoing connection, packages run in parallel) is retried
-// a few times, the half-created container removed in between; Docker's
-// allocator moves on to the next port. Any other error fails at once.
+// dockerRun runs docker with args.
 func dockerRun(t *testing.T, args ...string) {
 	t.Helper()
-	name := ""
-	if i := slices.Index(args, "--name"); i >= 0 && i+1 < len(args) {
-		name = args[i+1]
-	}
+	dockerRunEach(t, func() []string { return args })
+}
+
+// dockerRunEach runs docker with the args mk gives for each try. A "docker
+// run --name x -p …" whose host port is already taken (another process, or
+// packages running in parallel) is retried a few times with fresh args,
+// the half-created container removed in between. Any other error fails at
+// once.
+func dockerRunEach(t *testing.T, mk func() []string) {
+	t.Helper()
 	for try := 1; ; try++ {
+		args := mk()
+		name := ""
+		if i := slices.Index(args, "--name"); i >= 0 && i+1 < len(args) {
+			name = args[i+1]
+		}
 		out, err := exec.Command("docker", args...).CombinedOutput()
 		if err == nil {
 			return
@@ -116,12 +125,20 @@ func TestIntegrationObservation(t *testing.T) {
 	}
 	rmAll()
 	t.Cleanup(rmAll)
-	// 81 without an IP: Docker binds 0.0.0.0 and ::, one mapping for the agent.
+	// 81 without an IP: Docker binds 0.0.0.0 and :: on a port it picks, one
+	// mapping for the agent. 80 on 127.0.0.1 gets a host port of ours, out
+	// of the ephemeral range: in CI (GitHub runner), Docker drew the same
+	// random port for 127.0.0.1 and for 0.0.0.0 and failed with "address
+	// already in use", 5 tries out of 5 in both jobs (not under Docker 29.8).
 	// Bursts of 50 lines per stream: the journal is often out of timestamp
 	// order between stdout and stderr, as for a busy service.
-	dockerRun(t, "run", "-d", "--name", live, "-e", "DB_PASSWORD=s3cr3t-env", "-e", "PLAIN=visible",
-		"-p", "127.0.0.1::80", "-p", "81", "alpine:3", "sh", "-c",
-		`echo "start s3cr3t-in-logs"; i=0; while true; do i=$((i+1)); echo "tick $i"; echo "warn $i" >&2; [ $((i % 50)) -ne 0 ] || sleep 0.1; done`)
+	var hostPort uint16
+	dockerRunEach(t, func() []string {
+		hostPort = uint16(20000 + rand.IntN(10000))
+		return []string{"run", "-d", "--name", live, "-e", "DB_PASSWORD=s3cr3t-env", "-e", "PLAIN=visible",
+			"-p", fmt.Sprintf("127.0.0.1:%d:80", hostPort), "-p", "81", "alpine:3", "sh", "-c",
+			`echo "start s3cr3t-in-logs"; i=0; while true; do i=$((i+1)); echo "tick $i"; echo "warn $i" >&2; [ $((i % 50)) -ne 0 ] || sleep 0.1; done`}
+	})
 	// Stopped, with a binding configured without IP nor host port (HostIp "").
 	dockerRun(t, "run", "--name", past, "-p", "80", "alpine:3", "sh", "-c", "echo un; echo deux >&2")
 	// Host network: Docker keeps the -p in PortBindings but ignores it.
@@ -166,7 +183,7 @@ func TestIntegrationObservation(t *testing.T) {
 		t.Errorf("radiographie : %+v", radio)
 	}
 	if p := radio.Ports; len(p) != 2 ||
-		p[0].Private != 80 || p[0].Public == 0 || p[0].Type != "tcp" || p[0].IP != "127.0.0.1" ||
+		p[0].Private != 80 || p[0].Public != hostPort || p[0].Type != "tcp" || p[0].IP != "127.0.0.1" ||
 		p[1].Private != 81 || p[1].Public == 0 || p[1].Type != "tcp" || p[1].IP != "0.0.0.0" {
 		t.Errorf("ports en marche : %+v", p)
 	}
