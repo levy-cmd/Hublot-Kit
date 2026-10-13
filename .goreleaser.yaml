@@ -1,0 +1,97 @@
+# GoReleaser (OSS, v2.18 or later) — Hublot-Kit release (plan Lancement).
+# Checked in CI by the release-snapshot job (goreleaser check, then
+# release --snapshot --clean --skip=sign) and run for real by
+# .github/workflows/release.yml, dispatched on a v* tag.
+#
+# No `before` hook: the interface (internal/web/dist, embedded by go:embed) is
+# built beforehand by a job without write permissions (`make web`), so that no
+# npm code runs where the release is signed and pushed.
+version: 2
+project_name: hublot-kit
+
+builds:
+  - id: hublot
+    main: ./cmd/hublot
+    binary: hublot
+    env:
+      - CGO_ENABLED=0
+    goos: [linux]
+    goarch: [amd64, arm64]
+    flags: [-trimpath]
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+    mod_timestamp: "{{ .CommitTimestamp }}"
+
+archives:
+  - id: hublot
+    ids: [hublot]
+    formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - LICENSE
+      - README.md
+      - README.fr.md
+      - src: packaging/systemd/hublot-kit.service
+        strip_parent: true
+
+checksum:
+  name_template: checksums.txt
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-snapshot.{{ .ShortCommit }}"
+
+# One SPDX SBOM per archive, by syft (in PATH: anchore/sbom-action/download-syft).
+sboms:
+  - artifacts: archive
+
+# Keyless cosign (GitHub Actions OIDC): one Sigstore bundle per signed file.
+signs:
+  - id: checksums
+    cmd: cosign
+    artifacts: checksum
+    signature: "${artifact}.sigstore.json"
+    args: ["sign-blob", "--bundle=${signature}", "${artifact}", "--yes"]
+  - id: archives
+    cmd: cosign
+    artifacts: archive
+    signature: "${artifact}.sigstore.json"
+    args: ["sign-blob", "--bundle=${signature}", "${artifact}", "--yes"]
+
+dockers_v2:
+  - id: hublot
+    ids: [hublot]
+    dockerfile: Dockerfile
+    images: [ghcr.io/levy-cmd/hublot-kit]
+    # X.Y.Z always; X.Y only for a final release (never for -rc.N). No latest.
+    tags:
+      - "{{ .Version }}"
+      - "{{ if not .Prerelease }}{{ .Major }}.{{ .Minor }}{{ end }}"
+    platforms: [linux/amd64, linux/arm64]
+    # BuildKit SBOM attestation, on the pushed multi-arch index only.
+    sbom: "{{ not .IsSnapshot }}"
+    labels:
+      org.opencontainers.image.title: hublot-kit
+      org.opencontainers.image.description: Explore the inside of the Docker containers of a server from a browser.
+      org.opencontainers.image.source: https://github.com/levy-cmd/Hublot-Kit
+      org.opencontainers.image.licenses: MIT
+      org.opencontainers.image.version: "{{ .Version }}"
+      org.opencontainers.image.revision: "{{ .FullCommit }}"
+      org.opencontainers.image.created: "{{ .CommitDate }}"
+
+# Keyless cosign signature of the pushed image index, by digest.
+docker_signs:
+  - cmd: cosign
+    args: ["sign", "${artifact}@${digest}", "--yes"]
+
+release:
+  draft: true # published by hand after scripts/verify-release.sh (plan Lancement)
+  prerelease: auto
+  header: |
+    **Security: Hublot-Kit is root on the host in practice.** It talks to the Docker socket and reads container files. Keep it on `127.0.0.1` and reach it through an SSH tunnel or an HTTPS reverse proxy. See [docs/en/security.md](https://github.com/levy-cmd/Hublot-Kit/blob/{{ .Tag }}/docs/en/security.md).
+
+    Image: `ghcr.io/levy-cmd/hublot-kit:{{ .Version }}` (linux/amd64, linux/arm64). Install: [docs/en/install.md](https://github.com/levy-cmd/Hublot-Kit/blob/{{ .Tag }}/docs/en/install.md) · [Installation en français](https://github.com/levy-cmd/Hublot-Kit/blob/{{ .Tag }}/docs/fr/installation.md).
+
+    Every archive and `checksums.txt` has a keyless cosign bundle (`*.sigstore.json`) and every archive an SPDX SBOM (`*.sbom.json`); the image is signed and carries an SBOM attestation. How to verify: [docs/en/install.md#verify-the-release](https://github.com/levy-cmd/Hublot-Kit/blob/{{ .Tag }}/docs/en/install.md#verify-the-release).
+
+changelog:
+  sort: asc
