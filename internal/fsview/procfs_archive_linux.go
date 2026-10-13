@@ -21,7 +21,7 @@ var readMountinfo = func(pid int) ([]byte, error) {
 }
 
 // errNoMountID: statx did not return STATX_MNT_ID (kernel before 5.8).
-var errNoMountID = errors.New("statx sans STATX_MNT_ID (noyau antérieur à 5.8)")
+var errNoMountID = errors.New("statx without STATX_MNT_ID (kernel older than 5.8)")
 
 // statxMountID is statx on the descriptor itself, asking for the mount ID
 // (and extra mask bits); errNoMountID when the kernel did not give it.
@@ -72,7 +72,7 @@ func (p *procFS) CheckWriteRoot(context.Context) ([]string, error) {
 	}
 	raw, err := readMountinfo(p.pid)
 	if err != nil {
-		return nil, changed("lecture de /proc/%d/mountinfo : %v", p.pid, err)
+		return nil, changed("reading /proc/%d/mountinfo: %v", p.pid, err)
 	}
 	if err := alive(p.pidfd, p.pid); err != nil {
 		return nil, err
@@ -86,11 +86,11 @@ func (p *procFS) CheckWriteRoot(context.Context) ([]string, error) {
 		return nil, err
 	}
 	if !slices.Contains(rootMountIDs(mi), st.Mnt_id) {
-		return nil, fmt.Errorf("%w : le montage \"/\" du process n'est pas celui de la racine épinglée à l'ouverture de la vue (chroot du process) : écriture refusée", ErrForbiddenPath)
+		return nil, fmt.Errorf("%w: the \"/\" mount of the process is not the one of the root pinned when the view was opened (chroot of the process): write refused", ErrForbiddenPath)
 	}
 	mounts := LocateMounts(mi, withTmpfs(p.mounts, p.tmpfs), p.mountIdent)
 	if err := CheckVisibleMounts(mi, mounts); err != nil {
-		return nil, fmt.Errorf("%w (écriture refusée : le process n'est peut-être pas dans la racine du conteneur, chroot du PID 1)", err)
+		return nil, fmt.Errorf("%w (write refused: the process may not be in the container's root, chroot of PID 1)", err)
 	}
 	return tmpfsPoints(mounts), nil
 }
@@ -99,31 +99,31 @@ func (p *procFS) CheckWriteRoot(context.Context) ([]string, error) {
 // container come first; ident (pathrs + statx) may meet a FUSE mount there.
 func (p *procFS) CheckArchive(ctx context.Context, dir string) error {
 	if p.pidfd < 0 {
-		return errors.New("contrôle des montages impossible : vue sans process")
+		return errors.New("mount check impossible: view without a process")
 	}
 	if err := HostBind(ctx, p.docker, p.mounts); err != nil {
 		return err
 	}
 	raw, err := readMountinfo(p.pid)
 	if err != nil {
-		return changed("lecture de /proc/%d/mountinfo : %v", p.pid, err)
+		return changed("reading /proc/%d/mountinfo: %v", p.pid, err)
 	}
 	if err := alive(p.pidfd, p.pid); err != nil {
 		return err
 	}
 	mi := string(raw)
 	if mp, typ, dst, bad := PseudoMountInMounts(mi, p.mounts); bad {
-		return fmt.Errorf("%w : %s monté sur %s, sous le montage %s du conteneur : aucun tar", ErrForbiddenPath, typ, mp, dst)
+		return fmt.Errorf("%w: %s mounted on %s, under the container mount %s: no tar", ErrForbiddenPath, typ, mp, dst)
 	}
 	if mp, typ, bad := PseudoMountUnder(mi, dir); bad {
-		return fmt.Errorf("%w : %s monté sur %s, le tar de %s l'inclurait", ErrForbiddenPath, typ, mp, CleanPath(dir))
+		return fmt.Errorf("%w: %s mounted on %s, the tar of %s would include it", ErrForbiddenPath, typ, mp, CleanPath(dir))
 	}
 	mounts := LocateMounts(mi, p.mounts, p.mountIdent)
 	if err := CheckVisibleMounts(mi, mounts); err != nil {
 		return err
 	}
 	if mp, typ, dst, bad := PseudoMountInMounts(mi, mounts); bad {
-		return fmt.Errorf("%w : %s monté sur %s, sous le montage %s du conteneur : aucun tar", ErrForbiddenPath, typ, mp, dst)
+		return fmt.Errorf("%w: %s mounted on %s, under the container mount %s: no tar", ErrForbiddenPath, typ, mp, dst)
 	}
 	return nil
 }

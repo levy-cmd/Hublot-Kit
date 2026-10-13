@@ -40,10 +40,10 @@ var pseudoFS = map[uint32]string{
 func checkNotPseudo(fd int, path string) error {
 	var st unix.Statfs_t
 	if err := unix.Fstatfs(fd, &st); err != nil {
-		return fmt.Errorf("fstatfs %s : %w", path, err)
+		return fmt.Errorf("fstatfs %s: %w", path, err)
 	}
 	if name, bad := pseudoFS[uint32(st.Type)]; bad {
-		return fmt.Errorf("%w : %s est sur %s", ErrForbiddenPath, path, name)
+		return fmt.Errorf("%w: %s is on %s", ErrForbiddenPath, path, name)
 	}
 	return nil
 }

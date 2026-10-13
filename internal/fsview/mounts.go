@@ -29,28 +29,28 @@ func HostBind(ctx context.Context, docker dockerx.Client, mounts []dockerx.Mount
 		switch m.Type {
 		case "bind":
 			if hostSensitive(m.Source) {
-				return fmt.Errorf("%w : bind %s -> %s", ErrForbiddenPath, m.Source, m.Destination)
+				return fmt.Errorf("%w: bind %s -> %s", ErrForbiddenPath, m.Source, m.Destination)
 			}
 		case "tmpfs", "image":
 		case "volume":
 			if m.Driver != "local" {
-				return fmt.Errorf("%w : volume %s -> %s : pilote %q inconnu, refusé", ErrForbiddenPath, m.Name, m.Destination, m.Driver)
+				return fmt.Errorf("%w: volume %s -> %s: unknown driver %q, refused", ErrForbiddenPath, m.Name, m.Destination, m.Driver)
 			}
 			if docker == nil {
-				return fmt.Errorf("%w : volume %s -> %s : options illisibles (pas de client Docker)", ErrForbiddenPath, m.Name, m.Destination)
+				return fmt.Errorf("%w: volume %s -> %s: unreadable options (no Docker client)", ErrForbiddenPath, m.Name, m.Destination)
 			}
 			opts, err := docker.VolumeOptions(ctx, m.Name)
 			if err != nil {
-				return fmt.Errorf("%w : volume %s -> %s : options illisibles (%v)", ErrForbiddenPath, m.Name, m.Destination, err)
+				return fmt.Errorf("%w: volume %s -> %s: unreadable options (%v)", ErrForbiddenPath, m.Name, m.Destination, err)
 			}
 			if t := opts["type"]; dangerousFSType(t) {
-				return fmt.Errorf("%w : volume %s (type=%s) -> %s", ErrForbiddenPath, m.Name, t, m.Destination)
+				return fmt.Errorf("%w: volume %s (type=%s) -> %s", ErrForbiddenPath, m.Name, t, m.Destination)
 			}
 			if hasBindOption(opts["o"]) && opts["device"] != "" && hostSensitive(opts["device"]) {
-				return fmt.Errorf("%w : bind %s -> %s (volume %s)", ErrForbiddenPath, opts["device"], m.Destination, m.Name)
+				return fmt.Errorf("%w: bind %s -> %s (volume %s)", ErrForbiddenPath, opts["device"], m.Destination, m.Name)
 			}
 		default:
-			return fmt.Errorf("%w : montage de type %q inconnu -> %s, refusé", ErrForbiddenPath, m.Type, m.Destination)
+			return fmt.Errorf("%w: mount of unknown type %q -> %s, refused", ErrForbiddenPath, m.Type, m.Destination)
 		}
 	}
 	return nil
@@ -110,23 +110,23 @@ func scanMountinfo(mountinfo string, visit func(mountLine) bool) (mountPoint, fs
 		f := strings.Fields(line)
 		sep := slices.Index(f, "-")
 		if len(f) < 7 || sep < 6 || sep+1 >= len(f) {
-			return line, "ligne de mountinfo illisible", true
+			return line, "unreadable mountinfo line", true
 		}
 		id, err := strconv.ParseUint(f[0], 10, 64)
 		if err != nil {
-			return f[0], "identifiant de montage illisible", true
+			return f[0], "unreadable mount ID", true
 		}
 		parent, err := strconv.ParseUint(f[1], 10, 64)
 		if err != nil {
-			return f[1], "identifiant du montage parent illisible", true
+			return f[1], "unreadable parent mount ID", true
 		}
 		root, ok := unescapeMountinfo(f[3])
 		if !ok {
-			return f[3], "échappement de mountinfo invalide", true
+			return f[3], "invalid mountinfo escape", true
 		}
 		mp, ok := unescapeMountinfo(f[4])
 		if !ok {
-			return f[4], "échappement de mountinfo invalide", true
+			return f[4], "invalid mountinfo escape", true
 		}
 		if visit(mountLine{ID: id, Parent: parent, Root: root, Point: mp, FSType: f[sep+1]}) {
 			return mp, f[sep+1], true
@@ -146,7 +146,7 @@ func dangerousMount(mountinfo string, match func(mountPoint string) bool) (mount
 func mountPoints(mountinfo string) (map[string]bool, error) {
 	points := map[string]bool{}
 	if mp, typ, bad := scanMountinfo(mountinfo, func(l mountLine) bool { points[l.Point] = true; return false }); bad {
-		return nil, fmt.Errorf("%w : %s : %s", ErrForbiddenPath, typ, mp)
+		return nil, fmt.Errorf("%w: %s: %s", ErrForbiddenPath, typ, mp)
 	}
 	return points, nil
 }
@@ -160,7 +160,7 @@ func CheckRootMount(mountinfo string) error {
 		return err
 	}
 	if !points["/"] {
-		return fmt.Errorf("%w : la table des montages n'a pas de racine \"/\" : la racine du process n'est pas celle du conteneur (chroot du PID 1), écriture refusée", ErrForbiddenPath)
+		return fmt.Errorf("%w: the mount table has no \"/\" root: the process root is not the container's (chroot of PID 1), write refused", ErrForbiddenPath)
 	}
 	return nil
 }
@@ -191,11 +191,11 @@ func CheckVisibleMounts(mountinfo string, mounts []dockerx.Mount) error {
 		return err
 	}
 	if !points["/"] {
-		return fmt.Errorf("%w : la table des montages n'a pas de racine \"/\" : tar refusé", ErrForbiddenPath)
+		return fmt.Errorf("%w: the mount table has no \"/\" root: tar refused", ErrForbiddenPath)
 	}
 	for _, m := range mounts {
 		if d := CleanPath(m.Destination); !points[d] {
-			return fmt.Errorf("%w : la table des montages ne montre pas la destination %s (racine du process déplacée, ou destination sous un lien) : tar refusé", ErrForbiddenPath, d)
+			return fmt.Errorf("%w: the mount table does not show the destination %s (process root moved, or destination under a link): tar refused", ErrForbiddenPath, d)
 		}
 	}
 	return nil

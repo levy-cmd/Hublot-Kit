@@ -104,7 +104,7 @@ jobs:
       - run: make build
       - run: |
           out=$(./bin/hublot reset-token --data-dir "$RUNNER_TEMP/hk")
-          echo "$out" | grep -q "jeton"
+          echo "$out" | grep -q "New access token"
       - name: Smoke test (embedded UI and CSP)
         shell: bash # bash --noprofile --norc -eo pipefail
         run: |

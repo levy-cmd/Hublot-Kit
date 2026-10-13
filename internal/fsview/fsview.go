@@ -87,13 +87,13 @@ type FS interface {
 // Errors of the views; package api maps each one to a code of spec §6.
 // A missing path is reported with an error that matches fs.ErrNotExist.
 var (
-	ErrNotDir           = errors.New("pas un dossier")
-	ErrNotRegular       = errors.New("pas un fichier régulier")
-	ErrForbiddenPath    = errors.New("chemin interdit")
-	ErrLinkInPath       = errors.New("lien symbolique dans le chemin")
-	ErrContainerChanged = errors.New("le conteneur a changé")
-	ErrTooLarge         = errors.New("trop volumineux")
-	ErrIndexing         = errors.New("indexation en cours")
+	ErrNotDir           = errors.New("not a directory")
+	ErrNotRegular       = errors.New("not a regular file")
+	ErrForbiddenPath    = errors.New("forbidden path")
+	ErrLinkInPath       = errors.New("symbolic link in the path")
+	ErrContainerChanged = errors.New("the container changed")
+	ErrTooLarge         = errors.New("too large")
+	ErrIndexing         = errors.New("indexing in progress")
 )
 
 // CleanPath returns the absolute, lexically cleaned form of a container path.

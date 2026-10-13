@@ -40,7 +40,7 @@ func (p *procFS) mountIDNoLinks(clean string) (uint64, error) {
 	defer unix.Close(fd)
 	st, err := statxMountID(fd, 0, 0)
 	if errors.Is(err, errNoMountID) {
-		return 0, fmt.Errorf("%w : point de montage indécidable", err)
+		return 0, fmt.Errorf("%w: cannot tell whether this is a mount point", err)
 	}
 	if err != nil {
 		return 0, &fs.PathError{Op: "statx", Path: clean, Err: err}

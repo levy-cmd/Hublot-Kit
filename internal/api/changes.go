@@ -19,7 +19,7 @@ const changesTimeout = 30 * time.Second
 func (s *server) changes(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	if !containerRef.MatchString(id) {
-		writeError(w, http.StatusNotFound, "not_found", "identifiant de conteneur invalide")
+		writeError(w, http.StatusNotFound, "not_found", "invalid container ID")
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), changesTimeout)

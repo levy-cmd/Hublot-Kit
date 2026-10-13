@@ -272,7 +272,9 @@ docker run -d --name hublot-kit \
 
 Pas de `--privileged`. L'agent est déjà root sur l'hôte de fait (§7) : lever son confinement AppArmor, ou tourner en `spc_t` sous SELinux, ne change pas ce qu'il peut faire, seulement les cibles qu'il peut lire. Sur un hôte sans AppArmor (Fedora), `--security-opt apparmor=unconfined` est accepté et sans effet : une seule commande pour Ubuntu et Fedora. Podman et Docker rootless : non mesurés.
 
-**Contrôle au démarrage** : un espace de noms cgroup privé (`--cgroupns=host` oublié) ferait répondre `container_changed` à chaque ouverture `procfs`, sans explication. Au démarrage, l'agent lit `/proc/self/cgroup` : `0::/` (racine d'un espace de noms privé) → avertissement visible dans les logs, et toute erreur `procfs` qui en découle porte le détail « lancez l'agent avec --cgroupns=host ».
+**Langue de l'agent** : tout texte humain que l'agent affiche (sortie standard et d'erreur, aide), journalise (`slog`) ou renvoie dans le `detail` d'une erreur d'API est en anglais ; les codes d'erreur de §6 ne changent pas. L'interface est traduite (§9) et affiche certains `detail` tels quels, entre parenthèses (montage qui bloque un tar, refus de Docker en lecture seule) : ils sont en anglais dans les deux langues. Un test (`cmd/hublot/messages_test.go`) refuse toute chaîne française dans le code de l'agent (plan Lancement, Q49).
+
+**Contrôle au démarrage** : un espace de noms cgroup privé (`--cgroupns=host` oublié) ferait répondre `container_changed` à chaque ouverture `procfs`, sans explication. Au démarrage, l'agent lit `/proc/self/cgroup` : `0::/` (racine d'un espace de noms privé) → avertissement visible dans les logs, et toute erreur `procfs` qui en découle porte le détail « start the agent with --cgroupns=host ».
 
 **Alternative** : binaire des releases GitHub + service systemd, lancé en root. Binaire lancé en root hors conteneur : vérifié sur Ubuntu et Fedora ; service systemd non testé.
 

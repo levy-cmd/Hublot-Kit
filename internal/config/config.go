@@ -39,22 +39,22 @@ func Load(args []string, getenv func(string) string) (Config, error) {
 	var c Config
 	fs := flag.NewFlagSet("hublot", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	fs.StringVar(&c.Listen, "listen", or("HUBLOT_LISTEN", "127.0.0.1:7878"), "adresse d'écoute")
-	fs.StringVar(&c.DataDir, "data-dir", or("HUBLOT_DATA_DIR", "/var/lib/hublot-kit"), "dossier de données")
-	fs.BoolVar(&c.ReadOnly, "read-only", readOnly, "désactive toute écriture")
-	fs.StringVar(&c.TLSCert, "tls-cert", or("HUBLOT_TLS_CERT", ""), "certificat TLS")
-	fs.StringVar(&c.TLSKey, "tls-key", or("HUBLOT_TLS_KEY", ""), "clé TLS")
-	fs.StringVar(&c.PublicOrigin, "public-origin", or("HUBLOT_PUBLIC_ORIGIN", ""), "origine publique derrière un reverse proxy")
+	fs.StringVar(&c.Listen, "listen", or("HUBLOT_LISTEN", "127.0.0.1:7878"), "listen address")
+	fs.StringVar(&c.DataDir, "data-dir", or("HUBLOT_DATA_DIR", "/var/lib/hublot-kit"), "data directory")
+	fs.BoolVar(&c.ReadOnly, "read-only", readOnly, "disable every write")
+	fs.StringVar(&c.TLSCert, "tls-cert", or("HUBLOT_TLS_CERT", ""), "TLS certificate")
+	fs.StringVar(&c.TLSKey, "tls-key", or("HUBLOT_TLS_KEY", ""), "TLS key")
+	fs.StringVar(&c.PublicOrigin, "public-origin", or("HUBLOT_PUBLIC_ORIGIN", ""), "public origin behind a reverse proxy")
 	if err := fs.Parse(args); err != nil {
 		return Config{}, err
 	}
 
 	if fs.NArg() > 0 {
-		return Config{}, fmt.Errorf("arguments positionnels non autorisés: %v", fs.Args())
+		return Config{}, fmt.Errorf("positional arguments not allowed: %v", fs.Args())
 	}
 
 	if (c.TLSCert == "") != (c.TLSKey == "") {
-		return Config{}, errors.New("--tls-cert/HUBLOT_TLS_CERT et --tls-key/HUBLOT_TLS_KEY vont ensemble")
+		return Config{}, errors.New("--tls-cert/HUBLOT_TLS_CERT and --tls-key/HUBLOT_TLS_KEY go together")
 	}
 	if c.PublicOrigin != "" {
 		o, err := normalizeOrigin(c.PublicOrigin)
@@ -74,22 +74,22 @@ func normalizeOrigin(s string) (string, error) {
 	}
 	scheme := strings.ToLower(u.Scheme)
 	if scheme != "http" && scheme != "https" {
-		return "", errors.New("schéma http ou https attendu")
+		return "", errors.New("http or https scheme expected")
 	}
 	if u.Host == "" {
-		return "", errors.New("hôte manquant")
+		return "", errors.New("missing host")
 	}
 	if u.User != nil {
-		return "", errors.New("authentification utilisateur non autorisée")
+		return "", errors.New("user credentials not allowed")
 	}
 	if strings.Contains(u.Host, "%") {
-		return "", errors.New("zone ID IPv6 non autorisée dans Host")
+		return "", errors.New("IPv6 zone ID not allowed in Host")
 	}
 	if u.Path != "" && u.Path != "/" || u.RawQuery != "" || u.Fragment != "" {
-		return "", errors.New("une origine n'a ni chemin, ni requête, ni fragment")
+		return "", errors.New("an origin has no path, query or fragment")
 	}
 	if u.ForceQuery || (len(s) > 0 && s[len(s)-1] == '#') {
-		return "", errors.New("une origine n'a ni chemin, ni requête, ni fragment")
+		return "", errors.New("an origin has no path, query or fragment")
 	}
 	host := strings.ToLower(u.Host)
 	// Strip default ports

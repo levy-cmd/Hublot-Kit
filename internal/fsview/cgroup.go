@@ -91,7 +91,7 @@ func NoteCgroupNamespace(selfCgroup string) bool {
 func changed(format string, a ...any) error {
 	msg := fmt.Sprintf(format, a...)
 	if privateCgroupNS.Load() {
-		msg += " ; lancez l'agent avec --cgroupns=host"
+		msg += "; start the agent with --cgroupns=host"
 	}
-	return fmt.Errorf("%w : %s", ErrContainerChanged, msg)
+	return fmt.Errorf("%w: %s", ErrContainerChanged, msg)
 }

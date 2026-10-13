@@ -51,11 +51,11 @@ var _ FS = (*tarFS)(nil)
 // maxHops: one single counter for a whole resolution (spec §5.2 step 5).
 const maxHops = 40
 
-var errTooManyBytes = errors.New("plafond d'octets atteint")
+var errTooManyBytes = errors.New("byte cap reached")
 
 // errTooSlow marks a too_large of the time cap: it expires (Q11), the
 // bytes and entries caps stay.
-var errTooSlow = errors.New("plafond de durée")
+var errTooSlow = errors.New("time cap")
 
 // countingReader counts the bytes of GET /archive (progress, MaxBytes) and
 // stops at the end of ctx even if the reader below ignores it.
@@ -94,13 +94,13 @@ func buildIndex(ctx context.Context, r io.Reader, lim IndexLimits, read *atomic.
 		}
 		switch {
 		case errors.Is(err, errTooManyBytes):
-			return nil, fmt.Errorf("%w : index au-delà de %d octets lus", ErrTooLarge, lim.MaxBytes)
+			return nil, fmt.Errorf("%w: index beyond %d bytes read", ErrTooLarge, lim.MaxBytes)
 		case err != nil && (errors.Is(err, context.DeadlineExceeded) || errors.Is(ctx.Err(), context.DeadlineExceeded)):
-			return nil, fmt.Errorf("%w : index au-delà de %s (%w)", ErrTooLarge, lim.MaxDuration, errTooSlow)
+			return nil, fmt.Errorf("%w: index beyond %s (%w)", ErrTooLarge, lim.MaxDuration, errTooSlow)
 		case err != nil:
-			return nil, fmt.Errorf("lecture de l'archive de / : %w", err)
+			return nil, fmt.Errorf("reading the archive of /: %w", err)
 		case n >= lim.MaxHeaders:
-			return nil, fmt.Errorf("%w : index au-delà de %d entrées", ErrTooLarge, lim.MaxHeaders)
+			return nil, fmt.Errorf("%w: index beyond %d entries", ErrTooLarge, lim.MaxHeaders)
 		}
 		x.add(h)
 	}
@@ -228,12 +228,12 @@ func (x *index) walk(p string) (cur string, rest []string, err error) {
 			continue
 		}
 		if len(todo) > 0 && e.Type != TypeDir {
-			return "", nil, fmt.Errorf("%w : %s", ErrNotDir, p)
+			return "", nil, fmt.Errorf("%w: %s", ErrNotDir, p)
 		}
 		cur = next
 	}
 	if mustDir && x.entries[cur].Type != TypeDir {
-		return "", nil, fmt.Errorf("%w : %s", ErrNotDir, p)
+		return "", nil, fmt.Errorf("%w: %s", ErrNotDir, p)
 	}
 	return cur, nil, nil
 }
@@ -265,7 +265,7 @@ func (t *tarFS) List(_ context.Context, dir string) ([]Entry, bool, error) {
 		return nil, false, err
 	}
 	if t.idx.entries[r].Type != TypeDir {
-		return nil, false, fmt.Errorf("%w : %s", ErrNotDir, dir)
+		return nil, false, fmt.Errorf("%w: %s", ErrNotDir, dir)
 	}
 	names := t.idx.children[r]
 	truncated := len(names) > MaxEntries
@@ -298,12 +298,12 @@ func (t *tarFS) regularPath(p string) (string, error) {
 		return "", err
 	}
 	if t.idx.entries[r].Type != TypeFile {
-		return "", fmt.Errorf("%w : %s", ErrNotRegular, p)
+		return "", fmt.Errorf("%w: %s", ErrNotRegular, p)
 	}
 	if first, ok := t.idx.hardlinks[r]; ok {
 		_, chained := t.idx.hardlinks[first]
 		if got, err := t.idx.resolve(first); err != nil || got != first || chained || t.idx.entries[first].Type != TypeFile {
-			return "", fmt.Errorf("%w : %s (lien physique vers %s)", ErrNotRegular, p, first)
+			return "", fmt.Errorf("%w: %s (hard link to %s)", ErrNotRegular, p, first)
 		}
 		r = first
 	}
@@ -329,12 +329,12 @@ func (t *tarFS) Open(ctx context.Context, p string) (io.ReadCloser, error) {
 	h, err := tr.Next()
 	if err != nil {
 		rc.Close()
-		return nil, fmt.Errorf("archive de %s : %w", r, err)
+		return nil, fmt.Errorf("archive of %s: %w", r, err)
 	}
 	if h.Typeflag != tar.TypeReg || path.Base(CleanPath(h.Name)) != path.Base(r) {
 		rc.Close()
 		t.stale()
-		return nil, changed("%s a changé depuis l'indexation", r)
+		return nil, changed("%s changed since indexing", r)
 	}
 	return &entryReader{tr: tr, rc: rc}, nil
 }
@@ -351,7 +351,7 @@ func (e *entryReader) Read(b []byte) (int, error) {
 	if err == io.EOF {
 		if _, next := e.tr.Next(); next != io.EOF {
 			if next == nil {
-				next = errors.New("archive d'un fichier : plus d'une entrée")
+				next = errors.New("archive of a file: more than one entry")
 			}
 			return n, next
 		}
@@ -366,7 +366,7 @@ func (t *tarFS) StatNoLinks(_ context.Context, p string) (Entry, error) {
 	cur := "/"
 	for _, c := range components(CleanPath(p)) {
 		if t.idx.entries[cur].Type != TypeDir {
-			return Entry{}, fmt.Errorf("%w : %s", ErrNotDir, cur)
+			return Entry{}, fmt.Errorf("%w: %s", ErrNotDir, cur)
 		}
 		cur = childPath(cur, c)
 		e, ok := t.idx.entries[cur]
@@ -374,7 +374,7 @@ func (t *tarFS) StatNoLinks(_ context.Context, p string) (Entry, error) {
 			return Entry{}, notExist(p)
 		}
 		if e.Type == TypeSymlink {
-			return Entry{}, fmt.Errorf("%w : %s", ErrLinkInPath, cur)
+			return Entry{}, fmt.Errorf("%w: %s", ErrLinkInPath, cur)
 		}
 	}
 	return t.idx.entries[cur], nil

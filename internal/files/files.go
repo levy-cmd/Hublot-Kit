@@ -41,9 +41,9 @@ const (
 const PutTimeout = time.Minute
 
 var (
-	ErrReadOnly    = errors.New("agent en lecture seule")
-	ErrConflict    = errors.New("le fichier a changé ou existe déjà")
-	ErrInvalidName = errors.New("nom de fichier invalide")
+	ErrReadOnly    = errors.New("agent is read-only")
+	ErrConflict    = errors.New("the file changed or already exists")
+	ErrInvalidName = errors.New("invalid file name")
 )
 
 // Auditor is the part of *audit.Log the writer uses.
@@ -91,7 +91,7 @@ func (w *Writer) Edit(ctx context.Context, c dockerx.ContainerInfo, p string, co
 		return "", err
 	}
 	if len(content) > MaxEditBytes {
-		return "", fmt.Errorf("%w : édition limitée à %d octets", fsview.ErrTooLarge, MaxEditBytes)
+		return "", fmt.Errorf("%w: edits limited to %d bytes", fsview.ErrTooLarge, MaxEditBytes)
 	}
 	// 2. The write path is the cleaned request path, nothing else; a place
 	// Docker really writes to (Inspect); no link anywhere on it; fstatfs
@@ -118,7 +118,7 @@ func (w *Writer) Edit(ctx context.Context, c dockerx.ContainerInfo, p string, co
 		return "", err
 	}
 	if e.Type != fsview.TypeFile {
-		return "", fmt.Errorf("%w : %s", fsview.ErrNotRegular, target)
+		return "", fmt.Errorf("%w: %s", fsview.ErrNotRegular, target)
 	}
 	// A mount point of the running container that Inspect may not show (a
 	// file bind, a Swarm config, docker-init, a CDI file): Docker cannot
@@ -129,7 +129,7 @@ func (w *Writer) Edit(ctx context.Context, c dockerx.ContainerInfo, p string, co
 			return "", err
 		}
 		if point {
-			return "", fmt.Errorf("%w : %s est un point de montage du conteneur : modifiez sa source", fsview.ErrForbiddenPath, target)
+			return "", fmt.Errorf("%w: %s is a mount point of the container: edit its source", fsview.ErrForbiddenPath, target)
 		}
 	}
 	// 3. Read the file again, compare its SHA-256 to If-Match.
@@ -138,7 +138,7 @@ func (w *Writer) Edit(ctx context.Context, c dockerx.ContainerInfo, p string, co
 		return "", err
 	}
 	if ifMatch == "" || ETag(current) != ifMatch {
-		return "", fmt.Errorf("%w : %s (If-Match)", ErrConflict, target)
+		return "", fmt.Errorf("%w: %s (If-Match)", ErrConflict, target)
 	}
 	tarball, err := oneFile(path.Base(target), content, e.Mode, e.UID, e.GID)
 	if err != nil {
@@ -160,13 +160,13 @@ func (w *Writer) Upload(ctx context.Context, c dockerx.ContainerInfo, dir, name 
 		return "", err
 	}
 	if len(content) > MaxUploadBytes {
-		return "", fmt.Errorf("%w : envoi limité à %d octets", fsview.ErrTooLarge, MaxUploadBytes)
+		return "", fmt.Errorf("%w: uploads limited to %d bytes", fsview.ErrTooLarge, MaxUploadBytes)
 	}
 	// 2. A single component; a place Docker really writes to (Inspect); then
 	// the parent, without any link, not on a pseudo filesystem (inside
 	// StatNoLinks), a directory.
 	if !validName(name) {
-		return "", fmt.Errorf("%w : %q", ErrInvalidName, name)
+		return "", fmt.Errorf("%w: %q", ErrInvalidName, name)
 	}
 	parent := fsview.CleanPath(dir)
 	target := fsview.CleanPath(parent + "/" + name)
@@ -191,17 +191,17 @@ func (w *Writer) Upload(ctx context.Context, c dockerx.ContainerInfo, dir, name 
 		return "", err
 	}
 	if d.Type != fsview.TypeDir {
-		return "", fmt.Errorf("%w : %s", fsview.ErrNotDir, parent)
+		return "", fmt.Errorf("%w: %s", fsview.ErrNotDir, parent)
 	}
 	// 3. If-None-Match: *, then the last component, without following a
 	// link: absent → go on; a link, even dangling → link_in_path (from
 	// StatNoLinks); anything else → conflict.
 	if ifNoneMatch != "*" {
-		return "", fmt.Errorf("%w : un envoi exige If-None-Match: *", ErrConflict)
+		return "", fmt.Errorf("%w: an upload requires If-None-Match: *", ErrConflict)
 	}
 	switch _, err := fsys.StatNoLinks(ctx, target); {
 	case err == nil:
-		return "", fmt.Errorf("%w : %s existe", ErrConflict, target)
+		return "", fmt.Errorf("%w: %s exists", ErrConflict, target)
 	case !errors.Is(err, fs.ErrNotExist):
 		return "", err
 	}
@@ -221,11 +221,11 @@ func (w *Writer) Upload(ctx context.Context, c dockerx.ContainerInfo, dir, name 
 // does a request that has already ended (the guard answered 504).
 func (w *Writer) put(ctx context.Context, action, id, target string, tarball []byte) error {
 	if err := ctx.Err(); err != nil {
-		return fmt.Errorf("requête terminée avant l'écriture, rien n'est écrit : %w", err)
+		return fmt.Errorf("request ended before the write, nothing written: %w", err)
 	}
 	ev := audit.Event{Action: action, Container: id, Path: target, Result: "intent"}
 	if err := w.Audit.Write(ev); err != nil {
-		return fmt.Errorf("journal d'audit, rien n'est écrit : %w", err)
+		return fmt.Errorf("audit log, nothing written: %w", err)
 	}
 	pctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), PutTimeout)
 	defer cancel()
@@ -273,7 +273,7 @@ func readCapped(ctx context.Context, fsys fsview.FS, p string) ([]byte, error) {
 		return nil, err
 	}
 	if len(b) > MaxEditBytes {
-		return nil, fmt.Errorf("%w : %s dépasse %d octets", fsview.ErrTooLarge, p, MaxEditBytes)
+		return nil, fmt.Errorf("%w: %s exceeds %d bytes", fsview.ErrTooLarge, p, MaxEditBytes)
 	}
 	return b, nil
 }
@@ -305,22 +305,22 @@ func (w *Writer) lock(ctx context.Context, id string) (func(), error) {
 // extracts in its own view: the root filesystem plus the configured mounts.
 func (w *Writer) writable(ctx context.Context, c dockerx.ContainerInfo, target string) error {
 	if err := fsview.HostBind(ctx, w.Docker, c.Mounts); err != nil {
-		return fmt.Errorf("écriture refusée pour tout le conteneur : %w", err)
+		return fmt.Errorf("write refused for the whole container: %w", err)
 	}
 	for _, d := range []string{"/proc", "/sys", "/dev"} {
 		if under(target, d) {
-			return fmt.Errorf("%w : %s : %s est monté au démarrage du conteneur, Docker n'y écrit pas", fsview.ErrForbiddenPath, target, d)
+			return fmt.Errorf("%w: %s: %s is mounted when the container starts, Docker does not write there", fsview.ErrForbiddenPath, target, d)
 		}
 	}
 	switch target {
 	case "/etc/hosts", "/etc/hostname", "/etc/resolv.conf":
-		return fmt.Errorf("%w : %s est géré et monté par Docker", fsview.ErrForbiddenPath, target)
+		return fmt.Errorf("%w: %s is managed and mounted by Docker", fsview.ErrForbiddenPath, target)
 	}
 	tmpfs := slices.Clone(c.Tmpfs)
 	for _, m := range c.Mounts {
 		d := fsview.CleanPath(m.Destination)
 		if d == target {
-			return fmt.Errorf("%w : %s est monté (%s %s) : modifiez sa source", fsview.ErrForbiddenPath, target, m.Type, m.Source+m.Name)
+			return fmt.Errorf("%w: %s is mounted (%s %s): edit its source", fsview.ErrForbiddenPath, target, m.Type, m.Source+m.Name)
 		}
 		if m.Type == "tmpfs" {
 			tmpfs = append(tmpfs, d)
@@ -333,7 +333,7 @@ func (w *Writer) writable(ctx context.Context, c dockerx.ContainerInfo, target s
 func underTmpfs(target string, points []string) error {
 	for _, d := range points {
 		if d := fsview.CleanPath(d); under(target, d) {
-			return fmt.Errorf("%w : %s est sous le tmpfs %s, Docker n'y écrit pas", fsview.ErrForbiddenPath, target, d)
+			return fmt.Errorf("%w: %s is under the tmpfs %s, Docker does not write there", fsview.ErrForbiddenPath, target, d)
 		}
 	}
 	return nil

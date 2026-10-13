@@ -83,7 +83,7 @@ func (s *server) fsUpload(w http.ResponseWriter, r *http.Request) {
 func readUpload(r *http.Request) (string, []byte, error) {
 	mr, err := r.MultipartReader()
 	if err != nil {
-		return "", nil, fmt.Errorf("%w : corps multipart attendu (%v)", files.ErrInvalidName, err)
+		return "", nil, fmt.Errorf("%w: multipart body expected (%v)", files.ErrInvalidName, err)
 	}
 	var name string
 	var content []byte
@@ -102,12 +102,12 @@ func readUpload(r *http.Request) (string, []byte, error) {
 		}
 		if found { // a second "file": the name would be ambiguous
 			part.Close()
-			return "", nil, fmt.Errorf("%w : plusieurs champs file", files.ErrInvalidName)
+			return "", nil, fmt.Errorf("%w: several file fields", files.ErrInvalidName)
 		}
 		_, params, err := mime.ParseMediaType(part.Header.Get("Content-Disposition"))
 		if err != nil {
 			part.Close()
-			return "", nil, fmt.Errorf("%w : %v", files.ErrInvalidName, err)
+			return "", nil, fmt.Errorf("%w: %v", files.ErrInvalidName, err)
 		}
 		b, err := io.ReadAll(io.LimitReader(part, files.MaxUploadBytes+1))
 		part.Close()
@@ -117,7 +117,7 @@ func readUpload(r *http.Request) (string, []byte, error) {
 		name, content, found = params["filename"], b, true
 	}
 	if !found {
-		return "", nil, fmt.Errorf("%w : aucun champ file", files.ErrInvalidName)
+		return "", nil, fmt.Errorf("%w: no file field", files.ErrInvalidName)
 	}
 	return name, content, nil
 }
@@ -126,7 +126,7 @@ func readUpload(r *http.Request) (string, []byte, error) {
 // abandoned request the write goes on in the background: say so.
 func writeGuardError(w http.ResponseWriter, err error) {
 	if errors.Is(err, errTimeout) {
-		err = fmt.Errorf("%w ; l'écriture peut encore aboutir : rechargez le fichier pour le vérifier", err)
+		err = fmt.Errorf("%w; the write may still complete: reload the file to check", err)
 	}
 	writeFSError(w, err)
 }

@@ -26,12 +26,12 @@ var containerRef = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$`)
 func (s *server) fsRequest(w http.ResponseWriter, r *http.Request, param string) (info dockerx.ContainerInfo, p string, ok bool) {
 	id := r.PathValue("id")
 	if !containerRef.MatchString(id) {
-		writeError(w, http.StatusNotFound, "not_found", "identifiant de conteneur invalide")
+		writeError(w, http.StatusNotFound, "not_found", "invalid container ID")
 		return info, "", false
 	}
 	raw := r.URL.Query().Get(param)
 	if strings.ContainsRune(raw, 0) {
-		writeError(w, http.StatusNotFound, "not_found", "chemin invalide")
+		writeError(w, http.StatusNotFound, "not_found", "invalid path")
 		return info, "", false
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), fsTimeout)

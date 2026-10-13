@@ -39,7 +39,7 @@ const maxDownloadLine = 1 << 20
 
 // errTooManyStreams: every slot of logLimits.MaxStreams is taken by
 // downloads, which are never evicted.
-var errTooManyStreams = errors.New("trop de flux de logs ouverts")
+var errTooManyStreams = errors.New("too many open log streams")
 
 // sseWriteTimeout bounds each write of a stream (review I4): a client
 // that no longer reads cannot hold the goroutine.
@@ -135,7 +135,7 @@ func (s *streamSlots) take(live bool) (release func(), evicted <-chan struct{}, 
 	defer s.mu.Unlock()
 	if s.used >= s.max {
 		if len(s.live) == 0 {
-			return nil, nil, fmt.Errorf("%w (%d au plus, tous des téléchargements)", errTooManyStreams, s.max)
+			return nil, nil, fmt.Errorf("%w (%d at most, all downloads)", errTooManyStreams, s.max)
 		}
 		old := s.live[0]
 		s.live, s.used, old.gone = s.live[1:], s.used-1, true
@@ -174,7 +174,7 @@ func (s *server) sessionValid(r *http.Request) bool {
 func (s *server) inspectByRef(r *http.Request) (dockerx.ContainerInfo, error) {
 	id := r.PathValue("id")
 	if !containerRef.MatchString(id) {
-		return dockerx.ContainerInfo{}, fmt.Errorf("%w : identifiant de conteneur invalide", dockerx.ErrNotFound)
+		return dockerx.ContainerInfo{}, fmt.Errorf("%w: invalid container ID", dockerx.ErrNotFound)
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), fsTimeout)
 	defer cancel()
@@ -331,11 +331,11 @@ func (s *server) logsStream(w http.ResponseWriter, r *http.Request) {
 			return
 		case <-evicted:
 			flushDropped()
-			out.event("evicted", "", apiError{Error: "internal", Detail: fmt.Sprintf("flux remplacé par un plus récent (%d flux de logs au plus)", lim.MaxStreams)})
+			out.event("evicted", "", apiError{Error: "internal", Detail: fmt.Sprintf("stream replaced by a newer one (%d log streams at most)", lim.MaxStreams)})
 			return
 		case <-tick.C:
 			if !s.sessionValid(r) {
-				out.event("failure", "", apiError{Error: "unauthorized", Detail: "session terminée"})
+				out.event("failure", "", apiError{Error: "unauthorized", Detail: "session ended"})
 				return
 			}
 			if flushDropped() != nil || out.comment("ping") != nil {

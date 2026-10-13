@@ -98,7 +98,7 @@ func NewHandler(files fs.FS) http.Handler {
 		// SPA fallback: serve index.html
 		index, err := fs.ReadFile(files, "index.html")
 		if err != nil {
-			http.Error(w, "interface non compilée : lancez `make web`", http.StatusServiceUnavailable)
+			http.Error(w, "interface not built: run `make web`", http.StatusServiceUnavailable)
 			return
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")

@@ -26,7 +26,7 @@ const dockerPartial = 16 << 10
 // ErrNoLogs: the container's logging driver cannot be read (--log-driver
 // none, syslog…): Docker answers 501 "configured logging driver does not
 // support reading".
-var ErrNoLogs = errors.New("le pilote de logs de ce conteneur ne permet pas la lecture")
+var ErrNoLogs = errors.New("the logging driver of this container cannot be read back")
 
 // LogsOptions of GET /containers/{id}/logs: stdout, stderr and timestamps
 // are always asked for. Tail is a number of lines or "all"; Since, when
@@ -60,7 +60,7 @@ func (e *engine) Logs(ctx context.Context, id string, opt LogsOptions) (io.ReadC
 // wrapLogs: wrap, plus a driver Docker cannot read (NotImplemented).
 func wrapLogs(err error) error {
 	if cerrdefs.IsNotImplemented(err) {
-		return fmt.Errorf("%w : %v", ErrNoLogs, err)
+		return fmt.Errorf("%w: %v", ErrNoLogs, err)
 	}
 	return wrap(err)
 }
@@ -137,11 +137,11 @@ func readFrames(r io.Reader, max int, emit func(LogLine) error) error {
 		size := int64(binary.BigEndian.Uint32(hdr[4:]))
 		if hdr[0] == 3 { // Systemerr: an error of the daemon, as text
 			msg, _ := io.ReadAll(io.LimitReader(r, min(size, 4<<10)))
-			return fmt.Errorf("%w : %s", ErrUnavailable, msg)
+			return fmt.Errorf("%w: %s", ErrUnavailable, msg)
 		}
 		b, ok := bufs[hdr[0]]
 		if !ok {
-			return fmt.Errorf("%w : type de trame de logs inconnu %d", ErrUnavailable, hdr[0])
+			return fmt.Errorf("%w: unknown log frame type %d", ErrUnavailable, hdr[0])
 		}
 		// The payload is read in chunks: only the head (the timestamp) and
 		// what fits in max is kept.
