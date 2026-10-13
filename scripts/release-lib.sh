@@ -11,11 +11,52 @@ HK_BASE=http://127.0.0.1:7878
 
 hk_fail() { echo "ÉCHEC : $*" >&2; exit 1; }
 
+HK_SPEC_FILE=${HK_SPEC_FILE:-docs/superpowers/specs/2026-10-07-hublot-kit-v0.1-design.md}
+HK_IMAGE_REF=ghcr.io/levy-cmd/hublot-kit:0.1
+HK_SPEC_LINES=8
+
 # La commande `docker run` de la spec §8, à l'octet près (celle de la doc :
-# scripts/check-docs.sh vérifie que la doc la reprend telle quelle).
+# scripts/check-docs.sh vérifie que la doc la reprend telle quelle) : de la
+# ligne `docker run -d --name hublot-kit \` à la première ligne qui ne finit
+# pas par une barre oblique inverse. Aucune vérification ici : voir hk_spec_args.
 hk_spec_command() {
-  awk '/^docker run -d --name hublot-kit/{on=1} on{print} on&&/ghcr\.io\/levy-cmd\/hublot-kit:0\.1$/{exit}' \
-    docs/superpowers/specs/2026-10-07-hublot-kit-v0.1-design.md
+  awk '/^docker run -d --name hublot-kit/{on=1} on{print; if (!/\\$/) exit}' "$HK_SPEC_FILE"
+}
+
+# hk_spec_args IMAGE : remplit HK_RUN (tableau d'arguments, lancé sans shell)
+# avec la commande de §8 où IMAGE remplace HK_IMAGE_REF. Refuse, avant tout
+# appel à docker, une commande qui n'a pas exactement HK_SPEC_LINES lignes,
+# dont la dernière n'est pas HK_IMAGE_REF indentée de deux espaces, ou qui contient un caractère hors
+# de [A-Za-z0-9 ./:=_-] (backtick, $, ;, |, &, guillemets, tabulation…).
+hk_spec_args() {
+  case $1 in ''|-*|*[!A-Za-z0-9./:@_-]*) hk_fail "référence d'image refusée : '$1'" ;; esac
+  sc=$(hk_spec_command)
+  [ -n "$sc" ] || hk_fail "commande docker run introuvable dans $HK_SPEC_FILE (§8)"
+  n=$(printf '%s\n' "$sc" | wc -l | tr -d ' ')
+  [ "$n" = "$HK_SPEC_LINES" ] || hk_fail "commande de §8 : $n lignes, $HK_SPEC_LINES attendues"
+  [ "$(printf '%s\n' "$sc" | tail -n 1)" = "  $HK_IMAGE_REF" ] || hk_fail "commande de §8 : la dernière ligne n'est pas « $HK_IMAGE_REF » (indentée de deux espaces)"
+  # Toutes les lignes sauf la dernière finissent par « \ » (vérifié par awk) ;
+  # hors de ces continuations, seuls les caractères attendus passent.
+  flat=$(printf '%s\n' "$sc" | sed 's/ \\$//' | tr '\n' ' ')
+  case $flat in *[!A-Za-z0-9\ ./:=_-]*) hk_fail "commande de §8 : caractère inattendu dans « $flat »" ;; esac
+  # Découpage sur les espaces, sans glob ni expansion (read -a).
+  read -r -a HK_RUN <<< "$flat"
+  last=$((${#HK_RUN[@]} - 1))
+  [ "${HK_RUN[0]} ${HK_RUN[1]}" = "docker run" ] || hk_fail "commande de §8 : ne commence pas par docker run"
+  [ "${HK_RUN[$last]}" = "$HK_IMAGE_REF" ] || hk_fail "commande de §8 : l'image n'est pas le dernier argument"
+  HK_RUN[$last]=$1
+  # Sauf si l'on teste l'image publique elle-même, elle ne doit plus paraître.
+  if [ "$1" != "$HK_IMAGE_REF" ]; then
+    for a in "${HK_RUN[@]}"; do
+      [ "$a" != "$HK_IMAGE_REF" ] || hk_fail "commande de §8 : la référence publique reste après substitution"
+    done
+  fi
+}
+
+# hk_redact : masque, dans un journal à afficher, tout jeton (43 caractères
+# base64url, auth.GenerateToken) et le reste de toute ligne « shown only once ».
+hk_redact() {
+  sed -E 's/(shown only once):.*/\1: [masqué]/; s/[A-Za-z0-9_-]{43,}/[masqué]/g'
 }
 
 # Conteneurs créés par ce script, les seuls que hk_remove_targets supprime :

@@ -17,9 +17,9 @@ cd "$(dirname "$0")/.."
 image=${1:?usage : scripts/check-image.sh IMAGE [VERSION_ATTENDUE]}
 want=${2:-}
 
-cmd=$(hk_spec_command)
-[ -n "$cmd" ] || hk_fail "commande docker run introuvable dans la spec §8"
-cmd=${cmd//ghcr.io\/levy-cmd\/hublot-kit:0.1/$image}
+# Commande de §8 vérifiée et découpée en arguments (HK_RUN), avant tout
+# appel à docker ; lancée sans shell.
+hk_spec_args "$image"
 
 # Garde : on sort avant le trap, sans rien toucher, si quelque chose de
 # l'utilisateur porte déjà un des noms ou écoute sur le port.
@@ -46,17 +46,19 @@ trap cleanup EXIT
 jar=$(mktemp)
 
 hk_start_targets
-printf '+ %s\n' "$cmd"
+printf '+ %s\n' "${HK_RUN[*]}"
 # `docker run` crée le conteneur et, à la première fois, le volume nommé.
 made_ctr=1 made_vol=1
-sh -c "$cmd" >/dev/null
+"${HK_RUN[@]}" >/dev/null
 hk_wait_login
 logs=$(docker logs hublot-kit 2>&1)
 tok=$(printf '%s\n' "$logs" | sed -n 's/^Access token (shown only once): //p')
-[ -n "$tok" ] || hk_fail "jeton absent de docker logs : $logs"
+# Les journaux ne s'affichent que masqués (hk_redact) : le jeton n'entre
+# jamais dans la sortie, ni dans celle de la CI.
+[ -n "$tok" ] || hk_fail "jeton absent de docker logs : $(printf '%s\n' "$logs" | hk_redact)"
 # L'avertissement « without TLS » est attendu dans l'image (0.0.0.0 publié sur 127.0.0.1, spec §7) ;
 # celui de l'espace de noms cgroup ne doit jamais paraître (spec §8).
-case $logs in *"private cgroup namespace"*) hk_fail "avertissement cgroup au démarrage : $logs" ;; esac
+case $logs in *"private cgroup namespace"*) hk_fail "avertissement cgroup au démarrage : $(printf '%s\n' "$logs" | hk_redact)" ;; esac
 hk_login "$tok" "$jar"
 hk_check_meta "$jar" "$want"
 hk_check_targets "$jar"
@@ -65,7 +67,7 @@ hk_check_writes "$jar"
 # Mise à jour (docs, « Upgrade ») : conteneur recréé sur le même volume, même
 # jeton, et aucun nouveau jeton affiché.
 docker rm -f hublot-kit >/dev/null
-sh -c "$cmd" >/dev/null
+"${HK_RUN[@]}" >/dev/null
 hk_wait_login
 case $(docker logs hublot-kit 2>&1) in *"Access token"*) hk_fail "nouveau jeton après recréation : le volume n'a pas gardé l'empreinte" ;; esac
 hk_login "$tok" "$jar"
