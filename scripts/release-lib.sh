@@ -18,22 +18,49 @@ hk_spec_command() {
     docs/superpowers/specs/2026-10-07-hublot-kit-v0.1-design.md
 }
 
-hk_start_targets() {
+# Conteneurs créés par ce script, les seuls que hk_remove_targets supprime :
+# un conteneur hk-check-* qui existait avant le test n'est jamais touché.
+HK_CREATED=
+
+# hk_check_no_targets : refuse si une cible existe déjà (rien n'est touché).
+hk_check_no_targets() {
   for c in $HK_TARGETS; do
     if docker container inspect "$c" >/dev/null 2>&1; then hk_fail "le conteneur $c existe déjà"; fi
   done
-  docker pull -q alpine:3 >/dev/null
-  docker run -d --name hk-check-normal alpine:3 sleep 600 >/dev/null
-  docker exec hk-check-normal sh -c 'echo before > /root/hk-edit.txt'
-  docker run -d --name hk-check-priv --privileged alpine:3 sleep 600 >/dev/null
-  docker run -d --name hk-check-unconf --security-opt apparmor=unconfined alpine:3 sleep 600 >/dev/null
-  docker run -d --name hk-check-uid --user 1000:1000 alpine:3 sleep 600 >/dev/null
-  docker run --name hk-check-stopped alpine:3 true
 }
 
+# hk_new_target NOM ARGUMENTS_DE_DOCKER_CREATE... : `docker create` réserve le
+# nom (échoue s'il est pris), et le conteneur n'est noté comme nôtre qu'une
+# fois créé.
+hk_new_target() {
+  n=$1
+  shift
+  docker create --name "$n" "$@" >/dev/null || hk_fail "création du conteneur $n"
+  HK_CREATED="$HK_CREATED $n"
+}
+
+hk_start_targets() {
+  hk_check_no_targets
+  docker pull -q alpine:3 >/dev/null
+  hk_new_target hk-check-normal alpine:3 sleep 600
+  hk_new_target hk-check-priv --privileged alpine:3 sleep 600
+  hk_new_target hk-check-unconf --security-opt apparmor=unconfined alpine:3 sleep 600
+  hk_new_target hk-check-uid --user 1000:1000 alpine:3 sleep 600
+  # Le conteneur arrêté : lancé une fois jusqu'au bout.
+  hk_new_target hk-check-stopped alpine:3 true
+  docker start hk-check-normal hk-check-priv hk-check-unconf hk-check-uid >/dev/null
+  docker start -a hk-check-stopped >/dev/null
+  docker exec hk-check-normal sh -c 'echo before > /root/hk-edit.txt'
+}
+
+# hk_remove_targets : ne supprime que les conteneurs notés dans HK_CREATED ;
+# ne fait jamais échouer le nettoyage.
 hk_remove_targets() {
-  # shellcheck disable=SC2086
-  docker rm -f $HK_TARGETS >/dev/null 2>&1 || true
+  if [ -n "$HK_CREATED" ]; then
+    # shellcheck disable=SC2086
+    docker rm -f $HK_CREATED >/dev/null 2>&1 || true
+  fi
+  HK_CREATED=
 }
 
 hk_wait_login() {
@@ -44,10 +71,17 @@ hk_wait_login() {
   hk_fail "l'agent ne répond pas sur $HK_BASE/login"
 }
 
+# hk_login_code JETON [FICHIER_COOKIES] : code HTTP de POST /api/login. Le
+# jeton passe par stdin (printf est interne à bash), jamais dans les arguments
+# de curl, que `ps` montre à tous.
+hk_login_code() {
+  printf '{"token":"%s"}' "$1" | curl -s ${2:+-c "$2"} -H "Origin: $HK_BASE" -H 'Content-Type: application/json' \
+    --data-binary @- -o /dev/null -w '%{http_code}' "$HK_BASE/api/login" || true
+}
+
 # hk_login JETON FICHIER_COOKIES
 hk_login() {
-  curl -sf -c "$2" -H "Origin: $HK_BASE" -H 'Content-Type: application/json' \
-    -d "{\"token\":\"$1\"}" -o /dev/null "$HK_BASE/api/login" || hk_fail "connexion refusée"
+  [ "$(hk_login_code "$1" "$2")" = 200 ] || hk_fail "connexion refusée"
 }
 
 # hk_check_meta FICHIER_COOKIES [VERSION]

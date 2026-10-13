@@ -16,19 +16,43 @@ cd "$(dirname "$0")/.."
 archive=${1:?usage : scripts/check-systemd.sh ARCHIVE.tar.gz [VERSION_ATTENDUE]}
 want=${2:-}
 [ "$(id -u)" = 0 ] || hk_fail "à lancer en root"
-for p in /usr/local/bin/hublot /etc/systemd/system/hublot-kit.service /var/lib/hublot-kit; do
-  [ ! -e "$p" ] || hk_fail "$p existe déjà : Hublot-Kit est installé, rien n'est touché"
+
+# Garde : si Hublot-Kit (fichiers, unité connue de systemd, surcharge), une
+# cible ou le port 7878 sont déjà là, on sort avant le trap, sans rien toucher.
+for p in /usr/local/bin/hublot /var/lib/hublot-kit \
+  /etc/systemd/system/hublot-kit.service /etc/systemd/system/hublot-kit.service.d \
+  /run/systemd/system/hublot-kit.service /run/systemd/system/hublot-kit.service.d \
+  /usr/lib/systemd/system/hublot-kit.service /usr/lib/systemd/system/hublot-kit.service.d \
+  /lib/systemd/system/hublot-kit.service /lib/systemd/system/hublot-kit.service.d \
+  /etc/systemd/system/multi-user.target.wants/hublot-kit.service; do
+  if [ -e "$p" ] || [ -L "$p" ]; then hk_fail "$p existe déjà : Hublot-Kit est installé, rien n'est touché"; fi
 done
-work=$(mktemp -d)
-jar=$(mktemp)
+if systemctl cat hublot-kit.service >/dev/null 2>&1; then
+  hk_fail "systemd connaît déjà hublot-kit.service, rien n'est touché"
+fi
+busy=$(ss -ltnH 'sport = :7878')
+[ -z "$busy" ] || hk_fail "le port 7878 est déjà pris, rien n'est touché : $busy"
+hk_check_no_targets
+
+# Le nettoyage ne supprime que ce que ce script a créé (drapeaux posés juste
+# avant chaque création), et va jusqu'au bout même si une étape échoue.
+made_bin= made_unit= made_data= work= jar=
 cleanup() {
-  systemctl disable --now hublot-kit >/dev/null 2>&1 || true
-  rm -f /usr/local/bin/hublot /etc/systemd/system/hublot-kit.service
-  rm -rf /var/lib/hublot-kit "$work" "$jar"
-  systemctl daemon-reload
+  set +e
+  if [ -n "$made_unit" ]; then
+    systemctl disable --now hublot-kit >/dev/null 2>&1
+    rm -f /etc/systemd/system/hublot-kit.service
+  fi
+  [ -z "$made_bin" ] || rm -f /usr/local/bin/hublot
+  [ -z "$made_data" ] || rm -rf /var/lib/hublot-kit
+  [ -z "$work" ] || rm -rf "$work"
+  [ -z "$jar" ] || rm -f "$jar"
+  [ -z "$made_unit" ] || systemctl daemon-reload
   hk_remove_targets
 }
 trap cleanup EXIT
+work=$(mktemp -d)
+jar=$(mktemp)
 
 # Journal de l'unité depuis le début du test, capturé d'abord : sous pipefail,
 # `journalctl | grep -q` peut finir en SIGPIPE (141) et masquer une fuite.
@@ -36,6 +60,7 @@ trap cleanup EXIT
 # affiche « … (shown only once): <jeton> » quand il crée ou renouvelle un
 # jeton, par exemple à un premier démarrage sans reset-token préalable).
 check_journal() {
+  journalctl --sync
   journal=$(journalctl -u hublot-kit --since "$since" --no-pager)
   case $journal in *"$tok"*) hk_fail "le jeton est dans le journal" ;; esac
   case $journal in *"shown only once"*) hk_fail "un jeton est affiché dans le journal" ;; esac
@@ -44,11 +69,14 @@ check_journal() {
 
 tar -xzf "$archive" -C "$work"
 # Les commandes de docs/en/install.md, section « Binary and systemd ».
+made_bin=1
 install -m 0755 "$work/hublot" /usr/local/bin/hublot
+made_unit=1
 install -m 0644 "$work/hublot-kit.service" /etc/systemd/system/hublot-kit.service
 # Seuls les avertissements sur notre unité comptent (verify parle aussi de ses dépendances).
 out=$(systemd-analyze verify /etc/systemd/system/hublot-kit.service 2>&1) || hk_fail "systemd-analyze : $out"
 case $out in *hublot-kit*) hk_fail "systemd-analyze : $out" ;; esac
+made_data=1
 tok=$(/usr/local/bin/hublot reset-token | sed -n 's/^New access token (shown only once): //p')
 [ -n "$tok" ] || hk_fail "reset-token n'a pas donné de jeton"
 since=$(date '+%Y-%m-%d %H:%M:%S')
@@ -76,8 +104,7 @@ fi
 new=$(/usr/local/bin/hublot reset-token | sed -n 's/^New access token (shown only once): //p')
 systemctl restart hublot-kit
 hk_wait_login
-code=$(curl -s -o /dev/null -w '%{http_code}' -H "Origin: $HK_BASE" -H 'Content-Type: application/json' \
-  -d "{\"token\":\"$tok\"}" "$HK_BASE/api/login")
+code=$(hk_login_code "$tok")
 [ "$code" = 401 ] || hk_fail "ancien jeton après rotation : $code"
 hk_login "$new" "$jar"
 check_journal
