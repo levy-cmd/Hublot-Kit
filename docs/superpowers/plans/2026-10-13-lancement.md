@@ -117,14 +117,14 @@ Une ligne par question ; les tâches indiquées appliquent la réponse.
 
 | Étape | Tâche | Ce qu'elle rend visible ou définitif |
 |---|---|---|
-| Pousser le tag `v0.1.0-rc.1`, puis lancer `release.yml` sur ce tag | 9, étape 1 | tag sur GitHub ; puis (lancement) image `0.1.0-rc.1` poussée sur GHCR (paquet privé), release brouillon, entrées permanentes dans Rekor (nom du dépôt, workflow, tag) |
+| Pousser le tag `v0.1.0-rc.1` ; lancer `release.yml` sur ce tag | 9, étapes 1 et 3 | tag sur GitHub ; puis (lancement) image `0.1.0-rc.1` poussée sur GHCR (paquet privé), release brouillon, entrées permanentes dans Rekor (nom du dépôt, workflow, tag) |
 | Pousser le tag `v0.1.0`, puis lancer `release.yml` sur ce tag | 10, étape 2 | idem, images `0.1.0` et `0.1` |
 | Rendre le dépôt public, activer le signalement privé de vulnérabilités | 10, étape 5 | tout l'historique, les plans, les adresses e-mail des commits |
 | Publier la release `v0.1.0` | 10, étape 6 | release visible, marquée « Latest » |
 | Rendre public le paquet GHCR | 10, étape 7 | `docker pull` anonyme ; ne se fait que dans l'interface web de GitHub |
 | Supprimer le brouillon de la rc (facultatif) | 10, étape 9 | suppression définitive du brouillon |
 
-Ne sont pas des étapes ARRÊT : pousser la branche `phase/lancement` et ouvrir sa PR en brouillon (privées, comme aux phases précédentes) ; la petite PR de `release.yml` (tâche 9, étape 0) ; les fusions restent faites par l'utilisateur. Pousser un tag seul ne publie rien (Q54) : c'est le lancement de `release.yml` qui publie.
+Ne sont pas des étapes ARRÊT : les deux lancements refusés de la tâche 9, étape 2 (seul le garde tourne) ; pousser la branche `phase/lancement` et ouvrir sa PR en brouillon (privées, comme aux phases précédentes) ; la petite PR de `release.yml` (tâche 9, étape 0) ; les fusions restent faites par l'utilisateur. Pousser un tag seul ne publie rien (Q54) : c'est le lancement de `release.yml` qui publie.
 
 ## Où tester
 
@@ -2777,18 +2777,22 @@ jobs:
     runs-on: ubuntu-latest
     permissions: {}
     steps:
+      # Une relance (« Re-run failed jobs ») par un autre compte garde l'auteur
+      # d'origine dans github.actor : triggering_actor est vérifié aussi.
       - name: La ref est le tag confirmé, lancé par le propriétaire
         env:
           REF_TYPE: ${{ github.ref_type }}
           REF_NAME: ${{ github.ref_name }}
           CONFIRM: ${{ inputs.confirm }}
           ACTOR: ${{ github.actor }}
+          TRIGGER: ${{ github.triggering_actor }}
           OWNER: ${{ github.repository_owner }}
         run: |
           [ "$REF_TYPE" = tag ] || { echo "à lancer sur un tag (--ref vX.Y.Z), pas sur $REF_TYPE $REF_NAME" >&2; exit 1; }
           [ "$CONFIRM" = "$REF_NAME" ] || { echo "confirmation « $CONFIRM » différente du tag « $REF_NAME »" >&2; exit 1; }
           echo "$REF_NAME" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$' || { echo "tag inattendu : $REF_NAME" >&2; exit 1; }
           [ "$ACTOR" = "$OWNER" ] || { echo "lancé par $ACTOR, pas par $OWNER" >&2; exit 1; }
+          [ "$TRIGGER" = "$OWNER" ] || { echo "relancé par $TRIGGER, pas par $OWNER" >&2; exit 1; }
 
   # npm ne tourne jamais là où l'on signe et pousse.
   web:
@@ -2893,6 +2897,21 @@ Expected: seulement `fin` (toute action tierce, et les artefacts, épinglés par
 
 Run: `grep -c 'npm\|make web\|setup-node' <(awk '/^  release:/,/^  verify:/' .github/workflows/release.yml)`
 Expected: `0` (rien de Node dans le job qui signe).
+
+Le garde, rejoué en local avec le script exact du workflow :
+
+```bash
+guard=$(awk '/- name: La ref est le tag confirmé/{f=1} f&&/run: \|/{r=1;next} r&&!/^          /{exit} r{sub(/^          /,""); print}' .github/workflows/release.yml)
+g() { env REF_TYPE="$1" REF_NAME="$2" CONFIRM="$3" ACTOR="$4" TRIGGER="$5" OWNER=levy-cmd bash -c "$guard" >/dev/null 2>&1 && echo "accepte $*" || echo "refuse  $*"; }
+g tag v0.1.0-rc.1 v0.1.0-rc.1 levy-cmd levy-cmd
+g tag v0.1.0-rc.1 v0.1.0-rc.9 levy-cmd levy-cmd
+g branch phase/lancement phase/lancement levy-cmd levy-cmd
+g tag v0.1.0-rc.1 v0.1.0-rc.1 levy-cmd autre
+g tag v0.1.0-rc.1 v0.1.0-rc.1 autre levy-cmd
+g tag v0.1 v0.1 levy-cmd levy-cmd
+```
+
+Expected (vérifié à la rédaction) : `accepte` pour la première ligne seulement ; `refuse` pour la confirmation fausse, la branche, la relance par un autre compte (`triggering_actor`), un autre auteur, et un tag `v0.1`.
 
 - [ ] **Step 5: Commit**
 
@@ -3063,27 +3082,61 @@ gh pr create --base main --title "ci : workflow de release (lancement manuel)" -
 
 Après la fusion : `gh workflow list | grep Release` → `Release  active`. Le fichier lancé est toujours celui du tag (`--ref`), pas celui de `main`.
 
-- [ ] **Step 1: ARRÊT : accord de l'utilisateur requis — pousser le tag `v0.1.0-rc.1`, puis lancer `release.yml` dessus.** Rappeler à l'utilisateur ce que cela fait : pousser le tag ne publie rien (Q54) ; le lancement **pousse l'image `ghcr.io/levy-cmd/hublot-kit:0.1.0-rc.1` sur GHCR** (paquet créé privé ; ARRÊT « pousser l'image sur GHCR » compris dans celui-ci), crée une release **brouillon**, et inscrit des entrées **permanentes et publiques** dans le journal Rekor (nom du dépôt, chemin du workflow, tag), même dépôt privé. D'abord, le verrou refuse un mauvais lancement (rien n'est publié, `guard` échoue avant tout job qui a des droits) ; puis, après le « oui » explicite, le vrai lancement :
+- [ ] **Step 1: ARRÊT : accord de l'utilisateur requis — pousser le tag `v0.1.0-rc.1`.** Pousser le tag ne publie rien (Q54) : il rend le tag visible dans le dépôt (privé). Après le « oui » explicite :
 
 ```bash
 git switch phase/lancement && git pull --ff-only
 gh pr checks 2>&1 | tail -n 12                    # tout vert avant de taguer
 git tag -a v0.1.0-rc.1 -m "Hublot-Kit v0.1.0-rc.1"
 git push origin v0.1.0-rc.1
-gh workflow run release.yml --ref v0.1.0-rc.1 -f confirm=v0.1.0-rc.9      # confirmation fausse : refus attendu
-gh workflow run release.yml --ref phase/lancement -f confirm=phase/lancement   # pas un tag : refus attendu
-sleep 10; gh run list --workflow release.yml --limit 2 --json conclusion,headBranch --jq '.[] | "\(.headBranch) \(.conclusion)"'
-gh workflow run release.yml --ref v0.1.0-rc.1 -f confirm=v0.1.0-rc.1
 ```
 
-Expected: les deux premiers lancements finissent `failure`, avec `guard` en échec et `web`, `release`, `verify` sautés (`gh run view <id>`) ; aucune image ni release créée (`gh release list` vide).
+- [ ] **Step 2: Le verrou refuse les mauvais lancements** — d'abord le garde en local (même script que la tâche 7, étape 4), puis deux vrais lancements refusés sur GitHub, chacun attendu jusqu'au bout et contrôlé : conclusion `failure`, et **seul le job `guard` a tourné** (`web`, `release`, `verify` sautés). Si un contrôle échoue, tout s'arrête : pas d'étape 3, et l'utilisateur est prévenu (un lancement non refusé a pu publier : vérifier `gh release list` et les versions du paquet GHCR).
 
-- [ ] **Step 2: Suivre le workflow**
+```bash
+guard=$(awk '/- name: La ref est le tag confirmé/{f=1} f&&/run: \|/{r=1;next} r&&!/^          /{exit} r{sub(/^          /,""); print}' .github/workflows/release.yml)
+g() { env REF_TYPE="$1" REF_NAME="$2" CONFIRM="$3" ACTOR="$4" TRIGGER="$5" OWNER=levy-cmd bash -c "$guard" >/dev/null 2>&1 && echo "accepte $*" || echo "refuse  $*"; }
+g tag v0.1.0-rc.1 v0.1.0-rc.1 levy-cmd levy-cmd
+g tag v0.1.0-rc.1 v0.1.0-rc.9 levy-cmd levy-cmd
+g branch phase/lancement phase/lancement levy-cmd levy-cmd
+g tag v0.1.0-rc.1 v0.1.0-rc.1 levy-cmd autre
+g tag v0.1.0-rc.1 v0.1.0-rc.1 autre levy-cmd
+g tag v0.1 v0.1 levy-cmd levy-cmd
+# hk_bad_run REF CONFIRMATION : lance release.yml, attend la fin du run, exige
+# l'échec du seul garde.
+hk_bad_run() {
+  since=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+  gh workflow run release.yml --ref "$1" -f confirm="$2" || return 1
+  id=
+  for _ in $(seq 1 30); do
+    id=$(gh run list --workflow release.yml --event workflow_dispatch --branch "$1" --limit 5 \
+      --json databaseId,createdAt --jq "[.[] | select(.createdAt >= \"$since\")][0].databaseId // empty")
+    [ -n "$id" ] && break
+    sleep 2
+  done
+  [ -n "$id" ] || { echo "run introuvable pour $1" >&2; return 1; }
+  if gh run watch "$id" --exit-status >/dev/null 2>&1; then echo "LE VERROU N'A PAS REFUSÉ $1 (run $id)" >&2; return 1; fi
+  concl=$(gh run view "$id" --json conclusion --jq .conclusion)
+  ran=$(gh run view "$id" --json jobs --jq '[.jobs[] | select(.conclusion != "skipped") | .name] | join(",")')
+  if [ "$concl" != failure ] || [ "$ran" != guard ]; then echo "run $id : $concl, jobs lancés : $ran" >&2; return 1; fi
+  echo "ok refus de $1 (run $id : seul guard a tourné, en échec)"
+}
+hk_bad_run v0.1.0-rc.1 v0.1.0-rc.9 && hk_bad_run phase/lancement phase/lancement && echo "VERROU OK"
+gh release list | head -n 3
+```
 
-Run: `sleep 10; gh run watch "$(gh run list --workflow release.yml --limit 1 --json databaseId --jq '.[0].databaseId')" --exit-status 2>&1 | tail -n 15`
-Expected: `guard`, `web`, `release` puis `verify` verts ; le journal de `verify` finit par `RELEASE OK : v0.1.0-rc.1`. En cas d'échec : `gh run view --log-failed | tail -n 60`, corriger sur la branche (commit `correctif : …`, relecture), puis ARRÊT pour `v0.1.0-rc.2`.
+Expected: le tableau local comme à la tâche 7 ; `ok refus de v0.1.0-rc.1 …`, `ok refus de phase/lancement …`, `VERROU OK` ; `gh release list` vide.
 
-- [ ] **Step 3: Contrôler ce qui a été créé** — le droit `read:packages` manque d'ordinaire au jeton de `gh` : `gh auth refresh -h github.com -s read:packages` (l'utilisateur valide dans son navigateur).
+- [ ] **Step 3: ARRÊT : accord de l'utilisateur requis — lancer `release.yml` sur `v0.1.0-rc.1`**, seulement si l'étape 2 a affiché `VERROU OK`. Rappeler ce que cela fait : **l'image `ghcr.io/levy-cmd/hublot-kit:0.1.0-rc.1` est poussée sur GHCR** (paquet créé privé ; ARRÊT « pousser l'image sur GHCR » compris dans celui-ci), une release **brouillon** est créée, et des entrées **permanentes et publiques** sont inscrites dans le journal Rekor (nom du dépôt, chemin du workflow, tag), même dépôt privé. Après le « oui » explicite :
+
+```bash
+gh workflow run release.yml --ref v0.1.0-rc.1 -f confirm=v0.1.0-rc.1
+sleep 10; gh run watch "$(gh run list --workflow release.yml --event workflow_dispatch --branch v0.1.0-rc.1 --limit 1 --json databaseId --jq '.[0].databaseId')" --exit-status 2>&1 | tail -n 15
+```
+
+Expected: `guard`, `web`, `release` puis `verify` verts ; le journal de `verify` finit par `RELEASE OK : v0.1.0-rc.1`. En cas d'échec : `gh run view --log-failed | tail -n 60`, corriger sur la branche (commit `correctif : …`, relecture), puis ARRÊT pour `v0.1.0-rc.2` (étapes 1 à 3 à nouveau).
+
+- [ ] **Step 4: Contrôler ce qui a été créé** — le droit `read:packages` manque d'ordinaire au jeton de `gh` : `gh auth refresh -h github.com -s read:packages` (l'utilisateur valide dans son navigateur).
 
 ```bash
 gh release view v0.1.0-rc.1 --json isDraft,isPrerelease,assets --jq '{isDraft, isPrerelease, assets: [.assets[].name]}'
@@ -3093,7 +3146,7 @@ gh api /users/levy-cmd/packages/container/hublot-kit/versions --jq '.[].metadata
 
 Expected: `isDraft: true`, `isPrerelease: true`, 8 fichiers (`checksums.txt`, `checksums.txt.sigstore.json`, et pour amd64 et arm64 : l'archive, son `.sbom.json`, son `.sigstore.json`) ; `private` ; une seule étiquette, `["0.1.0-rc.1"]` (ni `0.1`, ni `latest`) — les versions sans étiquette sont les manifestes de plateforme, d'attestation et de signature.
 
-- [ ] **Step 4: L'image rc, avec la commande de la doc, sur les deux VM** — connexion à GHCR en lecture, retirée à la fin :
+- [ ] **Step 5: L'image rc, avec la commande de la doc, sur les deux VM** — connexion à GHCR en lecture, retirée à la fin :
 
 ```bash
 rc=$(mktemp -d)
@@ -3109,7 +3162,7 @@ done
 
 Expected: `IMAGE OK : ghcr.io/levy-cmd/hublot-kit:0.1.0-rc.1` et `SYSTEMD OK : …` sur les deux VM.
 
-- [ ] **Step 5: La signature et le SBOM vérifiés hors de GitHub** — cosign dans `hk-ubuntu` (binaire de la release de sigstore, contrôlé par sa somme) ; la connexion GHCR de l'étape 4 sert encore :
+- [ ] **Step 6: La signature et le SBOM vérifiés hors de GitHub** — cosign dans `hk-ubuntu` (binaire de la release de sigstore, contrôlé par sa somme) ; la connexion GHCR de l'étape 5 sert encore :
 
 ```bash
 limactl shell hk-ubuntu -- sh -c 'cd /tmp && curl -fsSLO https://github.com/sigstore/cosign/releases/download/v3.1.3/cosign-linux-arm64 && curl -fsSL https://github.com/sigstore/cosign/releases/download/v3.1.3/cosign_checksums.txt | grep " cosign-linux-arm64$" | sha256sum -c - && sudo install -m 0755 cosign-linux-arm64 /usr/local/bin/cosign && rm cosign-linux-arm64'
@@ -3127,7 +3180,7 @@ rm -rf "$rc"
 
 Expected: `Verification for ghcr.io/levy-cmd/hublot-kit:0.1.0-rc.1 --` suivi de `The cosign claims were validated` et du JSON ; `"linux/amd64"` et `"linux/arm64"` ; `Verified OK` puis `hublot-kit_0.1.0-rc.1_linux_arm64.tar.gz: OK`. Une signature faite avec une autre identité doit échouer : relancer `cosign verify` avec `@refs/tags/v0.1.0-rc.2` → `none of the expected identities matched`.
 
-- [ ] **Step 6: Constats, commit, puis prêt pour la fusion**
+- [ ] **Step 7: Constats, commit, puis prêt pour la fusion**
 
 Noter sous « Constats de la tâche 9 » : durée du workflow, fichiers et étiquettes, version de cosign et format des signatures (bundle, référents OCI ou étiquette `sha256-…`), résultat sur chaque VM, tout correctif et toute rc supplémentaire.
 
@@ -3141,7 +3194,7 @@ EOF
 git push && gh pr ready && gh pr checks --watch 2>&1 | tail -n 12
 ```
 
-- [ ] **Step 7: Relecture (CLAUDE.md)** — sous-agent indépendant puis Codex sur les constats et tout correctif de la tâche. Ensuite, l'utilisateur fusionne la PR (pas l'agent).
+- [ ] **Step 8: Relecture (CLAUDE.md)** — sous-agent indépendant puis Codex sur les constats et tout correctif de la tâche. Ensuite, l'utilisateur fusionne la PR (pas l'agent).
 
 ---
 
@@ -3159,13 +3212,13 @@ git fetch origin && git switch main && git pull --ff-only
 gh run list --workflow ci.yml --branch main --limit 1 --json conclusion --jq '.[0].conclusion'   # attendu : success
 ```
 
-- [ ] **Step 2: ARRÊT : accord de l'utilisateur requis — pousser le tag `v0.1.0`** sur le commit de fusion de `main`, **puis lancer `release.yml` dessus** : **images `0.1.0` et `0.1` poussées sur GHCR** (paquet encore privé), release **brouillon**, entrées Rekor. Après le « oui » explicite :
+- [ ] **Step 2: ARRÊT : accord de l'utilisateur requis — pousser le tag `v0.1.0`** sur le commit de fusion de `main`, **puis lancer `release.yml` dessus** (le verrou a été éprouvé à la tâche 9, étape 2, et `release.yml` n'a pas changé depuis : `git diff v0.1.0-rc.1 v0.1.0 -- .github/workflows/release.yml` vide, sinon refaire l'étape 2 de la tâche 9 sur `v0.1.0` avant de lancer) : **images `0.1.0` et `0.1` poussées sur GHCR** (paquet encore privé), release **brouillon**, entrées Rekor. Après le « oui » explicite :
 
 ```bash
 git tag -a v0.1.0 -m "Hublot-Kit v0.1.0"
 git push origin v0.1.0
 gh workflow run release.yml --ref v0.1.0 -f confirm=v0.1.0
-sleep 10; gh run watch "$(gh run list --workflow release.yml --limit 1 --json databaseId --jq '.[0].databaseId')" --exit-status 2>&1 | tail -n 15
+sleep 10; gh run watch "$(gh run list --workflow release.yml --event workflow_dispatch --branch v0.1.0 --limit 1 --json databaseId --jq '.[0].databaseId')" --exit-status 2>&1 | tail -n 15
 ```
 
 Expected: `guard`, `web`, `release` et `verify` verts, `RELEASE OK : v0.1.0`.
