@@ -1,0 +1,103 @@
+# Fonctions communes de scripts/check-image.sh et scripts/check-systemd.sh
+# (plan Lancement). À sourcer, pas à lancer. Bash 3.2 (macOS) compris.
+#
+# Cinq cibles alpine:3, comme le spike n°3 et 3b (spec §8, §11) : ordinaire,
+# --privileged, apparmor=unconfined, uid 1000, et un conteneur arrêté. Plus
+# une édition et un envoi dans la cible ordinaire (spec §5.3), relus par
+# docker exec.
+
+HK_TARGETS="hk-check-normal hk-check-priv hk-check-unconf hk-check-uid hk-check-stopped"
+HK_BASE=http://127.0.0.1:7878
+
+hk_fail() { echo "ÉCHEC : $*" >&2; exit 1; }
+
+# La commande `docker run` de la spec §8, à l'octet près (celle de la doc :
+# scripts/check-docs.sh vérifie que la doc la reprend telle quelle).
+hk_spec_command() {
+  awk '/^docker run -d --name hublot-kit/{on=1} on{print} on&&/ghcr\.io\/levy-cmd\/hublot-kit:0\.1$/{exit}' \
+    docs/superpowers/specs/2026-10-07-hublot-kit-v0.1-design.md
+}
+
+hk_start_targets() {
+  for c in $HK_TARGETS; do
+    if docker container inspect "$c" >/dev/null 2>&1; then hk_fail "le conteneur $c existe déjà"; fi
+  done
+  docker pull -q alpine:3 >/dev/null
+  docker run -d --name hk-check-normal alpine:3 sleep 600 >/dev/null
+  docker exec hk-check-normal sh -c 'echo before > /root/hk-edit.txt'
+  docker run -d --name hk-check-priv --privileged alpine:3 sleep 600 >/dev/null
+  docker run -d --name hk-check-unconf --security-opt apparmor=unconfined alpine:3 sleep 600 >/dev/null
+  docker run -d --name hk-check-uid --user 1000:1000 alpine:3 sleep 600 >/dev/null
+  docker run --name hk-check-stopped alpine:3 true
+}
+
+hk_remove_targets() {
+  # shellcheck disable=SC2086
+  docker rm -f $HK_TARGETS >/dev/null 2>&1 || true
+}
+
+hk_wait_login() {
+  for _ in $(seq 1 60); do
+    if curl -sf -o /dev/null "$HK_BASE/login"; then return 0; fi
+    sleep 0.5
+  done
+  hk_fail "l'agent ne répond pas sur $HK_BASE/login"
+}
+
+# hk_login JETON FICHIER_COOKIES
+hk_login() {
+  curl -sf -c "$2" -H "Origin: $HK_BASE" -H 'Content-Type: application/json' \
+    -d "{\"token\":\"$1\"}" -o /dev/null "$HK_BASE/api/login" || hk_fail "connexion refusée"
+}
+
+# hk_check_meta FICHIER_COOKIES [VERSION]
+hk_check_meta() {
+  meta=$(curl -sf -b "$1" "$HK_BASE/api/meta") || hk_fail "/api/meta"
+  echo "meta : $meta"
+  if [ -n "${2:-}" ]; then
+    case $meta in *"\"version\":\"$2\""*) ;; *) hk_fail "version attendue $2" ;; esac
+  fi
+}
+
+# hk_check_targets FICHIER_COOKIES : /etc de chaque cible actif listé, un
+# fichier lu ; le conteneur arrêté répond 202 (indexation) puis 200.
+hk_check_targets() {
+  for c in hk-check-normal hk-check-priv hk-check-unconf hk-check-uid; do
+    out=$(curl -s -b "$1" -w '\n%{http_code}' "$HK_BASE/api/containers/$c/fs?path=/etc")
+    code=${out##*$'\n'}
+    case "$code $out" in 200*'"name":"hostname"'*) ;; *) hk_fail "$c : $out" ;; esac
+    code=$(curl -s -o /dev/null -w '%{http_code}' -b "$1" "$HK_BASE/api/containers/$c/fs/file?path=/etc/os-release")
+    [ "$code" = 200 ] || hk_fail "$c : lecture de /etc/os-release → $code"
+    echo "ok $c"
+  done
+  code=
+  for _ in $(seq 1 60); do
+    code=$(curl -s -o /dev/null -w '%{http_code}' -b "$1" "$HK_BASE/api/containers/hk-check-stopped/fs?path=/etc")
+    [ "$code" = 200 ] && break
+    sleep 0.5
+  done
+  [ "$code" = 200 ] || hk_fail "hk-check-stopped : $code"
+  echo "ok hk-check-stopped"
+}
+
+# hk_check_writes FICHIER_COOKIES : édition (PUT fs/file, If-Match = ETag de
+# l'aperçu) puis envoi (POST fs/upload, multipart, If-None-Match: *) dans le
+# conteneur actif hk-check-normal ; chaque écriture est relue par docker exec.
+hk_check_writes() {
+  url="$HK_BASE/api/containers/hk-check-normal"
+  etag=$(curl -s -D - -o /dev/null -b "$1" "$url/fs/file?path=/root/hk-edit.txt" | tr -d '\r' | sed -n 's/^[Ee][Tt][Aa][Gg]: //p')
+  [ -n "$etag" ] || hk_fail "aperçu de /root/hk-edit.txt sans ETag"
+  code=$(printf 'after\n' | curl -s -o /dev/null -w '%{http_code}' -b "$1" -X PUT -H "Origin: $HK_BASE" \
+    -H "If-Match: $etag" -H 'Content-Type: application/octet-stream' --data-binary @- "$url/fs/file?path=/root/hk-edit.txt")
+  [ "$code" = 200 ] || hk_fail "édition (PUT fs/file) : $code"
+  [ "$(docker exec hk-check-normal cat /root/hk-edit.txt)" = after ] || hk_fail "édition absente du conteneur"
+  echo "ok édition (PUT fs/file)"
+  up=$(mktemp)
+  printf 'uploaded\n' > "$up"
+  code=$(curl -s -o /dev/null -w '%{http_code}' -b "$1" -H "Origin: $HK_BASE" -H 'If-None-Match: *' \
+    -F "file=@$up;filename=hk-upload.txt" "$url/fs/upload?dir=/root")
+  rm -f "$up"
+  [ "$code" = 201 ] || hk_fail "envoi (POST fs/upload) : $code"
+  [ "$(docker exec hk-check-normal cat /root/hk-upload.txt)" = uploaded ] || hk_fail "envoi absent du conteneur"
+  echo "ok envoi (POST fs/upload)"
+}
