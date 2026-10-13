@@ -51,10 +51,37 @@ func TestRunHelp(t *testing.T) {
 		if code := run(context.Background(), []string{flag}, noenv, &out, &errb); code != 0 {
 			t.Fatalf("%s: want exit 0, got %d (stderr %q)", flag, code, errb.String())
 		}
-		for _, want := range []string{"--listen", "--data-dir", "--read-only", "--tls-cert", "--tls-key", "--public-origin", "reset-token"} {
+		for _, want := range []string{"--listen", "--data-dir", "--read-only", "--tls-cert", "--tls-key", "--public-origin", "--version", "reset-token"} {
 			if !strings.Contains(out.String(), want) {
 				t.Errorf("%s: usage lacks %q: %q", flag, want, out.String())
 			}
+		}
+	}
+}
+
+func TestRunVersion(t *testing.T) {
+	old := version
+	version = "1.2.3"
+	t.Cleanup(func() { version = old })
+	for _, flag := range []string{"--version", "-version"} {
+		var out, errb bytes.Buffer
+		// The data directory is never touched: --version answers before
+		// reading the configuration (a file stands where it would go).
+		blocker := filepath.Join(t.TempDir(), "file")
+		if err := os.WriteFile(blocker, nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		env := func(k string) string {
+			if k == "HUBLOT_DATA_DIR" {
+				return filepath.Join(blocker, "data")
+			}
+			return ""
+		}
+		if code := run(context.Background(), []string{flag}, env, &out, &errb); code != 0 {
+			t.Fatalf("%s: code %d, stderr %q", flag, code, errb.String())
+		}
+		if out.String() != "hublot 1.2.3\n" || errb.Len() != 0 {
+			t.Errorf("%s: out %q, stderr %q", flag, out.String(), errb.String())
 		}
 	}
 }

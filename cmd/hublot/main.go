@@ -34,6 +34,7 @@ var selfCgroup = func() ([]byte, error) { return os.ReadFile("/proc/self/cgroup"
 
 const usage = `Usage : hublot [options]
         hublot reset-token [--data-dir DIR]
+        hublot --version
 
 Options (chacune a un équivalent HUBLOT_*) :
   --listen ADDR          adresse d'écoute (défaut 127.0.0.1:7878)
@@ -55,6 +56,11 @@ func main() {
 }
 
 func run(ctx context.Context, args []string, getenv func(string) string, stdout, stderr io.Writer) int {
+	// Before the configuration: --version never reads HUBLOT_* nor touches the data directory.
+	if len(args) == 1 && (args[0] == "--version" || args[0] == "-version") {
+		fmt.Fprintf(stdout, "hublot %s\n", version)
+		return 0
+	}
 	resetToken := len(args) > 0 && args[0] == "reset-token"
 	if resetToken {
 		args = args[1:]
