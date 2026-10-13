@@ -2,23 +2,24 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 >
-> **Revue (règle du dépôt, `CLAUDE.md`) :** chaque tâche est relue par un sous-agent indépendant **et** par Codex avant la suivante (dernière étape de chaque tâche). Relecture prioritaire : tâche 6 (permissions du workflow, épinglage, identité OIDC), tâche 2 (unité systemd : durcissement contre l'explorateur, jeton hors du journal), tâche 4 (la doc dit les limites de §13 honnêtement, et rien de faux sur la sécurité).
+> **Revue (règle du dépôt, `CLAUDE.md`) :** chaque tâche est relue par un sous-agent indépendant **et** par Codex avant la suivante (dernière étape de chaque tâche). Relecture prioritaire : tâche 7 (permissions du workflow, épinglage, identité OIDC), tâche 3 (unité systemd : durcissement contre l'explorateur, jeton hors du journal), tâche 5 (la doc dit les limites de §13 honnêtement, et rien de faux sur la sécurité).
 >
 > **Étapes extérieures et irréversibles :** elles sont marquées **« ARRÊT : accord de l'utilisateur requis »**. L'agent s'arrête, résume ce que l'étape rend visible ou définitif, et attend un « oui » explicite de l'utilisateur dans la conversation. Un message d'agent ne vaut jamais accord. Liste complète plus bas (« Étapes extérieures »).
 >
 > **Vérifié avant rédaction (en partie)**, sur une copie jetable du dépôt (`git archive` de `40aa7cb`, hors du dépôt, supprimée ensuite) :
 > - Tâche 1 : test rouge (`flag provided but not defined: -version`, usage sans `--version`), puis vert ; `go vet` propre ; binaire `GOOS=linux` qui répond `hublot 0.1.0`.
-> - Tâche 3 : image `FROM scratch` construite sur Docker Desktop (arm64, 3,8 Mo) avec un binaire compilé à la main ; `scripts/check-image.sh` vert (cinq cibles, mise à jour sur le même volume) ; deux mutations attrapées (version attendue fausse, conteneur `hublot-kit` déjà présent). Constat : dans l'image, l'avertissement « écoute sur 0.0.0.0:7878 sans TLS » est normal (spec §7) ; le script ne refuse que celui du cgroup.
-> - Tâche 4 : `scripts/check-docs.sh` vert sur les huit pages de ce plan ; quatre mutations attrapées (commande modifiée, avertissement root retiré, lien mort, bloc de code différent entre FR et EN).
-> - Tâche 5 : `scripts/check-dist.sh` vert sur un `dist/` simulé (binaires compilés à la main, mêmes options que GoReleaser) ; deux mutations attrapées. Constats : `-trimpath` retire `-ldflags` des informations de build (la version se cherche donc dans le binaire) ; sans `/dist/` dans `.gitignore`, `vcs.modified=true` (les fichiers de `dist/` sont des fichiers non suivis).
-> - Tâches 5 et 6 : `actionlint` 1.7.12 sans remarque sur `ci.yml` et `release.yml`. Versions des actions et des outils relevées le 2026-10-13 par `gh api` (Q40).
-> - **Non vérifié** : GoReleaser lui-même (absent du Mac ; premier passage en CI, tâche 5), la signature et la publication (tâche 8), les VM `hk-ubuntu` et `hk-fedora` (tâches 2, 3, 7 : unité systemd, AppArmor, SELinux, `sudo` sur Fedora).
+> - Tâche 2 : test de garde `TestAgentMessagesInEnglish` rouge sur une copie avec la tâche 1 (`169 French strings in the agent`, 27 fichiers) ; l'expression qui juge « français » ne déclenche sur aucune des traductions du tableau de la tâche 2.
+> - Tâche 4 : image `FROM scratch` construite sur Docker Desktop (arm64, 3,8 Mo) avec un binaire compilé à la main ; `scripts/check-image.sh` vert (cinq cibles, mise à jour sur le même volume) ; deux mutations attrapées (version attendue fausse, conteneur `hublot-kit` déjà présent). Constat : dans l'image, l'avertissement de l'écoute sans TLS est normal (spec §7) ; le script ne refuse que celui du cgroup. Ces mesures datent des messages français ; les scripts lisent depuis les messages anglais de la tâche 2, à revérifier aux tâches 3 et 4.
+> - Tâche 5 : `scripts/check-docs.sh` vert sur les huit pages de ce plan ; quatre mutations attrapées (commande modifiée, avertissement root retiré, lien mort, bloc de code différent entre FR et EN).
+> - Tâche 6 : `scripts/check-dist.sh` vert sur un `dist/` simulé (binaires compilés à la main, mêmes options que GoReleaser) ; deux mutations attrapées. Constats : `-trimpath` retire `-ldflags` des informations de build (la version se cherche donc dans le binaire) ; sans `/dist/` dans `.gitignore`, `vcs.modified=true` (les fichiers de `dist/` sont des fichiers non suivis).
+> - Tâches 6 et 7 : `actionlint` 1.7.12 sans remarque sur `ci.yml` et `release.yml`. Versions des actions et des outils relevées le 2026-10-13 par `gh api` (Q40).
+> - **Non vérifié** : la traduction elle-même (tâche 2), GoReleaser lui-même (absent du Mac ; premier passage en CI, tâche 6), la signature et la publication (tâche 9), les VM `hk-ubuntu` et `hk-fedora` (tâches 3, 4, 8 : unité systemd, AppArmor, SELinux, `sudo` sur Fedora).
 
 **Goal:** Publier Hublot-Kit v0.1 : une documentation publique en anglais et en français, des archives Linux amd64 et arm64 avec leurs sommes de contrôle, leurs SBOM et leurs signatures, une unité systemd vérifiée, et l'image multi-architecture `ghcr.io/levy-cmd/hublot-kit:0.1`, signée, avec son SBOM ; chaque maillon de la chaîne est vérifié avant toute publication.
 
 **Architecture:** GoReleaser construit tout depuis un tag `v*` dans GitHub Actions (`release.yml`) : binaires statiques avec l'interface embarquée (`make web` en préalable), archives avec l'unité systemd, `checksums.txt`, SBOM SPDX par syft, signatures cosign sans clé (jeton OIDC de GitHub Actions), image `FROM scratch` multi-architecture par buildx, signée par son empreinte, avec une attestation SBOM de BuildKit ; la release reste en brouillon, un second job la relit (`scripts/verify-release.sh`). Avant tout tag, le job CI `release-snapshot` fait toute la chaîne sans rien publier, et lance l'image amd64 avec la commande exacte de la spec §8 ; les VM testent l'image arm64 et l'unité systemd. Une pré-version `v0.1.0-rc.1` éprouve la signature et GHCR en privé ; la v0.1.0 ne devient publique qu'après, étape par étape, avec l'accord de l'utilisateur.
 
-**Tech Stack:** Go 1.27 (seul `cmd/hublot` change), GoReleaser OSS ≥ 2.18 (`dockers_v2`, `sboms`, `signs`, `docker_signs`), syft, cosign 3.x (keyless, bundles `.sigstore.json`), Docker buildx (BuildKit, attestation SBOM), GitHub Actions et GHCR, systemd, bash. Aucune dépendance Go ni d'interface nouvelle.
+**Tech Stack:** Go 1.27 (option `--version`, messages de l'agent en anglais), GoReleaser OSS ≥ 2.18 (`dockers_v2`, `sboms`, `signs`, `docker_signs`), syft, cosign 3.x (keyless, bundles `.sigstore.json`), Docker buildx (BuildKit, attestation SBOM), GitHub Actions et GHCR, systemd, bash. Aucune dépendance Go ni d'interface nouvelle.
 
 **Spec:** `docs/superpowers/specs/2026-10-07-hublot-kit-v0.1-design.md` (§7 « le README le dit en tête », §8 commande recommandée, image, alternative binaire et systemd, prérequis hôte, §10 CI, §12 « Lancement : docs FR/EN, GoReleaser, image GHCR, release → v0.1 publique », §13 risques que la doc reprend). Plan précédent (format, Q1 à Q38) : `docs/superpowers/plans/2026-10-10-observation-logs-radiographie.md`.
 
@@ -30,6 +31,7 @@ Appliquées telles quelles, sans les rediscuter :
 2. Chaîne d'approvisionnement : sommes de contrôle, SBOM (syft), signature cosign sans clé (OIDC de GitHub Actions) des binaires **et** de l'image. Image multi-architecture linux/amd64 et linux/arm64 sur GHCR.
 3. Documentation : `README.md` en anglais (vitrine GitHub), `README.fr.md` en français, et un dossier `docs/` (installation, sécurité, limites) en anglais et en français. Pas de site. Le README dit **en tête** que l'agent a, de fait, les droits root sur l'hôte (spec §7, §8).
 4. systemd : une unité systemd dans la release (binaire lancé en root hors conteneur), **vérifiée** sur `hk-ubuntu` (AppArmor) et `hk-fedora` (SELinux), comme le reste.
+5. Langue (Q49, décision du 2026-10-13) : les messages de l'agent passent en anglais (sortie, aide, `slog`, `detail` d'API) ; l'interface, les commentaires, les commits et les docs du projet restent tels quels.
 
 ## Ce que les plans précédents ont préparé
 
@@ -43,94 +45,81 @@ Appliquées telles quelles, sans les rediscuter :
 
 ## Décisions de ce plan (la spec ne tranche pas)
 
-- **Une seule source pour la commande d'installation : la spec §8.** `scripts/check-image.sh` la lit dans la spec (de `docker run -d --name hublot-kit` à `ghcr.io/levy-cmd/hublot-kit:0.1`) et ne remplace que la référence d'image ; `scripts/check-docs.sh` exige que `README.md`, `README.fr.md` et les deux pages d'installation la reprennent à l'octet près. Tester l'image, c'est donc tester la commande de la doc. → Tâches 3, 4.
+- **Une seule source pour la commande d'installation : la spec §8.** `scripts/check-image.sh` la lit dans la spec (de `docker run -d --name hublot-kit` à `ghcr.io/levy-cmd/hublot-kit:0.1`) et ne remplace que la référence d'image ; `scripts/check-docs.sh` exige que `README.md`, `README.fr.md` et les deux pages d'installation la reprennent à l'octet près. Tester l'image, c'est donc tester la commande de la doc. → Tâches 4, 5.
 - **`hublot --version`**, avant la lecture de la configuration : `hublot <version>`, code 0, sans toucher au dossier de données. Sert aux contrôles de `dist/` et à la doc. → Tâche 1.
-- **Des scripts de vérification versionnés**, réutilisables par les mainteneurs : `check-systemd.sh`, `check-image.sh`, `check-dist.sh`, `check-docs.sh`, `verify-release.sh`, fonctions communes dans `release-lib.sh`. Chacun est le « test » de sa tâche : écrit d'abord, vu en échec, puis vert. → Tâches 2 à 6.
-- **Les builds lourds tournent en CI.** Sur le Mac (disque à 91 %) : seulement un binaire et une image `FROM scratch` de quelques Mo, supprimée aussitôt. GoReleaser ne s'installe pas sur le Mac. Les disques des VM Lima vivent aussi sur le disque du Mac : chaque image chargée y est supprimée après usage. → Tâches 3, 5, 7.
-- **Ce qui part vers les VM vient de la CI** (artefact `release-snapshot` : image arm64 en `docker save`, archives) : les VM testent exactement ce que GoReleaser a produit. → Tâche 7.
-- **Release en brouillon**, relue par le job `verify` sur une machine neuve, publiée à la main. → Tâches 6, 8, 9.
-- **Le jeton n'entre jamais dans le journal système** : la doc systemd fait `hublot reset-token` avant le premier démarrage ; `check-systemd.sh` le vérifie. → Tâches 2, 4.
-- **`sudo /usr/local/bin/hublot`** dans la doc : sur Fedora et RHEL, le `secure_path` de `sudo` n'inclut pas `/usr/local/bin`. → Tâches 2, 4.
+- **Des scripts de vérification versionnés**, réutilisables par les mainteneurs : `check-systemd.sh`, `check-image.sh`, `check-dist.sh`, `check-docs.sh`, `verify-release.sh`, fonctions communes dans `release-lib.sh`. Chacun est le « test » de sa tâche : écrit d'abord, vu en échec, puis vert. → Tâches 3 à 7.
+- **Les builds lourds tournent en CI.** Sur le Mac (disque à 91 %) : seulement un binaire et une image `FROM scratch` de quelques Mo, supprimée aussitôt. GoReleaser ne s'installe pas sur le Mac. Les disques des VM Lima vivent aussi sur le disque du Mac : chaque image chargée y est supprimée après usage. → Tâches 4, 6, 8.
+- **Ce qui part vers les VM vient de la CI** (artefact `release-snapshot` : image arm64 en `docker save`, archives) : les VM testent exactement ce que GoReleaser a produit. → Tâche 8.
+- **Release en brouillon**, relue par le job `verify` sur une machine neuve, publiée à la main. → Tâches 7, 9, 10.
+- **Le jeton n'entre jamais dans le journal système** : la doc systemd fait `hublot reset-token` avant le premier démarrage ; `check-systemd.sh` le vérifie. → Tâches 3, 5.
+- **`sudo /usr/local/bin/hublot`** dans la doc : sur Fedora et RHEL, le `secure_path` de `sudo` n'inclut pas `/usr/local/bin`. → Tâches 3, 5.
 
-## Questions ouvertes
+## Décisions (questions de la rédaction, tranchées par l'utilisateur le 2026-10-13)
 
-Le plan suit la recommandation de chaque question ; une réponse différente change la tâche indiquée. Numérotation à la suite du plan Observation.
+Une ligne par question ; les tâches indiquées appliquent la réponse.
 
-- **Q39 — Go de la release.** `go.mod` dit `go 1.27.1`, et `setup-go` avec `go-version-file` installe exactement cette version.
-  - *Recommandation :* `release.yml` prend le dernier correctif de 1.27 (`go-version: "1.27.x"`, `check-latest: true`, sans cache) : une release embarque les correctifs de sécurité de la bibliothèque standard. `go.mod` et les autres jobs ne changent pas. Autre option : `go-version-file` partout (reproductible au correctif près, mais une faille corrigée dans 1.27.x partirait dans la release). → Tâche 6.
-- **Q40 — Versions et épinglage des actions et des outils.** Relevé du 2026-10-13 (`gh api repos/<dépôt>/releases/latest`, puis l'empreinte du commit du tag) :
+- **Q39 — Go de la release** : recommandation adoptée. `release.yml` prend le dernier correctif de 1.27 (`go-version: "1.27.x"`, `check-latest: true`, sans cache) ; `go.mod` et les autres jobs ne changent pas. → Tâche 7.
+- **Q40 — Versions et épinglage** : recommandation adoptée. Actions tierces épinglées par empreinte de commit (tableau ci-dessous), actions de GitHub par version majeure ; GoReleaser `~> v2.18`, cosign v3.1.3 ; relevé refait à l'étape 1 de la tâche 6. → Tâches 6, 7.
+- **Q41 — Unité systemd** : recommandation adoptée. `hublot-kit.service`, root, `/usr/local/bin/hublot`, `StateDirectory=hublot-kit` (0700), `127.0.0.1:7878`, réglages par `systemctl edit` ; durcissement limité à `NoNewPrivileges`, `ProtectSystem=strict`, `PrivateTmp` (exclus : `ProtectProc`, `ProcSubset`, `PrivateUsers`, `CapabilityBoundingSet`, `ProtectKernelTunables`, `PrivateDevices`, `SystemCallFilter`) ; une directive qui casse un contrôle est retirée et notée. → Tâches 3, 5.
+- **Q42 — Image de base** : recommandation adoptée, `FROM scratch`. → Tâche 4.
+- **Q43 — Étiquettes de l'image** : recommandation adoptée. `0.1.0` et `0.1`, pas de `latest` ; une pré-version n'a que sa propre étiquette. → Tâches 6, 9, 10.
+- **Q44 — Signatures et SBOM** : recommandation adoptée. Bundles cosign de `checksums.txt` et de chaque archive, index de l'image signé par empreinte ; SBOM SPDX (syft) par archive, attestation SBOM (BuildKit) sur l'image. → Tâches 6, 7.
+- **Q45 — Release en brouillon** : recommandation adoptée ; publication manuelle (ARRÊT) après le job `verify`. → Tâches 7, 9, 10.
+- **Q46 — Pré-version** : recommandation adoptée. `v0.1.0-rc.1` sur `phase/lancement` avant la fusion, `v0.1.0` sur `main` après ; un échec donne `rc.2`, jamais un tag déplacé ; brouillon de la rc supprimé sur accord. → Tâches 9, 10.
+- **Q47 — Dépôt privé** : recommandation adoptée. Audit à la tâche 8, dépôt rendu public juste avant la publication de la v0.1.0 (tâche 10, ARRÊT) ; le nom du dépôt dans Rekor dès la rc est accepté. → Tâches 8, 9, 10.
+- **Q48 — Captures d'écran** : oui, deux PNG dans `docs/images/` ; l'étape n'est plus facultative. → Tâche 5.
+- **Q49 — Langue de l'agent** : **changement**. Tout texte humain que l'agent affiche, journalise (`slog`) ou renvoie dans un `detail` d'API passe en anglais ; l'interface (FR/EN), les commentaires du code, les commits et les docs du projet ne changent pas ; la limite « messages en français » sort de la doc. → Tâche 2 (nouvelle, avant la doc), tâches 3, 4, 5.
+- **Q50 — amd64** : recommandation adoptée ; amd64 testé par la CI seulement. → Tâches 6, 8.
+- **Q51 — Notes de release** : recommandation adoptée ; en-tête GoReleaser en anglais, puis le journal des commits. → Tâche 6.
+- **Q52 — Paquets `.deb` / `.rpm`** : recommandation adoptée ; pas en v0.1.
+- **Q53 — Signalement des vulnérabilités** : recommandation adoptée ; signalement privé de GitHub activé au passage en public. → Tâches 5, 10.
 
-  | Action ou outil | Version | Commit |
-  |---|---|---|
-  | `goreleaser/goreleaser-action` | v7.3.0 | `a4f02ab5355a589de60d917a659ce617ed19b3de` |
-  | `sigstore/cosign-installer` | v4.1.2 | `6f9f17788090df1f26f669e9d70d6ae9567deba6` |
-  | `anchore/sbom-action` (`download-syft`) | v0.24.3 | `66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c` |
-  | `docker/setup-buildx-action` | v4.4.1 | `f87e5991a6d7451dcb8d9637bfbc97413f497069` |
-  | `docker/login-action` | v4.6.0 | `dbcb813823bdd20940b903addbd779551569679f` |
-  | `actions/upload-artifact` | v7.0.2 | `cf430e030ddbb5b0abf93d22962f4752f3646cd9` |
-  | GoReleaser | v2.18.3 | (contrainte `~> v2.18`) |
-  | cosign | v3.1.3 | (`cosign-release` de l'installeur) |
-  | syft | v1.54.1 | (installé par `download-syft`) |
+### Versions épinglées (relevé du 2026-10-13)
 
-  - *Recommandation :* actions tierces épinglées par empreinte de commit avec la version en commentaire (le job de release a `id-token: write` et `packages: write`) ; actions de GitHub (`checkout`, `setup-go`, `setup-node`) par version majeure, comme `ci.yml` aujourd'hui. L'étape 1 de la tâche 5 relève de nouveau les versions et met à jour ce tableau et les YAML si l'une a bougé. Autre option : versions majeures partout (plus simple, moins sûr). → Tâches 5, 6.
-- **Q41 — Unité systemd : nom, utilisateur, chemins, durcissement.**
-  - *Recommandation :* `hublot-kit.service` (le nom du projet et de l'image ; le binaire reste `hublot`), lancée en root (§8), binaire `/usr/local/bin/hublot`, données `/var/lib/hublot-kit` (le défaut de l'agent) par `StateDirectory=hublot-kit` en 0700, écoute `127.0.0.1:7878`, réglages par fichier complémentaire (`systemctl edit`), sans `EnvironmentFile`. Durcissement limité à `NoNewPrivileges=yes`, `ProtectSystem=strict`, `PrivateTmp=yes` ; **exclus** parce qu'ils casseraient l'explorateur ou n'ont pas été mesurés : `ProtectProc`/`ProcSubset` (cachent `/proc/<pid>`), `PrivateUsers`, `CapabilityBoundingSet` (il faut `CAP_SYS_PTRACE`, `CAP_DAC_OVERRIDE`), `ProtectKernelTunables`, `PrivateDevices`, `SystemCallFilter`. Un durcissement qui casse un contrôle de la tâche 2 est retiré, et le constat noté. Autre option : aucune directive de durcissement. → Tâches 2, 4.
-- **Q42 — Image de base.**
-  - *Recommandation :* `FROM scratch` : le binaire statique seul, root, `ENTRYPOINT ["/hublot"]`, `HUBLOT_LISTEN=0.0.0.0:7878` et `HUBLOT_DATA_DIR=/data` (§8) ; rien d'autre à mettre à jour ni à scanner, et le SBOM ne liste que les modules Go. Mesuré sur Docker Desktop (tâche 3, constat de rédaction). Autre option : `gcr.io/distroless/static` (fuseaux horaires, `/etc/passwd`) : une image de base de plus à épingler et à suivre. → Tâche 3.
-- **Q43 — Étiquettes de l'image.**
-  - *Recommandation :* `X.Y.Z` (ne bouge jamais) et `X.Y` (la commande de §8 utilise `0.1`) ; **pas de `latest`** (une v0.2 incompatible ne doit pas arriver par un `docker pull`) ; une pré-version n'a que sa propre étiquette (`0.1.0-rc.1`). Autre option : ajouter `latest`. → Tâches 5, 8, 9.
-- **Q44 — Ce qui est signé, ce qui a un SBOM.**
-  - *Recommandation :* bundle cosign (`sign-blob --bundle`) de `checksums.txt` **et** de chaque archive (les binaires sont livrés dans les archives) ; index de l'image signé par son empreinte (`docker_signs`) ; un SBOM SPDX par archive (syft, `sboms` de GoReleaser) ; une attestation SBOM sur l'image (BuildKit, scanner syft), couverte par la signature de l'index. Pas de `cosign attest` séparé ni de provenance SLSA demandée en v0.1. Autre option : signer aussi les SBOM (`artifacts: all`). → Tâches 5, 6.
-- **Q45 — Release en brouillon.**
-  - *Recommandation :* `release.draft: true` ; le job `verify` relit la release depuis une machine neuve ; la publication du brouillon est une étape ARRÊT. Autre option : publier directement (une erreur de signature se verrait après coup, sur une release publique). → Tâches 6, 8, 9.
-- **Q46 — Pré-version.**
-  - *Recommandation :* `v0.1.0-rc.1` sur le dernier commit de `phase/lancement`, une fois la tâche 7 terminée et **avant** la fusion de la PR : les correctifs qu'elle révèle vont dans la même PR. `v0.1.0` se pose sur `main` après la fusion. Un tag poussé ne se déplace jamais : un échec donne `v0.1.0-rc.2`. Après la v0.1.0, garder le tag et l'image `0.1.0-rc.1`, et supprimer le brouillon de release de la rc (jamais publié) si l'utilisateur le veut (ARRÊT). Autre option : la rc sur `main` après fusion (chaque correctif demande une PR de plus). → Tâches 8, 9.
-- **Q47 — Dépôt privé.** `levy-cmd/Hublot-Kit` est **privé** aujourd'hui (`gh repo view` : `PRIVATE`). Une « v0.1 publique » demande un dépôt public : les liens de la doc, les SBOM et la vérification des signatures pointent vers lui.
-  - *Recommandation :* le rendre public juste avant de publier la release v0.1.0 (tâche 9, ARRÊT), après l'audit de la tâche 7 : `gitleaks` sur tout l'historique, relecture des fichiers suivis `.claude/handoff/*`, adresses e-mail des commits (elles deviennent visibles). À savoir dès la rc : une signature sans clé inscrit le nom du dépôt, le chemin du workflow et le tag dans le journal public Rekor, de façon permanente, même si le dépôt est privé. Autre option : rendre le dépôt public avant la rc (aucune fuite par Rekor, minutes d'Actions gratuites). → Tâches 7, 8, 9.
-- **Q48 — Captures d'écran du README.**
-  - *Recommandation :* deux PNG (liste des conteneurs ; explorateur avec les marques du diff) dans `docs/images/`, prises sur Docker Desktop contre les conteneurs de démonstration de `scripts/e2e.sh` (aucune donnée réelle), 300 Ko au plus chacune, les mêmes dans les deux README. Étape facultative de la tâche 4 : sans accord, elle est sautée. Autre option : aucune capture en v0.1. → Tâche 4.
-- **Q49 — Messages de l'agent en français seulement.** Démarrage, jeton, erreurs de ligne de commande : en français ; la doc anglaise cite `Jeton d'accès`.
-  - *Recommandation :* les garder en v0.1 (la spec ne demande l'anglais que pour l'interface, §9), et le dire dans les limites. Autre option : les passer en anglais (touche `main.go` et ses tests). → Tâche 4.
-- **Q50 — amd64.** Les deux VM sont en aarch64 : l'image amd64 n'est lancée que par la CI (runner Ubuntu, AppArmor), l'unité systemd n'est pas testée en amd64.
-  - *Recommandation :* l'accepter (même code Go, compilation croisée, image identique au binaire près). Autre option : une VM amd64 (émulée, lente) ou une machine distante. → Tâches 5, 7.
-- **Q51 — Notes de release.**
-  - *Recommandation :* l'en-tête de GoReleaser en anglais (avertissement root, image, liens vers l'installation EN et FR, vérification), puis le journal des commits (en français). Autre option : des notes écrites à la main. → Tâche 5.
-- **Q52 — Paquets `.deb` et `.rpm`.**
-  - *Recommandation :* non en v0.1 (archive et unité suffisent ; nfpm ajouterait des scripts d'installation à vérifier sur deux familles). → aucune tâche.
-- **Q53 — Signalement des vulnérabilités.**
-  - *Recommandation :* activer le signalement privé de GitHub quand le dépôt devient public (tâche 9, ARRÊT) ; `docs/*/security.md` y renvoie. Autre option : une adresse e-mail dans un `SECURITY.md`. → Tâches 4, 9.
+| Action ou outil | Version | Commit |
+|---|---|---|
+| `goreleaser/goreleaser-action` | v7.3.0 | `a4f02ab5355a589de60d917a659ce617ed19b3de` |
+| `sigstore/cosign-installer` | v4.1.2 | `6f9f17788090df1f26f669e9d70d6ae9567deba6` |
+| `anchore/sbom-action` (`download-syft`) | v0.24.3 | `66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c` |
+| `docker/setup-buildx-action` | v4.4.1 | `f87e5991a6d7451dcb8d9637bfbc97413f497069` |
+| `docker/login-action` | v4.6.0 | `dbcb813823bdd20940b903addbd779551569679f` |
+| `actions/upload-artifact` | v7.0.2 | `cf430e030ddbb5b0abf93d22962f4752f3646cd9` |
+| GoReleaser | v2.18.3 | (contrainte `~> v2.18`) |
+| cosign | v3.1.3 | (`cosign-release` de l'installeur) |
+| syft | v1.54.1 | (installé par `download-syft`) |
 
 ## Global Constraints
 
 - **Dépôt et image** : module `github.com/levy-cmd/hublot-kit` ; dépôt GitHub `levy-cmd/Hublot-Kit` (casse exacte : c'est elle qui figure dans l'identité OIDC des signatures) ; image `ghcr.io/levy-cmd/hublot-kit`, commande de §8 sur `ghcr.io/levy-cmd/hublot-kit:0.1`.
 - **Prérequis hôte (spec §8, à reprendre tels quels)** : « Linux amd64 ou arm64, noyau 5.6+ (lecture 5.6+ ; écriture (édition et envoi) sur un conteneur actif 5.8+, car `CheckWriteRoot` exige `STATX_MNT_ID`), Docker Engine avec API 1.44+, stockage overlay2 ou containerd. »
 - **Sécurité dite d'abord** : les deux README disent l'accès root dans leurs 12 premières lignes ; la doc ne dit jamais que `:ro` protège le socket (§7) ; jamais de `--privileged` recommandé (§8).
-- **Aucune dépendance Go ni d'interface nouvelle.** GoReleaser, syft, cosign et buildx ne tournent qu'en CI (et cosign dans une VM, tâche 8).
-- **Accès aux fichiers d'un conteneur (CLAUDE.md, §5)** : ce plan n'y touche pas ; seul `cmd/hublot/main.go` change (option `--version`).
+- **Aucune dépendance Go ni d'interface nouvelle.** GoReleaser, syft, cosign et buildx ne tournent qu'en CI (et cosign dans une VM, tâche 9).
+- **Accès aux fichiers d'un conteneur (CLAUDE.md, §5)** : ce plan ne change aucune logique ; la tâche 2 ne touche, dans `internal/fsview` et `internal/files`, que le texte des messages d'erreur (aucun appel, aucune condition).
 - **Tests d'abord** : l'étape 1 de chaque tâche écrit le test ou le script de vérification, l'étape 2 le voit échouer pour la bonne raison.
 - **Disque du Mac (91 %)** : pas de GoReleaser ni d'image lourde sur le Mac ; images locales `FROM scratch` seulement, supprimées aussitôt ; sur les VM, `docker rmi` après chaque contrôle.
 - **Scripts** : bash, `set -euo pipefail`, commentaires en français ; `check-docs.sh` et `check-dist.sh` tournent aussi avec le bash 3.2 de macOS. Sur le Mac : `export PATH=/opt/homebrew/bin:$PATH` avant `npm`, `DOCKER_HOST=unix://$HOME/.docker/run/docker.sock` pour Docker Desktop. Sorties filtrées par `| tail -n 20`.
+- **Langue** : tout texte que l'agent émet est en anglais (tâche 2, garde `TestAgentMessagesInEnglish`) ; commentaires du code, commits, spec et plans en français (CLAUDE.md).
 - **Commits** en français, terminés par une ligne vide puis `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
 - **Jamais** de tag poussé, de release publiée, d'image poussée sur GHCR, de changement de visibilité sans l'étape ARRÊT correspondante ; jamais de tag déplacé ni de `push --force` sur un tag.
 
 ## Review Focus
 
-1. **Un utilisateur Fedora ou RHEL suit la doc systemd** : `sudo hublot …` répond « command not found » (`secure_path`). → Tâche 2 : `check-systemd.sh` appelle `/usr/local/bin/hublot` comme la doc et tourne sur `hk-fedora` ; tâche 4 : la doc écrit le chemin complet.
-2. **Le jeton d'accès finit dans un journal lisible par d'autres** (premier démarrage sous systemd : journal lisible par `adm` et `systemd-journal`). → Tâche 2 : `check-systemd.sh` cherche le jeton dans `journalctl -u hublot-kit` et échoue s'il y est.
-3. **Mise à jour : le conteneur est recréé** ; l'utilisateur s'attend à garder son jeton, sans nouveau jeton affiché. → Tâche 3 : `check-image.sh` recrée le conteneur sur le même volume et se reconnecte avec le même jeton.
-4. **Après une 0.1.1, l'utilisateur vérifie `:0.1`** avec la commande de la doc : l'identité doit accepter tout tag `v0.1.N` et refuser une rc. → Tâche 4 : expression régulière de la doc ; tâche 9 : la commande de la doc lancée telle quelle sur `:0.1`.
-5. **Un inconnu sans compte GitHub** tire `:0.1`, lance la commande de §8 et vérifie la signature. → Tâche 9 : `docker logout`, puis tirage anonyme, `check-image.sh` sur `:0.1` sans modification, et les commandes `cosign` de la doc telles quelles.
+1. **Un utilisateur Fedora ou RHEL suit la doc systemd** : `sudo hublot …` répond « command not found » (`secure_path`). → Tâche 3 : `check-systemd.sh` appelle `/usr/local/bin/hublot` comme la doc et tourne sur `hk-fedora` ; tâche 5 : la doc écrit le chemin complet.
+2. **Le jeton d'accès finit dans un journal lisible par d'autres** (premier démarrage sous systemd : journal lisible par `adm` et `systemd-journal`). → Tâche 3 : `check-systemd.sh` cherche le jeton dans `journalctl -u hublot-kit` et échoue s'il y est.
+3. **Mise à jour : le conteneur est recréé** ; l'utilisateur s'attend à garder son jeton, sans nouveau jeton affiché. → Tâche 4 : `check-image.sh` recrée le conteneur sur le même volume et se reconnecte avec le même jeton.
+4. **Après une 0.1.1, l'utilisateur vérifie `:0.1`** avec la commande de la doc : l'identité doit accepter tout tag `v0.1.N` et refuser une rc. → Tâche 5 : expression régulière de la doc ; tâche 10 : la commande de la doc lancée telle quelle sur `:0.1`.
+5. **Un inconnu sans compte GitHub** tire `:0.1`, lance la commande de §8 et vérifie la signature. → Tâche 10 : `docker logout`, puis tirage anonyme, `check-image.sh` sur `:0.1` sans modification, et les commandes `cosign` de la doc telles quelles.
 
 ## Étapes extérieures et irréversibles
 
 | Étape | Tâche | Ce qu'elle rend visible ou définitif |
 |---|---|---|
-| Pousser le tag `v0.1.0-rc.1` | 8, étape 1 | tag sur GitHub ; image `0.1.0-rc.1` poussée sur GHCR (paquet privé) ; release brouillon ; entrées permanentes dans Rekor (nom du dépôt, workflow, tag) |
-| Pousser le tag `v0.1.0` | 9, étape 2 | idem, images `0.1.0` et `0.1` |
-| Rendre le dépôt public, activer le signalement privé de vulnérabilités | 9, étape 5 | tout l'historique, les plans, les adresses e-mail des commits |
-| Publier la release `v0.1.0` | 9, étape 6 | release visible, marquée « Latest » |
-| Rendre public le paquet GHCR | 9, étape 7 | `docker pull` anonyme ; ne se fait que dans l'interface web de GitHub |
-| Supprimer le brouillon de la rc (facultatif) | 9, étape 9 | suppression définitive du brouillon |
+| Pousser le tag `v0.1.0-rc.1` | 9, étape 1 | tag sur GitHub ; image `0.1.0-rc.1` poussée sur GHCR (paquet privé) ; release brouillon ; entrées permanentes dans Rekor (nom du dépôt, workflow, tag) |
+| Pousser le tag `v0.1.0` | 10, étape 2 | idem, images `0.1.0` et `0.1` |
+| Rendre le dépôt public, activer le signalement privé de vulnérabilités | 10, étape 5 | tout l'historique, les plans, les adresses e-mail des commits |
+| Publier la release `v0.1.0` | 10, étape 6 | release visible, marquée « Latest » |
+| Rendre public le paquet GHCR | 10, étape 7 | `docker pull` anonyme ; ne se fait que dans l'interface web de GitHub |
+| Supprimer le brouillon de la rc (facultatif) | 10, étape 9 | suppression définitive du brouillon |
 
 Ne sont pas des étapes ARRÊT : pousser la branche `phase/lancement` et ouvrir sa PR en brouillon (privées, comme aux phases précédentes) ; la fusion de la PR reste faite par l'utilisateur.
 
@@ -140,7 +129,7 @@ Ne sont pas des étapes ARRÊT : pousser la branche `phase/lancement` et ouvrir 
 |---|---|
 | **macOS** | `go test ./cmd/... ./internal/... 2>&1 \| tail -n 20` ; `scripts/check-docs.sh` |
 | **Docker Desktop (image locale)** | `export DOCKER_HOST=unix://$HOME/.docker/run/docker.sock && scripts/check-image.sh <image> <version> 2>&1 \| tail -n 12` |
-| **CI** | `gh pr checks --watch` (PR en brouillon ouverte à la tâche 5) ; un job : `gh run view <id> --log-failed \| tail -n 40` |
+| **CI** | `gh pr checks --watch` (PR en brouillon ouverte à la tâche 6) ; un job : `gh run view <id> --log-failed \| tail -n 40` |
 | **VM Ubuntu / Fedora** | `limactl start hk-fedora` au besoin ; `limactl copy <fichier> hk-ubuntu:/tmp/` ; `limactl shell --workdir "$PWD" hk-ubuntu -- sudo scripts/check-image.sh … 2>&1 \| tail -n 12` (idem `check-systemd.sh`, idem `hk-fedora`) |
 | **AppArmor / SELinux** | `limactl shell hk-ubuntu -- sudo journalctl -k --since -15min \| grep -c 'apparmor="DENIED"'` (attendu `0`) ; `limactl shell hk-fedora -- sudo ausearch -m avc -ts recent` (attendu `<no matches>`) |
 
@@ -148,21 +137,23 @@ Ne sont pas des étapes ARRÊT : pousser la branche `phase/lancement` et ouvrir 
 
 ```
 cmd/hublot/main.go, main_test.go       --version (tâche 1)
-packaging/systemd/hublot-kit.service   unité systemd livrée dans les archives (tâche 2)
-scripts/release-lib.sh                 fonctions communes : commande de §8, cinq cibles, connexion, contrôles (tâche 2)
-scripts/check-systemd.sh               installe l'unité comme la doc, explore, rotation du jeton, désinstalle (tâche 2)
-Dockerfile                             image FROM scratch, contexte fourni par GoReleaser (tâche 3)
-scripts/check-image.sh                 commande exacte de §8 sur une image, cinq cibles, mise à jour (tâche 3)
-README.md, README.fr.md                vitrine EN, version FR (tâche 4)
-docs/en/{install,security,limitations}.md, docs/fr/{installation,securite,limites}.md   (tâche 4)
-scripts/check-docs.sh                  commande de §8 à l'octet près, FR/EN alignés, liens, root en tête (tâche 4)
-.goreleaser.yaml                       binaires, archives, checksums, SBOM, signatures, image, release brouillon (tâche 5)
-scripts/check-dist.sh                  contenu de dist/ (tâche 5)
-.gitignore                             /dist/ (tâche 5)
-.github/workflows/ci.yml               jobs docs (tâche 4) et release-snapshot (tâche 5)
-.github/workflows/release.yml          release sur tag v*, puis verify (tâche 6)
-scripts/verify-release.sh              signatures, sommes, SBOM, plateformes d'une release (tâche 6)
-docs/superpowers/specs/…-design.md     §8, §10, §13 (tâche 7), §12 (tâche 9)
+cmd/hublot/messages_test.go            garde : aucune chaîne française dans l'agent (tâche 2)
+cmd/, internal/ (27 fichiers)          messages en anglais (tâche 2)
+packaging/systemd/hublot-kit.service   unité systemd livrée dans les archives (tâche 3)
+scripts/release-lib.sh                 fonctions communes : commande de §8, cinq cibles, connexion, contrôles (tâche 3)
+scripts/check-systemd.sh               installe l'unité comme la doc, explore, rotation du jeton, désinstalle (tâche 3)
+Dockerfile                             image FROM scratch, contexte fourni par GoReleaser (tâche 4)
+scripts/check-image.sh                 commande exacte de §8 sur une image, cinq cibles, mise à jour (tâche 4)
+README.md, README.fr.md                vitrine EN, version FR (tâche 5)
+docs/en/{install,security,limitations}.md, docs/fr/{installation,securite,limites}.md   (tâche 5)
+scripts/check-docs.sh                  commande de §8 à l'octet près, FR/EN alignés, liens, root en tête (tâche 5)
+.goreleaser.yaml                       binaires, archives, checksums, SBOM, signatures, image, release brouillon (tâche 6)
+scripts/check-dist.sh                  contenu de dist/ (tâche 6)
+.gitignore                             /dist/ (tâche 6)
+.github/workflows/ci.yml               jobs docs (tâche 5) et release-snapshot (tâche 6)
+.github/workflows/release.yml          release sur tag v*, puis verify (tâche 7)
+scripts/verify-release.sh              signatures, sommes, SBOM, plateformes d'une release (tâche 7)
+docs/superpowers/specs/…-design.md     §8, §10, §13 (tâche 8), §12 (tâche 10)
 ```
 
 ## Avant la tâche 1 : la branche
@@ -188,7 +179,7 @@ git switch -c phase/lancement origin/main
 
 **Interfaces:**
 - Consumes: `var version` (rempli par `-X main.version=…`).
-- Produces: `hublot --version` (ou `-version`, seul argument) écrit `hublot <version>\n` sur la sortie standard, code 0, avant toute lecture de `HUBLOT_*` et sans toucher au dossier de données. `check-dist.sh` (tâche 5) l'appelle sur le binaire de l'architecture courante ; la doc (tâche 4) le cite.
+- Produces: `hublot --version` (ou `-version`, seul argument) écrit `hublot <version>\n` sur la sortie standard, code 0, avant toute lecture de `HUBLOT_*` et sans toucher au dossier de données. `check-dist.sh` (tâche 6) l'appelle sur le binaire de l'architecture courante ; la doc (tâche 5) le cite.
 
 - [ ] **Step 1: Écrire les tests** — dans `cmd/hublot/main_test.go`, ajouter `--version` à la liste de `TestRunHelp` et le test `TestRunVersion` (partie test du diff ci-dessous) :
 
@@ -299,7 +290,458 @@ EOF
 
 ---
 
-### Task 2: Unité systemd, vérifiée sur les deux VM
+### Task 2: Messages de l'agent en anglais (Q49)
+
+**Où tester :** macOS, puis `scripts/test-linux.sh` (les fichiers `*_linux.go` ne compilent que sous Linux), puis `scripts/e2e.sh` sur Docker Desktop.
+
+**Files:**
+- Create: `cmd/hublot/messages_test.go`
+- Modify (code, 27 fichiers, 169 chaînes) : `cmd/hublot/main.go` ; `internal/api/changes.go`, `container.go`, `fs.go`, `fs_preview.go`, `fs_write.go`, `fsguard.go`, `logs.go` ; `internal/auth/token.go` ; `internal/config/config.go` ; `internal/dockerx/dockerx.go`, `fake.go`, `logs.go` ; `internal/files/files.go` ; `internal/fsview/cgroup.go`, `fsview.go`, `memfs.go`, `mountpoint_linux.go`, `mounts.go`, `procfs_archive_linux.go`, `procfs_linux.go`, `procfs_other.go`, `pseudofs_linux.go`, `root_linux.go`, `tarindex.go`, `views.go` ; `internal/web/web.go`
+- Modify (tests qui comparent ces messages) : `cmd/hublot/main_test.go`, `internal/fsview/mounts_test.go`, `internal/fsview/procfs_archive_linux_test.go`, `internal/files/files_test.go`, `internal/api/logs_test.go`, `internal/api/integration_write_linux_test.go` ; données de test de l'interface, par cohérence : `web/src/lib/write.test.ts`, `web/src/lib/logs.test.ts`
+- Modify (scripts qui lisent la sortie de l'agent) : `scripts/e2e.sh`, `.github/workflows/ci.yml` (job `binary`)
+- Modify: `docs/superpowers/specs/2026-10-07-hublot-kit-v0.1-design.md` (§8)
+
+**Interfaces:**
+- Consumes: `hublot --version` (tâche 1), le message d'usage qu'elle a complété.
+- Produces: les lignes exactes que lisent les tâches suivantes et la doc : `Access token (shown only once): <jeton>` (premier lancement), `New access token (shown only once): <jeton>` (`reset-token`), `WARNING: listening on <adresse> without TLS. …`, `WARNING: private cgroup namespace (/proc/self/cgroup = 0::/): …`, `Hublot-Kit <version> listening on <adresse>`. `scripts/check-systemd.sh` (tâche 3) et `scripts/check-image.sh` (tâche 4) extraient le jeton par `sed -n 's/^New access token (shown only once): //p'` et `sed -n 's/^Access token (shown only once): //p'`.
+
+> **À comprendre :** tout texte humain que l'agent affiche (sortie standard et d'erreur, aide), journalise (`slog`, déjà en anglais) ou renvoie dans le `detail` d'une erreur d'API passe en anglais. Les **codes** d'erreur de §6 ne changent pas, ni l'interface (dictionnaires FR/EN), ni les commentaires du code, les commits, la spec et les plans, qui restent en français (CLAUDE.md). Inventaire (relevé sur `main` après la PR #5, outil `go/ast` sur les fichiers non-test de `cmd/` et `internal/`) : **169 chaînes dans 27 fichiers** — 133 messages à traduire, 35 chaînes de format à la typographie française (`%w : %s` → `%w: %s`), et le message d'usage. Le test de garde de l'étape 1 les retrouve toutes, et empêche le retour d'une chaîne française.
+>
+> **Signalé (l'interface montre un `detail` du serveur tel quel) :** `web/src/lib/files.ts` (`downloadErrorMessage` pour `forbidden_path`, `fsErrorMessage` pour l'explorateur indisponible d'un conteneur arrêté) et `web/src/lib/write.ts` (`writeErrorMessage` pour `read_only` et `forbidden_path`) ajoutent le `detail` entre parenthèses après le message traduit, échappé par Svelte (`files.ts:78`, `files.ts:95`, `write.ts:66`, `write.ts:72`). Après cette tâche, ce détail technique (le montage qui bloque un tar, le refus de Docker) s'affiche en anglais dans l'interface française ; avant, il s'affichait en français dans l'interface anglaise. Rien à changer dans l'interface : le détail nomme une cause technique (chemin, montage) que l'utilisateur doit pouvoir chercher. Aucun autre `detail` n'est affiché (les flux de logs, `streamEnd`, ne lisent que le code).
+
+- [ ] **Step 1: Écrire les tests**
+
+Le test de garde, `cmd/hublot/messages_test.go` :
+
+```go
+package main
+
+// The agent speaks English (plan Lancement, Q49): every human text it
+// prints, logs or returns in an API "detail" is English. This guard parses
+// the production code of cmd/ and internal/ and refuses any string literal
+// that looks French: an accented letter, a space before a colon (French
+// typography: "%w : %s"), or a common French word. Code comments, tests and
+// the interface dictionaries (web/) are not concerned.
+
+import (
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"io/fs"
+	"path/filepath"
+	"regexp"
+	"strconv"
+	"strings"
+	"testing"
+)
+
+var frenchText = regexp.MustCompile(`(?i)[àâçéèêëîïôûùüœ]|\s:(\s|$)|\b(le|la|les|des|du|de|un|une|est|pas|sans|sur|ou|et|au|aux|ce|dans|pour|par|avec|jeton|dossier|lien|chemin|fichier|conteneur|montage|refus|ensemble|journal|indisponible|lecture|seule|trop|volumineux|indexation|cours|plafond|atteint|certificat|octets|client Docker)\b`)
+
+func TestAgentMessagesInEnglish(t *testing.T) {
+	var found []string
+	for _, dir := range []string{"../../cmd", "../../internal"} {
+		err := filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
+			if err != nil || d.IsDir() || !strings.HasSuffix(p, ".go") || strings.HasSuffix(p, "_test.go") {
+				return err
+			}
+			fset := token.NewFileSet()
+			f, err := parser.ParseFile(fset, p, nil, 0)
+			if err != nil {
+				return err
+			}
+			ast.Inspect(f, func(n ast.Node) bool {
+				switch x := n.(type) {
+				case *ast.ImportSpec, *ast.Field: // import paths, struct tags
+					return false
+				case *ast.BasicLit:
+					if s, err := strconv.Unquote(x.Value); x.Kind == token.STRING && err == nil && frenchText.MatchString(s) {
+						found = append(found, fset.Position(x.Pos()).String()+" "+strconv.Quote(s))
+					}
+				}
+				return true
+			})
+			return nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(found) > 0 {
+		t.Errorf("%d French strings in the agent:\n%s", len(found), strings.Join(found, "\n"))
+	}
+}
+```
+
+Les assertions qui citent un message, remplacées par leur version anglaise (chacune est unique dans son fichier ; les assertions négatives des lignes marquées « absent » restent négatives) :
+
+| Fichier | Avant | Après |
+|---|---|---|
+| `cmd/hublot/main_test.go` (`TestResetTokenSubcommand`) | `"jeton"` | `"New access token"` |
+| `cmd/hublot/main_test.go` (`TestRunStartsAndStops`, et absent dans `TestRunListenFailureKeepsNoOrphanToken` et `TestRunKeepsExistingDataDirMode`) | `"Jeton d'accès"` | `"Access token"` |
+| `cmd/hublot/main_test.go` (absent, `TestRunKeepsExistingDataDirMode`) | `"Nouveau jeton"` | `"New access token"` |
+| `cmd/hublot/main_test.go` (absent, `TestRunBadTLSCert`) | `"écoute sur"` | `"listening on"` |
+| `internal/fsview/mounts_test.go` (2 assertions sur `typ`) | `"illisible"`, `"échappement"` | `"unreadable"`, `"escape"` |
+| `internal/fsview/procfs_archive_linux_test.go` | `"sous le montage /sys"`, `"racine épinglée"` | `"under the container mount /sys"`, `"root pinned"` |
+| `internal/files/files_test.go` (journal : erreur de Docker) | `"refusé"` | `"refused"` |
+| `internal/api/logs_test.go` (créneaux pris par des téléchargements) | `"flux de logs"` | `"log streams"` |
+| `internal/api/integration_write_linux_test.go` (point de montage) | `"point de montage"` | `"mount point"` |
+| `web/src/lib/write.test.ts` | `'délai dépassé'` | `'timed out'` |
+| `web/src/lib/logs.test.ts` | `"session terminée"` | `"session ended"` |
+
+Repérer chaque ligne par `grep -n '<avant>' <fichier>` ; `TestRunWarnsPrivateCgroupNamespace` et `cgroup_test.go` cherchent `--cgroupns=host`, qui ne change pas.
+
+- [ ] **Step 2: Les voir échouer**
+
+Run: `go test ./cmd/... ./internal/... 2>&1 | grep -E '^(--- FAIL|FAIL|ok)|French strings in the agent' | head -n 20`
+Expected: `169 French strings in the agent` (`TestAgentMessagesInEnglish` ; vérifié à la rédaction sur une copie avec la tâche 1), `--- FAIL: TestResetTokenSubcommand`, `--- FAIL: TestRunStartsAndStops`, des échecs dans `internal/fsview` (`mounts_test.go`), `internal/files` et `internal/api` (`logs_test.go`) ; `ok` pour les autres paquets.
+
+Run: `scripts/test-linux.sh -tags integration ./internal/fsview/ ./internal/api/ 2>&1 | grep -E '^(--- FAIL|FAIL|ok)' | head -n 12`
+Expected: en plus, les deux assertions de `procfs_archive_linux_test.go` et celle de `integration_write_linux_test.go` en échec.
+
+- [ ] **Step 3: Traduire**
+
+1. Le message d'usage de `cmd/hublot/main.go` devient :
+
+```go
+const usage = `Usage: hublot [options]
+       hublot reset-token [--data-dir DIR]
+       hublot --version
+
+Options (each has a HUBLOT_* equivalent):
+  --listen ADDR          listen address (default 127.0.0.1:7878)
+  --data-dir DIR         data directory (default /var/lib/hublot-kit)
+  --read-only            disable every write
+  --tls-cert FILE        TLS certificate (with --tls-key)
+  --tls-key FILE         TLS key (with --tls-cert)
+  --public-origin URL    public origin behind a reverse proxy
+
+Subcommand:
+  reset-token            create a new access token and invalidate the old one
+`
+```
+
+2. Dans `run`, l'aide `fail` imprime `what, ":", err` par `Fprintln`, ce qui donne `token : …` (le test de garde ne voit pas ce `":"` isolé) : la remplacer par
+
+```go
+		fmt.Fprintf(stderr, "%s: %v\n", what, err)
+```
+
+3. Chaque chaîne du tableau ci-dessous, à l'identique (repérer par `grep -nF`). Règle pour les chaînes de format sans texte français (`%w : %s`, `%w : %v`, `%w : %q`, `%w : %s:%s`, `%w : %s : %s`, `%w : bind %s -> %s`, `%w : volume %s (type=%s) -> %s`, `%w : bind %s -> %s (volume %s)`, `%w : %s (If-Match)`, `%w : volume %s`, `fstatfs %s : %w`, `pidfd_open(%d) : %v`) : retirer l'espace avant le deux-points (`%w: %s`…). Les commentaires voisins restent en français.
+
+**`cmd/hublot/main.go`** (22 chaîne(s))
+
+| Avant | Après |
+|---|---|
+| `configuration :` | `configuration:` |
+| `dossier de données %s : %v\n` | `data directory %s: %v\n` |
+| `reset-token :` | `reset-token:` |
+| `Nouveau jeton d'accès (affiché une seule fois) : %s\n` | `New access token (shown only once): %s\n` |
+| `certificat TLS :` | `TLS certificate:` |
+| `ATTENTION : écoute sur %s sans TLS. À réserver à un conteneur publié sur 127.0.0.1 ou à un reverse proxy HTTPS.\n` | `WARNING: listening on %s without TLS. Only for a container published on 127.0.0.1 or behind an HTTPS reverse proxy.\n` |
+| `écoute :` | `listen:` |
+| `jeton :` | `token:` |
+| `Jeton d'accès (affiché une seule fois) : %s\n` | `Access token (shown only once): %s\n` |
+| <code>Le jeton affiché plus haut reste valide ; en cas de doute, lancez `hublot reset-token`.</code> | <code>The token printed above stays valid; if in doubt, run `hublot reset-token`.</code> |
+| `jeton` | `token` |
+| `journal d'audit` | `audit log` |
+| `client Docker` | `Docker client` |
+| `ATTENTION : espace de noms cgroup privé (/proc/self/cgroup = 0::/) : l'explorateur répondra container_changed. Lancez l'agent avec --cgroupns=host.` | `WARNING: private cgroup namespace (/proc/self/cgroup = 0::/): the explorer will answer container_changed. Start the agent with --cgroupns=host.` |
+| `Hublot-Kit %s écoute sur %s\n` | `Hublot-Kit %s listening on %s\n` |
+| `serveur :` | `server:` |
+| `arrêt :` | `shutdown:` |
+| `c'est un lien symbolique : refusé ; indiquez directement un dossier dédié, par exemple /var/lib/hublot-kit` | `it is a symbolic link: refused; give a dedicated directory directly, for example /var/lib/hublot-kit` |
+| `ce n'est pas un dossier` | `not a directory` |
+| `appartient à l'uid %d, pas à l'utilisateur courant (uid %d) ; utilisez un dossier dédié, par exemple /var/lib/hublot-kit` | `owned by uid %d, not by the current user (uid %d); use a dedicated directory, for example /var/lib/hublot-kit` |
+| `accessible en écriture au groupe ou à tous (%v) ; utilisez un dossier dédié, par exemple /var/lib/hublot-kit` | `writable by group or others (%v); use a dedicated directory, for example /var/lib/hublot-kit` |
+
+**`internal/api/changes.go`** (1 chaîne(s))
+
+| Avant | Après |
+|---|---|
+| `identifiant de conteneur invalide` | `invalid container ID` |
+
+**`internal/api/container.go`** (3 chaîne(s))
+
+| Avant | Après |
+|---|---|
+| `%w : variable inconnue` | `%w: unknown variable` |
+| `données après l'objet JSON` | `data after the JSON object` |
+| `journal d'audit : rien n'est révélé` | `audit log: nothing revealed` |
+
+**`internal/api/fs.go`** (2 chaîne(s))
+
+| Avant | Après |
+|---|---|
+| `identifiant de conteneur invalide` | `invalid container ID` |
+| `chemin invalide` | `invalid path` |
+
+**`internal/api/fs_preview.go`** (1 chaîne(s))
+
+| Avant | Après |
+|---|---|
+| `%w : aperçu limité à %d octets` | `%w: preview limited to %d bytes` |
+
+**`internal/api/fs_write.go`** (5 chaîne(s) ; et 1 chaîne(s) de format `… : …` → `…: …`)
+
+| Avant | Après |
+|---|---|
+| `%w : corps multipart attendu (%v)` | `%w: multipart body expected (%v)` |
+| `%w : plusieurs champs file` | `%w: several file fields` |
+| `%w : aucun champ file` | `%w: no file field` |
+| `%w ; l'écriture peut encore aboutir : rechargez le fichier pour le vérifier` | `%w; the write may still complete: reload the file to check` |
+
+**`internal/api/fsguard.go`** (2 chaîne(s))
+
+| Avant | Après |
+|---|---|
+| `trop d'opérations de fichiers en cours sur ce conteneur (montage FUSE bloqué ?)` | `too many file operations in progress on this container (stuck FUSE mount?)` |
+| `délai dépassé (montage FUSE bloqué ?)` | `timed out (stuck FUSE mount?)` |
+
+**`internal/api/logs.go`** (5 chaîne(s))
+
+| Avant | Après |
+|---|---|
+| `trop de flux de logs ouverts` | `too many open log streams` |
+| `%w (%d au plus, tous des téléchargements)` | `%w (%d at most, all downloads)` |
+| `%w : identifiant de conteneur invalide` | `%w: invalid container ID` |
+| `flux remplacé par un plus récent (%d flux de logs au plus)` | `stream replaced by a newer one (%d log streams at most)` |
+| `session terminée` | `session ended` |
+
+**`internal/auth/token.go`** (2 chaîne(s))
+
+| Avant | Après |
+|---|---|
+| <code>%s est un lien symbolique : refusé ; supprimez-le puis relancez `hublot reset-token`</code> | <code>%s is a symbolic link: refused; remove it, then run `hublot reset-token` again</code> |
+| <code>%s corrompu : relancez `hublot reset-token`</code> | <code>%s is corrupt: run `hublot reset-token` again</code> |
+
+**`internal/config/config.go`** (14 chaîne(s))
+
+| Avant | Après |
+|---|---|
+| `adresse d'écoute` | `listen address` |
+| `dossier de données` | `data directory` |
+| `désactive toute écriture` | `disable every write` |
+| `certificat TLS` | `TLS certificate` |
+| `clé TLS` | `TLS key` |
+| `origine publique derrière un reverse proxy` | `public origin behind a reverse proxy` |
+| `arguments positionnels non autorisés: %v` | `positional arguments not allowed: %v` |
+| `--tls-cert/HUBLOT_TLS_CERT et --tls-key/HUBLOT_TLS_KEY vont ensemble` | `--tls-cert/HUBLOT_TLS_CERT and --tls-key/HUBLOT_TLS_KEY go together` |
+| `schéma http ou https attendu` | `http or https scheme expected` |
+| `hôte manquant` | `missing host` |
+| `authentification utilisateur non autorisée` | `user credentials not allowed` |
+| `zone ID IPv6 non autorisée dans Host` | `IPv6 zone ID not allowed in Host` |
+| `une origine n'a ni chemin, ni requête, ni fragment` | `an origin has no path, query or fragment` |
+
+**`internal/dockerx/dockerx.go`** (9 chaîne(s) ; et 4 chaîne(s) de format `… : …` → `…: …`)
+
+| Avant | Après |
+|---|---|
+| `introuvable dans Docker` | `not found in Docker` |
+| `refusé par Docker` | `refused by Docker` |
+| `extraction refusée par Docker` | `extraction refused by Docker` |
+| `Docker indisponible` | `Docker unavailable` |
+| `%w : type de changement inconnu %d pour %s` | `%w: unknown change kind %d for %s` |
+
+**`internal/dockerx/logs.go`** (4 chaîne(s) ; et 2 chaîne(s) de format `… : …` → `…: …`)
+
+| Avant | Après |
+|---|---|
+| `le pilote de logs de ce conteneur ne permet pas la lecture` | `the logging driver of this container cannot be read back` |
+| `%w : type de trame de logs inconnu %d` | `%w: unknown log frame type %d` |
+
+**`internal/files/files.go`** (20 chaîne(s) ; et 4 chaîne(s) de format `… : …` → `…: …`)
+
+| Avant | Après |
+|---|---|
+| `agent en lecture seule` | `agent is read-only` |
+| `le fichier a changé ou existe déjà` | `the file changed or already exists` |
+| `nom de fichier invalide` | `invalid file name` |
+| `%w : édition limitée à %d octets` | `%w: edits limited to %d bytes` |
+| `%w : %s est un point de montage du conteneur : modifiez sa source` | `%w: %s is a mount point of the container: edit its source` |
+| `%w : envoi limité à %d octets` | `%w: uploads limited to %d bytes` |
+| `%w : un envoi exige If-None-Match: *` | `%w: an upload requires If-None-Match: *` |
+| `%w : %s existe` | `%w: %s exists` |
+| `requête terminée avant l'écriture, rien n'est écrit : %w` | `request ended before the write, nothing written: %w` |
+| `journal d'audit, rien n'est écrit : %w` | `audit log, nothing written: %w` |
+| `%w : %s dépasse %d octets` | `%w: %s exceeds %d bytes` |
+| `écriture refusée pour tout le conteneur : %w` | `write refused for the whole container: %w` |
+| `%w : %s : %s est monté au démarrage du conteneur, Docker n'y écrit pas` | `%w: %s: %s is mounted when the container starts, Docker does not write there` |
+| `%w : %s est géré et monté par Docker` | `%w: %s is managed and mounted by Docker` |
+| `%w : %s est monté (%s %s) : modifiez sa source` | `%w: %s is mounted (%s %s): edit its source` |
+| `%w : %s est sous le tmpfs %s, Docker n'y écrit pas` | `%w: %s is under the tmpfs %s, Docker does not write there` |
+
+**`internal/fsview/cgroup.go`** (2 chaîne(s) ; et 1 chaîne(s) de format `… : …` → `…: …`)
+
+| Avant | Après |
+|---|---|
+| ` ; lancez l'agent avec --cgroupns=host` | `; start the agent with --cgroupns=host` |
+
+**`internal/fsview/fsview.go`** (7 chaîne(s))
+
+| Avant | Après |
+|---|---|
+| `pas un dossier` | `not a directory` |
+| `pas un fichier régulier` | `not a regular file` |
+| `chemin interdit` | `forbidden path` |
+| `lien symbolique dans le chemin` | `symbolic link in the path` |
+| `le conteneur a changé` | `the container changed` |
+| `trop volumineux` | `too large` |
+| `indexation en cours` | `indexing in progress` |
+
+**`internal/fsview/mountpoint_linux.go`** (1 chaîne(s))
+
+| Avant | Après |
+|---|---|
+| `%w : point de montage indécidable` | `%w: cannot tell whether this is a mount point` |
+
+**`internal/fsview/mounts.go`** (16 chaîne(s) ; et 4 chaîne(s) de format `… : …` → `…: …`)
+
+| Avant | Après |
+|---|---|
+| `%w : volume %s -> %s : pilote %q inconnu, refusé` | `%w: volume %s -> %s: unknown driver %q, refused` |
+| `%w : volume %s -> %s : options illisibles (pas de client Docker)` | `%w: volume %s -> %s: unreadable options (no Docker client)` |
+| `%w : volume %s -> %s : options illisibles (%v)` | `%w: volume %s -> %s: unreadable options (%v)` |
+| `%w : montage de type %q inconnu -> %s, refusé` | `%w: mount of unknown type %q -> %s, refused` |
+| `ligne de mountinfo illisible` | `unreadable mountinfo line` |
+| `identifiant de montage illisible` | `unreadable mount ID` |
+| `identifiant du montage parent illisible` | `unreadable parent mount ID` |
+| `échappement de mountinfo invalide` | `invalid mountinfo escape` |
+| `%w : la table des montages n'a pas de racine "/" : la racine du process n'est pas celle du conteneur (chroot du PID 1), écriture refusée` | `%w: the mount table has no "/" root: the process root is not the container's (chroot of PID 1), write refused` |
+| `%w : la table des montages n'a pas de racine "/" : tar refusé` | `%w: the mount table has no "/" root: tar refused` |
+| `%w : la table des montages ne montre pas la destination %s (racine du process déplacée, ou destination sous un lien) : tar refusé` | `%w: the mount table does not show the destination %s (process root moved, or destination under a link): tar refused` |
+
+**`internal/fsview/procfs_archive_linux.go`** (9 chaîne(s))
+
+| Avant | Après |
+|---|---|
+| `statx sans STATX_MNT_ID (noyau antérieur à 5.8)` | `statx without STATX_MNT_ID (kernel older than 5.8)` |
+| `lecture de /proc/%d/mountinfo : %v` | `reading /proc/%d/mountinfo: %v` |
+| `%w : le montage "/" du process n'est pas celui de la racine épinglée à l'ouverture de la vue (chroot du process) : écriture refusée` | `%w: the "/" mount of the process is not the one of the root pinned when the view was opened (chroot of the process): write refused` |
+| `%w (écriture refusée : le process n'est peut-être pas dans la racine du conteneur, chroot du PID 1)` | `%w (write refused: the process may not be in the container's root, chroot of PID 1)` |
+| `contrôle des montages impossible : vue sans process` | `mount check impossible: view without a process` |
+| `%w : %s monté sur %s, sous le montage %s du conteneur : aucun tar` | `%w: %s mounted on %s, under the container mount %s: no tar` |
+| `%w : %s monté sur %s, le tar de %s l'inclurait` | `%w: %s mounted on %s, the tar of %s would include it` |
+
+**`internal/fsview/procfs_other.go`** (1 chaîne(s))
+
+| Avant | Après |
+|---|---|
+| `explorateur : Linux uniquement (sur macOS, lancez l'agent dans un conteneur)` | `explorer: Linux only (on macOS, run the agent in a container)` |
+
+**`internal/fsview/pseudofs_linux.go`** (2 chaîne(s) ; et 1 chaîne(s) de format `… : …` → `…: …`)
+
+| Avant | Après |
+|---|---|
+| `%w : %s est sur %s` | `%w: %s is on %s` |
+
+**`internal/fsview/root_linux.go`** (10 chaîne(s) ; et 1 chaîne(s) de format `… : …` → `…: …`)
+
+| Avant | Après |
+|---|---|
+| `poll du pidfd du process %d : %w` | `poll of the pidfd of process %d: %w` |
+| `le process %d s'est terminé` | `process %d has exited` |
+| `lecture du cgroup du pid %d : %v` | `reading the cgroup of pid %d: %v` |
+| `le pid %d n'est pas dans le cgroup du conteneur %.12s` | `pid %d is not in the cgroup of container %.12s` |
+| `ouverture de /proc/%d/root : %v` | `opening /proc/%d/root: %v` |
+| `ouverture de /proc/%d/root : %w ; causes mesurées (spec §8) : ` | `opening /proc/%d/root: %w; measured causes (spec §8): ` |
+| `--cap-add SYS_PTRACE absent, ou cible non confinée (--privileged, apparmor=unconfined) ` | `--cap-add SYS_PTRACE missing, or unconfined target (--privileged, apparmor=unconfined) ` |
+| `sans --security-opt apparmor=unconfined sur l'agent` | `without --security-opt apparmor=unconfined on the agent` |
+| `ouverture de /proc/%d/root : %w` | `opening /proc/%d/root: %w` |
+
+**`internal/fsview/tarindex.go`** (16 chaîne(s) ; et 6 chaîne(s) de format `… : …` → `…: …`)
+
+| Avant | Après |
+|---|---|
+| `plafond d'octets atteint` | `byte cap reached` |
+| `plafond de durée` | `time cap` |
+| `%w : index au-delà de %d octets lus` | `%w: index beyond %d bytes read` |
+| `%w : index au-delà de %s (%w)` | `%w: index beyond %s (%w)` |
+| `lecture de l'archive de / : %w` | `reading the archive of /: %w` |
+| `%w : index au-delà de %d entrées` | `%w: index beyond %d entries` |
+| `%w : %s (lien physique vers %s)` | `%w: %s (hard link to %s)` |
+| `archive de %s : %w` | `archive of %s: %w` |
+| `%s a changé depuis l'indexation` | `%s changed since indexing` |
+| `archive d'un fichier : plus d'une entrée` | `archive of a file: more than one entry` |
+
+**`internal/fsview/views.go`** (2 chaîne(s))
+
+| Avant | Après |
+|---|---|
+| `%w : index au-delà de %s (%w)` | `%w: index beyond %s (%w)` |
+| `le conteneur %.12s a démarré pendant l'indexation` | `container %.12s started during indexing` |
+
+**`internal/web/web.go`** (1 chaîne(s))
+
+| Avant | Après |
+|---|---|
+| <code>interface non compilée : lancez `make web`</code> | <code>interface not built: run `make web`</code> |
+
+**`internal/dockerx/fake.go`** : 5 chaîne(s) de format `%w : %s` (ou `%w : %v`…) → `%w: %s`.
+
+**`internal/fsview/memfs.go`** : 3 chaîne(s) de format `%w : %s` (ou `%w : %v`…) → `%w: %s`.
+
+**`internal/fsview/procfs_linux.go`** : 3 chaîne(s) de format `%w : %s` (ou `%w : %v`…) → `%w: %s`.
+
+4. Les scripts qui lisent la sortie : dans `scripts/e2e.sh`, `sed -n 's/^.* : //p'` devient `sed -n 's/^New access token (shown only once): //p'` ; dans le job `binary` de `.github/workflows/ci.yml`, `grep -q "jeton"` devient `grep -q "New access token"`.
+
+- [ ] **Step 4: Les voir passer**
+
+Run: `gofmt -l cmd internal && go vet ./cmd/... ./internal/... && go test ./cmd/... ./internal/... 2>&1 | tail -n 12`
+Expected: rien pour `gofmt` ; `ok` pour chaque paquet, `TestAgentMessagesInEnglish` compris.
+
+Run: `scripts/test-linux.sh -race -tags integration -count=1 ./cmd/... ./internal/... 2>&1 | grep -E '^(--- FAIL|FAIL|ok)' | tail -n 12`
+Expected: `ok` pour chaque paquet.
+
+Run: `export PATH=/opt/homebrew/bin:$PATH DOCKER_HOST=unix://$HOME/.docker/run/docker.sock && (cd web && npx vitest run 2>&1 | tail -n 4) && scripts/e2e.sh 2>&1 | tail -n 5`
+Expected: Vitest vert ; le parcours Playwright passe (le jeton est bien extrait de la nouvelle ligne).
+
+Run: `make build >/dev/null && d=$(mktemp -d) && ./bin/hublot reset-token --data-dir "$d/data"; ./bin/hublot --nope; ./bin/hublot --help | head -n 3; rm -rf "$d"`
+Expected: `New access token (shown only once): <jeton>`, `configuration: flag provided but not defined: -nope`, puis les trois lignes `Usage: hublot [options]` … `hublot --version`.
+
+- [ ] **Step 5: Reporter dans la spec** (§8 ; chaque passage est unique, vérifier par `grep -c`)
+
+1. Remplacer :
+
+   ```text
+   porte le détail « lancez l'agent avec --cgroupns=host ».
+   ```
+
+   par :
+
+   ```text
+   porte le détail « start the agent with --cgroupns=host ».
+   ```
+
+2. Remplacer :
+
+   ```text
+   **Contrôle au démarrage** :
+   ```
+
+   par :
+
+   ```text
+   **Langue de l'agent** : tout texte humain que l'agent affiche (sortie standard et d'erreur, aide), journalise (`slog`) ou renvoie dans le `detail` d'une erreur d'API est en anglais ; les codes d'erreur de §6 ne changent pas. L'interface est traduite (§9) et affiche certains `detail` tels quels, entre parenthèses (montage qui bloque un tar, refus de Docker en lecture seule) : ils sont en anglais dans les deux langues. Un test (`cmd/hublot/messages_test.go`) refuse toute chaîne française dans le code de l'agent (plan Lancement, Q49).
+
+   **Contrôle au démarrage** :
+   ```
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add cmd internal web/src/lib/write.test.ts web/src/lib/logs.test.ts scripts/e2e.sh .github/workflows/ci.yml docs/superpowers/specs
+git commit -F - <<'EOF'
+agent : messages en anglais (sortie, aide, journal, detail de l'API)
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+EOF
+```
+
+- [ ] **Step 7: Relecture (CLAUDE.md)** — sous-agent indépendant puis Codex. Points : plus aucune chaîne française dans ce que l'agent émet (garde verte, et relecture des `fmt.Fprint*` qui assemblent des morceaux) ; codes d'erreur inchangés ; traductions exactes (un `detail` qui nomme un montage le nomme toujours) ; les scripts et la CI lisent la nouvelle ligne du jeton ; commentaires toujours en français. Corrections en commits séparés ; la tâche 3 attend les deux avis.
+
+---
+
+### Task 3: Unité systemd, vérifiée sur les deux VM
 
 **Où tester :** `hk-ubuntu` (AppArmor) et `hk-fedora` (SELinux), avec un binaire arm64 compilé sur le Mac.
 
@@ -307,10 +749,10 @@ EOF
 - Create: `scripts/release-lib.sh`, `scripts/check-systemd.sh`, `packaging/systemd/hublot-kit.service`
 
 **Interfaces:**
-- Consumes: `hublot reset-token` (écrit `Nouveau jeton d'accès (affiché une seule fois) : <jeton>`), `POST /api/login` (`{"token"}`, `Origin` exigé, `401` si refusé), `GET /api/meta`, `GET /api/containers/{nom}/fs?path=`, `GET /api/containers/{nom}/fs/file?path=`.
-- Produces: `scripts/release-lib.sh` (à sourcer) : `HK_TARGETS`, `HK_BASE`, `hk_fail MESSAGE`, `hk_spec_command` (la commande de §8), `hk_start_targets`, `hk_remove_targets`, `hk_wait_login`, `hk_login JETON COOKIES`, `hk_check_meta COOKIES [VERSION]`, `hk_check_targets COOKIES` — utilisés par `check-image.sh` (tâche 3) et `check-docs.sh` (tâche 4). `scripts/check-systemd.sh ARCHIVE [VERSION]`, lancé en root, utilisé par les tâches 7 et 8. L'unité `hublot-kit.service`, que l'archive de la tâche 5 embarque à sa racine.
+- Consumes: `hublot reset-token` (écrit `New access token (shown only once): <jeton>`, tâche 2), `POST /api/login` (`{"token"}`, `Origin` exigé, `401` si refusé), `GET /api/meta`, `GET /api/containers/{nom}/fs?path=`, `GET /api/containers/{nom}/fs/file?path=`.
+- Produces: `scripts/release-lib.sh` (à sourcer) : `HK_TARGETS`, `HK_BASE`, `hk_fail MESSAGE`, `hk_spec_command` (la commande de §8), `hk_start_targets`, `hk_remove_targets`, `hk_wait_login`, `hk_login JETON COOKIES`, `hk_check_meta COOKIES [VERSION]`, `hk_check_targets COOKIES` — utilisés par `check-image.sh` (tâche 4) et `check-docs.sh` (tâche 5). `scripts/check-systemd.sh ARCHIVE [VERSION]`, lancé en root, utilisé par les tâches 8 et 9. L'unité `hublot-kit.service`, que l'archive de la tâche 6 embarque à sa racine.
 
-> **À comprendre :** l'unité lance le binaire en root, comme le dit §8 : il lit `/proc/<pid>/root` des conteneurs et parle au socket. Les directives de durcissement ne servent qu'à limiter les erreurs ; toute directive qui cache `/proc` des autres process ou retire des capacités casserait l'explorateur (Q41). Le script installe exactement comme la doc de la tâche 4 (`install`, unité, `reset-token` **avant** le premier démarrage, `enable --now`), puis désinstalle tout, même en cas d'échec ; il refuse de toucher une machine où Hublot-Kit est déjà installé.
+> **À comprendre :** l'unité lance le binaire en root, comme le dit §8 : il lit `/proc/<pid>/root` des conteneurs et parle au socket. Les directives de durcissement ne servent qu'à limiter les erreurs ; toute directive qui cache `/proc` des autres process ou retire des capacités casserait l'explorateur (Q41). Le script installe exactement comme la doc de la tâche 5 (`install`, unité, `reset-token` **avant** le premier démarrage, `enable --now`), puis désinstalle tout, même en cas d'échec ; il refuse de toucher une machine où Hublot-Kit est déjà installé.
 
 - [ ] **Step 1: Écrire les fonctions communes et le script de vérification**
 
@@ -438,7 +880,7 @@ install -m 0644 "$work/hublot-kit.service" /etc/systemd/system/hublot-kit.servic
 # Seuls les avertissements sur notre unité comptent (verify parle aussi de ses dépendances).
 out=$(systemd-analyze verify /etc/systemd/system/hublot-kit.service 2>&1) || hk_fail "systemd-analyze : $out"
 case $out in *hublot-kit*) hk_fail "systemd-analyze : $out" ;; esac
-tok=$(/usr/local/bin/hublot reset-token | sed -n 's/^.* : //p')
+tok=$(/usr/local/bin/hublot reset-token | sed -n 's/^New access token (shown only once): //p')
 [ -n "$tok" ] || hk_fail "reset-token n'a pas donné de jeton"
 systemctl daemon-reload
 systemctl enable --now hublot-kit
@@ -450,7 +892,7 @@ hk_login "$tok" "$jar"
 hk_check_meta "$jar" "$want"
 hk_check_targets "$jar"
 if journalctl -u hublot-kit --no-pager | grep -qF "$tok"; then hk_fail "le jeton est dans le journal"; fi
-case $(journalctl -u hublot-kit --no-pager) in *ATTENTION*) hk_fail "avertissement au démarrage (127.0.0.1 attendu, cgroup de l'hôte)" ;; esac
+case $(journalctl -u hublot-kit --no-pager) in *WARNING*) hk_fail "avertissement au démarrage (127.0.0.1 attendu, cgroup de l'hôte)" ;; esac
 for prop in NoNewPrivileges=yes ProtectSystem=strict PrivateTmp=yes User= ; do
   systemctl show hublot-kit -p "${prop%%=*}" | grep -qx "$prop" || hk_fail "propriété $prop : $(systemctl show hublot-kit -p "${prop%%=*}")"
 done
@@ -461,7 +903,7 @@ if command -v getenforce >/dev/null && [ "$(getenforce)" = Enforcing ]; then
 fi
 
 # Rotation : nouveau jeton, redémarrage, l'ancien est refusé.
-new=$(/usr/local/bin/hublot reset-token | sed -n 's/^.* : //p')
+new=$(/usr/local/bin/hublot reset-token | sed -n 's/^New access token (shown only once): //p')
 systemctl restart hublot-kit
 hk_wait_login
 code=$(curl -s -o /dev/null -w '%{http_code}' -H "Origin: $HK_BASE" -H 'Content-Type: application/json' \
@@ -558,11 +1000,11 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 EOF
 ```
 
-- [ ] **Step 6: Relecture (CLAUDE.md)** — sous-agent indépendant puis Codex. Points : chaque directive de l'unité contre l'explorateur (`/proc/<pid>/root`, `CAP_SYS_PTRACE`, socket sous `ProtectSystem=strict`) ; le jeton jamais dans le journal ; le nettoyage en cas d'échec (`trap`) ; le refus d'une installation existante ; `systemd-analyze verify` ; bash portable. Corrections en commits séparés ; la tâche 3 attend les deux avis.
+- [ ] **Step 6: Relecture (CLAUDE.md)** — sous-agent indépendant puis Codex. Points : chaque directive de l'unité contre l'explorateur (`/proc/<pid>/root`, `CAP_SYS_PTRACE`, socket sous `ProtectSystem=strict`) ; le jeton jamais dans le journal ; le nettoyage en cas d'échec (`trap`) ; le refus d'une installation existante ; `systemd-analyze verify` ; bash portable. Corrections en commits séparés ; la tâche 4 attend les deux avis.
 
 ---
 
-### Task 3: Image de release, vérifiée par la commande exacte de la doc
+### Task 4: Image de release, vérifiée par la commande exacte de la doc
 
 **Où tester :** Docker Desktop, puis `hk-ubuntu` et `hk-fedora` (image arm64 construite dans la VM, quelques Mo).
 
@@ -570,10 +1012,10 @@ EOF
 - Create: `scripts/check-image.sh`, `Dockerfile`
 
 **Interfaces:**
-- Consumes: `release-lib.sh` (tâche 2) ; la commande de la spec §8, lue par `hk_spec_command`.
-- Produces: `scripts/check-image.sh IMAGE [VERSION]`, utilisé par le job CI `release-snapshot` (tâche 5) et les tâches 7, 8, 9. `Dockerfile` : contexte `linux/<arch>/hublot` (celui que fournit `dockers_v2` de GoReleaser, tâche 5), image `FROM scratch`.
+- Consumes: `release-lib.sh` (tâche 3) ; la commande de la spec §8, lue par `hk_spec_command`.
+- Produces: `scripts/check-image.sh IMAGE [VERSION]`, utilisé par le job CI `release-snapshot` (tâche 6) et les tâches 8, 9, 10. `Dockerfile` : contexte `linux/<arch>/hublot` (celui que fournit `dockers_v2` de GoReleaser, tâche 6), image `FROM scratch`.
 
-> **À comprendre :** `check-image.sh` ne contient pas la commande : il la lit dans la spec, qui fait foi, et n'y remplace que `ghcr.io/levy-cmd/hublot-kit:0.1` ; la tâche 4 force la doc à reprendre la même commande. Dans l'image, l'agent écoute sur `0.0.0.0:7878` (publié sur `127.0.0.1`) et affiche l'avertissement « sans TLS » : c'est prévu par §7. Seul l'avertissement de l'espace de noms cgroup fait échouer le script.
+> **À comprendre :** `check-image.sh` ne contient pas la commande : il la lit dans la spec, qui fait foi, et n'y remplace que `ghcr.io/levy-cmd/hublot-kit:0.1` ; la tâche 5 force la doc à reprendre la même commande. Dans l'image, l'agent écoute sur `0.0.0.0:7878` (publié sur `127.0.0.1`) et affiche l'avertissement « sans TLS » : c'est prévu par §7. Seul l'avertissement de l'espace de noms cgroup fait échouer le script.
 
 - [ ] **Step 1: Écrire le script de vérification** — `scripts/check-image.sh` :
 
@@ -615,11 +1057,11 @@ printf '+ %s\n' "$cmd"
 sh -c "$cmd" >/dev/null
 hk_wait_login
 logs=$(docker logs hublot-kit 2>&1)
-tok=$(printf '%s\n' "$logs" | sed -n "s/^Jeton d'accès (affiché une seule fois) : //p")
+tok=$(printf '%s\n' "$logs" | sed -n 's/^Access token (shown only once): //p')
 [ -n "$tok" ] || hk_fail "jeton absent de docker logs : $logs"
-# L'avertissement « sans TLS » est attendu dans l'image (0.0.0.0 publié sur 127.0.0.1, spec §7) ;
+# L'avertissement « without TLS » est attendu dans l'image (0.0.0.0 publié sur 127.0.0.1, spec §7) ;
 # celui de l'espace de noms cgroup ne doit jamais paraître (spec §8).
-case $logs in *"espace de noms cgroup"*) hk_fail "avertissement cgroup au démarrage : $logs" ;; esac
+case $logs in *"private cgroup namespace"*) hk_fail "avertissement cgroup au démarrage : $logs" ;; esac
 hk_login "$tok" "$jar"
 hk_check_meta "$jar" "$want"
 hk_check_targets "$jar"
@@ -629,7 +1071,7 @@ hk_check_targets "$jar"
 docker rm -f hublot-kit >/dev/null
 sh -c "$cmd" >/dev/null
 hk_wait_login
-case $(docker logs hublot-kit 2>&1) in *"Jeton d'accès"*) hk_fail "nouveau jeton après recréation : le volume n'a pas gardé l'empreinte" ;; esac
+case $(docker logs hublot-kit 2>&1) in *"Access token"*) hk_fail "nouveau jeton après recréation : le volume n'a pas gardé l'empreinte" ;; esac
 hk_login "$tok" "$jar"
 echo "ok mise à jour (même volume, même jeton)"
 echo "IMAGE OK : $image"
@@ -700,21 +1142,21 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 EOF
 ```
 
-- [ ] **Step 6: Relecture (CLAUDE.md)** — sous-agent indépendant puis Codex. Points : seule la référence d'image change dans la commande ; aucun conteneur ni volume de l'utilisateur écrasé ; nettoyage complet ; `FROM scratch` en root voulu (§7, §8) ; l'image ne contient que le binaire. Corrections en commits séparés ; la tâche 4 attend les deux avis.
+- [ ] **Step 6: Relecture (CLAUDE.md)** — sous-agent indépendant puis Codex. Points : seule la référence d'image change dans la commande ; aucun conteneur ni volume de l'utilisateur écrasé ; nettoyage complet ; `FROM scratch` en root voulu (§7, §8) ; l'image ne contient que le binaire. Corrections en commits séparés ; la tâche 5 attend les deux avis.
 
 ---
 
-### Task 4: Documentation publique, en anglais et en français
+### Task 5: Documentation publique, en anglais et en français
 
 **Où tester :** macOS (`scripts/check-docs.sh`, bash 3.2), puis le job CI `docs`.
 
 **Files:**
-- Create: `scripts/check-docs.sh`, `README.fr.md`, `docs/en/install.md`, `docs/en/security.md`, `docs/en/limitations.md`, `docs/fr/installation.md`, `docs/fr/securite.md`, `docs/fr/limites.md`
+- Create: `scripts/check-docs.sh`, `docs/images/containers.png`, `docs/images/explorer.png`, `README.fr.md`, `docs/en/install.md`, `docs/en/security.md`, `docs/en/limitations.md`, `docs/fr/installation.md`, `docs/fr/securite.md`, `docs/fr/limites.md`
 - Modify: `README.md` (réécrit en anglais ; les « Notes d'exploitation » passent dans `docs/*/install*.md`, section « Data directory »), `.github/workflows/ci.yml` (job `docs`)
 
 **Interfaces:**
-- Consumes: `hk_spec_command` (tâche 2) ; les commandes de `check-systemd.sh` (tâche 2) et le comportement de l'image (tâche 3), que la doc décrit ; les noms d'artefacts de la tâche 5 (`hublot-kit_<V>_linux_<ARCH>.tar.gz`, `checksums.txt`, `*.sigstore.json`, `*.sbom.json`) et l'identité du workflow de la tâche 6 (`.github/workflows/release.yml@refs/tags/v<V>`).
-- Produces: les ancres que la release cite (tâche 5) : `docs/en/install.md#verify-the-release`, `docs/en/install.md`, `docs/fr/installation.md`, `docs/en/security.md` ; `README.fr.md`, inclus dans les archives (tâche 5).
+- Consumes: les lignes anglaises de l'agent (tâche 2 : `Access token (shown only once): …`) ; `hk_spec_command` (tâche 3) ; les commandes de `check-systemd.sh` (tâche 3) et le comportement de l'image (tâche 4), que la doc décrit ; les noms d'artefacts de la tâche 6 (`hublot-kit_<V>_linux_<ARCH>.tar.gz`, `checksums.txt`, `*.sigstore.json`, `*.sbom.json`) et l'identité du workflow de la tâche 7 (`.github/workflows/release.yml@refs/tags/v<V>`).
+- Produces: les ancres que la release cite (tâche 6) : `docs/en/install.md#verify-the-release`, `docs/en/install.md`, `docs/fr/installation.md`, `docs/en/security.md` ; `README.fr.md`, inclus dans les archives (tâche 6).
 
 > **À comprendre :** la doc est un livrable de sécurité : elle dit en tête que l'agent est root sur l'hôte, et reprend honnêtement les limites de §13 (`limitations.md`). `check-docs.sh` garde trois choses que la relecture rate facilement : la commande de §8 copiée à l'octet près, les blocs de code identiques entre FR et EN (les commandes ne se traduisent pas), et les liens relatifs. Les pages FR sont une traduction fidèle des pages EN, mêmes titres dans le même ordre.
 
@@ -793,6 +1235,9 @@ Expected: `ERREUR : README.fr.md absent`, les six pages de `docs/en` et `docs/fr
 Explore the inside of the Docker containers of a server from a browser, without a terminal. Pick a container and see
 its files, what changed since it was created, its logs and its configuration.
 
+![Container list](docs/images/containers.png)
+![File explorer with the changes since creation](docs/images/explorer.png)
+
 ## What it does (v0.1)
 
 - **Containers**: name, image, status, ports, uptime; filter and search.
@@ -825,8 +1270,7 @@ docker run -d --name hublot-kit \
   ghcr.io/levy-cmd/hublot-kit:0.1
 ```
 
-The access token is printed once, on the first start. The agent's messages are in French: look for the line that
-starts with `Jeton d'accès`.
+The access token is printed once, on the first start, on the line that starts with `Access token`.
 
 ```sh
 docker logs hublot-kit
@@ -882,6 +1326,9 @@ container: `make web && scripts/dev-agent.sh`. The interface in development mode
 Explorer l'intérieur des conteneurs Docker d'un serveur depuis un navigateur, sans terminal. Choisissez un conteneur
 et voyez ses fichiers, ce qui a changé depuis sa création, ses logs et sa configuration.
 
+![Liste des conteneurs](docs/images/containers.png)
+![Explorateur de fichiers avec les changements depuis la création](docs/images/explorer.png)
+
 ## Ce qu'il fait (v0.1)
 
 - **Conteneurs** : nom, image, statut, ports, durée de fonctionnement ; filtre et recherche.
@@ -917,7 +1364,8 @@ docker run -d --name hublot-kit \
   ghcr.io/levy-cmd/hublot-kit:0.1
 ```
 
-Le jeton d'accès s'affiche une seule fois, au premier lancement, sur la ligne qui commence par `Jeton d'accès`.
+Le jeton d'accès s'affiche une seule fois, au premier lancement, sur la ligne qui commence par `Access token` (les
+messages de l'agent sont en anglais).
 
 ```sh
 docker logs hublot-kit
@@ -1010,8 +1458,7 @@ or running it as `spc_t` under SELinux, changes which containers it can read, no
 
 ### First login
 
-The access token is printed once, on the first start. The agent's messages are in French: the line starts with
-`Jeton d'accès` ("access token").
+The access token is printed once, on the first start, on the line that starts with `Access token`.
 
 ```sh
 docker logs hublot-kit
@@ -1250,7 +1697,8 @@ faire tourner en `spc_t` sous SELinux, change les conteneurs qu'il peut lire, pa
 
 ### Première connexion
 
-Le jeton d'accès s'affiche une seule fois, au premier lancement, sur la ligne qui commence par `Jeton d'accès`.
+Le jeton d'accès s'affiche une seule fois, au premier lancement, sur la ligne qui commence par `Access token` (les
+messages de l'agent sont en anglais).
 
 ```sh
 docker logs hublot-kit
@@ -1637,8 +2085,6 @@ The technical spec ([§13, in French](../superpowers/specs/2026-10-07-hublot-kit
 - Not supported: rootless Docker, `userns-remap`, Podman, Kubernetes.
 - Not in v0.1: processes and resources, start/stop/restart, web terminal (planned for v0.2); certificates from
   Let's Encrypt (bring your own); rotation of the audit log.
-- The agent's own messages (startup, token, errors on the command line) are in French; the interface is in English
-  and French.
 
 ## Host
 
@@ -1720,8 +2166,6 @@ tous les détails.
 - Non pris en charge : Docker rootless, `userns-remap`, Podman, Kubernetes.
 - Absents de la v0.1 : process et ressources, démarrer / arrêter / redémarrer, terminal web (prévus pour la v0.2) ;
   certificats Let's Encrypt (fournissez le vôtre) ; rotation du journal d'audit.
-- Les messages de l'agent lui-même (démarrage, jeton, erreurs en ligne de commande) sont en français ; l'interface est
-  en français et en anglais.
 
 ## Hôte
 
@@ -1797,14 +2241,10 @@ La radiographie masque les secrets par leur nom et par des formes connues. Non r
 La commande elle-même ne se révèle pas en v0.1 (`docker inspect` le peut).
 ````
 
-- [ ] **Step 4 (facultatif, Q48) : captures d'écran** — seulement si l'utilisateur l'a accepté. Agent lancé comme dans `scripts/e2e.sh` (conteneur `hublot-e2e`, aucune donnée réelle), deux captures Playwright jetables (non commitées) en 1280 × 800 : la liste des conteneurs, puis l'explorateur de `hublot-e2e` sur `/root` avec les marques du diff. Enregistrer `docs/images/containers.png` et `docs/images/explorer.png` (300 Ko au plus chacune : `sips -Z 1280` puis `pngquant` s'il est installé), et ajouter sous la phrase d'introduction des deux README, au même endroit :
+- [ ] **Step 4: Captures d'écran (Q48)** — les deux PNG que citent les README (`docs/images/containers.png`, `docs/images/explorer.png`). Agent lancé comme dans `scripts/e2e.sh` (conteneur `hublot-e2e`, aucune donnée réelle), interface en anglais ; deux captures Playwright jetables (non commitées) en 1280 × 800 : la liste des conteneurs, puis l'explorateur de `hublot-e2e` sur `/root` avec les marques du diff. 300 Ko au plus chacune (`sips -Z 1280`, puis `pngquant` s'il est installé) ; aucun nom d'hôte, chemin personnel ou jeton visible.
 
-```markdown
-![Container list](docs/images/containers.png)
-![File explorer with the changes since creation](docs/images/explorer.png)
-```
-
-(texte alternatif en français dans `README.fr.md` : `![Liste des conteneurs](…)`, `![Explorateur de fichiers avec les changements depuis la création](…)`).
+Run: `ls -l docs/images/*.png | awk '{print $5, $9}'`
+Expected: deux fichiers, chacun sous 307 200 octets.
 
 - [ ] **Step 5: Le voir passer, puis le job CI**
 
@@ -1831,7 +2271,7 @@ Expected: aucune sortie.
 
 ```bash
 git add README.md README.fr.md docs/en docs/fr scripts/check-docs.sh .github/workflows/ci.yml
-git add docs/images 2>/dev/null || true
+git add docs/images
 git commit -F - <<'EOF'
 docs : README en anglais et en français, installation, sécurité et limites en FR et EN
 
@@ -1839,11 +2279,11 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 EOF
 ```
 
-- [ ] **Step 7: Relecture (CLAUDE.md)** — sous-agent indépendant puis Codex, avec la spec ouverte. Points : chaque phrase de sécurité contre §7 (rien de plus fort que ce que le code fait) ; chaque limite contre §13 (rien d'omis qui puisse surprendre un utilisateur : écriture non atomique, binds de l'hôte, FUSE et NFS, masquage heuristique, logs non masqués) ; options et valeurs par défaut contre `internal/config` ; commandes de la doc contre `check-systemd.sh` et `check-image.sh` ; traduction fidèle. Corrections en commits séparés ; la tâche 5 attend les deux avis.
+- [ ] **Step 7: Relecture (CLAUDE.md)** — sous-agent indépendant puis Codex, avec la spec ouverte. Points : chaque phrase de sécurité contre §7 (rien de plus fort que ce que le code fait) ; chaque limite contre §13 (rien d'omis qui puisse surprendre un utilisateur : écriture non atomique, binds de l'hôte, FUSE et NFS, masquage heuristique, logs non masqués) ; options et valeurs par défaut contre `internal/config` ; commandes de la doc contre `check-systemd.sh` et `check-image.sh` ; traduction fidèle. Corrections en commits séparés ; la tâche 6 attend les deux avis.
 
 ---
 
-### Task 5: GoReleaser et job CI `release-snapshot`
+### Task 6: GoReleaser et job CI `release-snapshot`
 
 **Où tester :** CI (GoReleaser ne s'installe pas sur le Mac) ; `scripts/check-dist.sh` en local pour l'étape rouge.
 
@@ -1852,12 +2292,12 @@ EOF
 - Modify: `.gitignore` (`/dist/`), `.github/workflows/ci.yml` (job `release-snapshot`)
 
 **Interfaces:**
-- Consumes: `make web` ; `Dockerfile` (tâche 3) ; `packaging/systemd/hublot-kit.service` (tâche 2) ; `README.md`, `README.fr.md`, `LICENSE` ; `scripts/check-image.sh` (tâche 3) ; `hublot --version` (tâche 1).
-- Produces: `dist/` : `hublot-kit_<V>_linux_{amd64,arm64}.tar.gz` (contenu exact : `LICENSE README.fr.md README.md hublot hublot-kit.service`), `checksums.txt`, `<archive>.sbom.json`, `metadata.json`, `artifacts.json` ; en snapshot, images locales `ghcr.io/levy-cmd/hublot-kit:<V>-amd64` et `…-arm64` ; artefact CI `release-snapshot` (`hublot-kit-arm64.tar`, archives, `checksums.txt`, `metadata.json`), consommé par la tâche 7. En release (tâche 6) : signatures `<fichier>.sigstore.json`, images `<V>` et `<X.Y>` poussées, signées, avec attestation SBOM, release brouillon.
+- Consumes: `make web` ; `Dockerfile` (tâche 4) ; `packaging/systemd/hublot-kit.service` (tâche 3) ; `README.md`, `README.fr.md`, `LICENSE` ; `scripts/check-image.sh` (tâche 4) ; `hublot --version` (tâche 1).
+- Produces: `dist/` : `hublot-kit_<V>_linux_{amd64,arm64}.tar.gz` (contenu exact : `LICENSE README.fr.md README.md hublot hublot-kit.service`), `checksums.txt`, `<archive>.sbom.json`, `metadata.json`, `artifacts.json` ; en snapshot, images locales `ghcr.io/levy-cmd/hublot-kit:<V>-amd64` et `…-arm64` ; artefact CI `release-snapshot` (`hublot-kit-arm64.tar`, archives, `checksums.txt`, `metadata.json`), consommé par la tâche 8. En release (tâche 7) : signatures `<fichier>.sigstore.json`, images `<V>` et `<X.Y>` poussées, signées, avec attestation SBOM, release brouillon.
 
 > **À comprendre :** en snapshot, GoReleaser ne pousse rien et construit une image par architecture (étiquette suffixée `-amd64`, `-arm64`) chargée dans le Docker du runner ; la signature est sautée (`--skip=sign` : pas de jeton OIDC dans un job de PR). Pour vérifier l'image **multi-architecture** et son SBOM sans GHCR, le job la construit avec buildx depuis les binaires de `dist/` et la pousse dans un registre local éphémère (service `registry:3` du job), puis lit plateformes et SBOM. `/dist/` doit être ignoré par git : sinon `vcs.modified=true` dans les binaires (mesuré).
 
-- [ ] **Step 1: Relever les versions** (Q40) — si l'une a bougé depuis le 2026-10-13, mettre à jour le tableau de Q40, puis les empreintes de cette tâche et de la tâche 6 :
+- [ ] **Step 1: Relever les versions** (Q40) — si l'une a bougé depuis le 2026-10-13, mettre à jour le tableau « Versions épinglées », puis les empreintes de cette tâche et de la tâche 7 :
 
 ```bash
 for r in goreleaser/goreleaser-action sigstore/cosign-installer anchore/sbom-action docker/setup-buildx-action docker/login-action actions/upload-artifact goreleaser/goreleaser sigstore/cosign; do
@@ -2126,20 +2566,20 @@ Expected: tous les jobs verts, dont `docs` et `release-snapshot`. Dans le journa
 
 Si GoReleaser refuse la configuration, corriger et noter le constat. Points fragiles connus (`dockers_v2` est encore « provisoire » chez GoReleaser) : une étiquette vide (`X.Y` d'une pré-version) — si elle est refusée, remplacer la liste `tags` par deux entrées `dockers_v2` dont la seconde a `disable: "{{ .Prerelease }}"` ; `sbom` en gabarit ; l'emplacement du binaire dans le contexte (`$TARGETPLATFORM/hublot`). Chaque correction : commit `correctif : …`, puis `gh pr checks --watch`.
 
-- [ ] **Step 6: Relecture (CLAUDE.md)** — sous-agent indépendant puis Codex. Points : aucun secret ni jeton dans le job de PR ; le registre local seul reçoit une image ; contenu exact des archives ; SBOM qui voit les modules Go ; drapeaux de compilation (`CGO_ENABLED=0`, `-trimpath`, `vcs.modified=false`) ; étiquettes `X.Y.Z` / `X.Y`, jamais `latest`. Corrections en commits séparés ; la tâche 6 attend les deux avis.
+- [ ] **Step 6: Relecture (CLAUDE.md)** — sous-agent indépendant puis Codex. Points : aucun secret ni jeton dans le job de PR ; le registre local seul reçoit une image ; contenu exact des archives ; SBOM qui voit les modules Go ; drapeaux de compilation (`CGO_ENABLED=0`, `-trimpath`, `vcs.modified=false`) ; étiquettes `X.Y.Z` / `X.Y`, jamais `latest`. Corrections en commits séparés ; la tâche 7 attend les deux avis.
 
 ---
 
-### Task 6: Workflow de release signé et vérification d'une release
+### Task 7: Workflow de release signé et vérification d'une release
 
-**Où tester :** macOS (`actionlint`, étape rouge) ; le premier vrai passage est la pré-version (tâche 8).
+**Où tester :** macOS (`actionlint`, étape rouge) ; le premier vrai passage est la pré-version (tâche 9).
 
 **Files:**
 - Create: `scripts/verify-release.sh`, `.github/workflows/release.yml`
 
 **Interfaces:**
-- Consumes: `.goreleaser.yaml` (tâche 5).
-- Produces: sur un tag `v*` : release GitHub **brouillon** (8 fichiers : 2 archives, 2 SBOM, `checksums.txt`, 3 bundles `.sigstore.json`), images `ghcr.io/levy-cmd/hublot-kit:<V>` (et `<X.Y>` hors pré-version) signées, avec attestation SBOM ; identité de signature `https://github.com/levy-cmd/Hublot-Kit/.github/workflows/release.yml@refs/tags/<tag>`, émetteur `https://token.actions.githubusercontent.com`. `scripts/verify-release.sh TAG [ÉTIQUETTE…]`, lancé par le job `verify` et à la tâche 9.
+- Consumes: `.goreleaser.yaml` (tâche 6).
+- Produces: sur un tag `v*` : release GitHub **brouillon** (8 fichiers : 2 archives, 2 SBOM, `checksums.txt`, 3 bundles `.sigstore.json`), images `ghcr.io/levy-cmd/hublot-kit:<V>` (et `<X.Y>` hors pré-version) signées, avec attestation SBOM ; identité de signature `https://github.com/levy-cmd/Hublot-Kit/.github/workflows/release.yml@refs/tags/<tag>`, émetteur `https://token.actions.githubusercontent.com`. `scripts/verify-release.sh TAG [ÉTIQUETTE…]`, lancé par le job `verify` et à la tâche 10.
 
 > **À comprendre :** le job `release` a seul les droits d'écrire (`contents`, `packages`) et de signer (`id-token`) ; aucun cache n'y entre (un cache empoisonné par une PR signerait un binaire piégé) ; les actions tierces sont épinglées par empreinte. Le job `verify` tourne sur une machine neuve et relit ce qui a été publié, comme le ferait un utilisateur. Lire une release **brouillon** demande le droit d'écriture sur le dépôt, d'où `contents: write` dans `verify`.
 
@@ -2315,11 +2755,11 @@ git push && gh pr checks --watch 2>&1 | tail -n 12
 
 Expected: tous les jobs verts (`release.yml` ne tourne pas sur une PR).
 
-- [ ] **Step 6: Relecture (CLAUDE.md)** — sous-agent indépendant puis Codex. Points : permissions minimales par job ; `persist-credentials: false` ; pas de cache ; épinglage ; identité et émetteur de `verify-release.sh` identiques à ceux de la doc ; le brouillon ; `concurrency` sans annulation ; ce qui se passe si `verify` échoue (la release reste brouillon, l'image privée reste poussée). Corrections en commits séparés ; la tâche 7 attend les deux avis.
+- [ ] **Step 6: Relecture (CLAUDE.md)** — sous-agent indépendant puis Codex. Points : permissions minimales par job ; `persist-credentials: false` ; pas de cache ; épinglage ; identité et émetteur de `verify-release.sh` identiques à ceux de la doc ; le brouillon ; `concurrency` sans annulation ; ce qui se passe si `verify` échoue (la release reste brouillon, l'image privée reste poussée). Corrections en commits séparés ; la tâche 8 attend les deux avis.
 
 ---
 
-### Task 7: Ce que la CI a construit, sur les VM ; spec ; audit avant publication
+### Task 8: Ce que la CI a construit, sur les VM ; spec ; audit avant publication
 
 **Où tester :** `hk-ubuntu`, `hk-fedora` ; macOS pour l'audit.
 
@@ -2426,7 +2866,7 @@ git log --all --oneline -- '*.pdf' '.superpowers' | head -n 3
 
 Expected: `no leaks found` (sinon, lister chaque fuite à l'utilisateur, sans rien réécrire) ; les quatre fichiers `.claude/handoff/*` (à relire : ils deviennent publics) ; la liste des auteurs et adresses (elles deviennent publiques) ; aucun PDF ni `.superpowers` dans l'historique.
 
-- [ ] **Step 5: Revue de branche** — demander la revue complète de `phase/lancement` (sous-agent indépendant + Codex) contre ce plan et la spec ; corriger ; cocher les cases ; noter sous « Constats de la tâche 7 » : versions des VM, résultats, refus AppArmor et AVC, verdicts de la revue, résultat de l'audit.
+- [ ] **Step 5: Revue de branche** — demander la revue complète de `phase/lancement` (sous-agent indépendant + Codex) contre ce plan et la spec ; corriger ; cocher les cases ; noter sous « Constats de la tâche 8 » : versions des VM, résultats, refus AppArmor et AVC, verdicts de la revue, résultat de l'audit.
 
 - [ ] **Step 6: Commit**
 
@@ -2440,11 +2880,11 @@ EOF
 git push && gh pr checks --watch 2>&1 | tail -n 12
 ```
 
-- [ ] **Step 7: Relecture (CLAUDE.md)** — sous-agent indépendant puis Codex sur le commit de la tâche (remplacements de la spec fidèles au livré, constats exacts). La tâche 8 attend les deux avis **et** la réponse de l'utilisateur aux constats de l'audit.
+- [ ] **Step 7: Relecture (CLAUDE.md)** — sous-agent indépendant puis Codex sur le commit de la tâche (remplacements de la spec fidèles au livré, constats exacts). La tâche 9 attend les deux avis **et** la réponse de l'utilisateur aux constats de l'audit.
 
 ---
 
-### Task 8: Pré-version `v0.1.0-rc.1` — toute la chaîne, rien de public
+### Task 9: Pré-version `v0.1.0-rc.1` — toute la chaîne, rien de public
 
 **Où tester :** GitHub Actions, GHCR (privé), `hk-ubuntu`, `hk-fedora`.
 
@@ -2513,7 +2953,7 @@ Expected: `Verification for ghcr.io/levy-cmd/hublot-kit:0.1.0-rc.1 --` suivi de 
 
 - [ ] **Step 6: Constats, commit, puis prêt pour la fusion**
 
-Noter sous « Constats de la tâche 8 » : durée du workflow, fichiers et étiquettes, version de cosign et format des signatures (bundle, référents OCI ou étiquette `sha256-…`), résultat sur chaque VM, tout correctif et toute rc supplémentaire.
+Noter sous « Constats de la tâche 9 » : durée du workflow, fichiers et étiquettes, version de cosign et format des signatures (bundle, référents OCI ou étiquette `sha256-…`), résultat sur chaque VM, tout correctif et toute rc supplémentaire.
 
 ```bash
 git add docs/superpowers/plans/2026-10-13-lancement.md
@@ -2529,7 +2969,7 @@ git push && gh pr ready && gh pr checks --watch 2>&1 | tail -n 12
 
 ---
 
-### Task 9: v0.1.0 publique
+### Task 10: v0.1.0 publique
 
 **Où tester :** GitHub, GHCR, `hk-ubuntu`, `hk-fedora`, sans aucune connexion (vérification anonyme).
 
@@ -2562,7 +3002,7 @@ gh release view v0.1.0 --json isDraft,isPrerelease --jq '{isDraft, isPrerelease}
 
 Expected: `["0.1.0","0.1"]` sur une même version (même empreinte), `["0.1.0-rc.1"]` sur une autre ; `isDraft: true`, `isPrerelease: false`. Le job `verify` a relu les deux étiquettes : `gh run view "$(gh run list --workflow release.yml --limit 1 --json databaseId --jq '.[0].databaseId')" --log | grep -E 'ok ghcr.io'` → `ok ghcr.io/levy-cmd/hublot-kit:0.1.0` et `ok ghcr.io/levy-cmd/hublot-kit:0.1`.
 
-- [ ] **Step 4: La commande de la doc, inchangée, sur les deux VM** (connexion GHCR en lecture, comme à la tâche 8 ; `check-image.sh` sans remplacement : `:0.1` est la référence de la spec)
+- [ ] **Step 4: La commande de la doc, inchangée, sur les deux VM** (connexion GHCR en lecture, comme à la tâche 9 ; `check-image.sh` sans remplacement : `:0.1` est la référence de la spec)
 
 ```bash
 for vm in hk-ubuntu hk-fedora; do
@@ -2574,7 +3014,7 @@ done
 
 Expected: `IMAGE OK : ghcr.io/levy-cmd/hublot-kit:0.1` sur les deux VM.
 
-- [ ] **Step 5: ARRÊT : accord de l'utilisateur requis — rendre le dépôt public**, après réponse aux constats de l'audit (tâche 7, étape 4). Rappeler : tout l'historique, les plans, `.claude/handoff/*` et les adresses e-mail des commits deviennent publics. Après le « oui » explicite :
+- [ ] **Step 5: ARRÊT : accord de l'utilisateur requis — rendre le dépôt public**, après réponse aux constats de l'audit (tâche 8, étape 4). Rappeler : tout l'historique, les plans, `.claude/handoff/*` et les adresses e-mail des commits deviennent publics. Après le « oui » explicite :
 
 ```bash
 gh repo edit levy-cmd/Hublot-Kit --visibility public --accept-visibility-change-consequences
@@ -2633,7 +3073,7 @@ Expected: `HTTP/2 302` ; `IMAGE OK : ghcr.io/levy-cmd/hublot-kit:0.1` sur les de
    | Lancement | 11 à 12 | docs FR/EN, GoReleaser, image GHCR, release | v0.1 publique : v0.1.0 publiée le AAAA-MM-JJ (plan Lancement) |
    ```
 
-2. Plan : cases cochées, « Constats de la tâche 9 » (heure de chaque étape ARRÊT et accord reçu, étiquettes, vérification anonyme, réponses de l'utilisateur à Q39–Q53).
+2. Plan : cases cochées, « Constats de la tâche 10 » (heure de chaque étape ARRÊT et accord reçu, étiquettes, vérification anonyme, rappel des décisions Q39–Q53 du 2026-10-13 et de tout changement ultérieur).
 
 ```bash
 git switch -c docs/lancement-constats origin/main
@@ -2657,17 +3097,18 @@ gh pr create --base main --title "docs : constats du Lancement (v0.1.0)" --body 
 - Aucun outil de release sur le Mac (`goreleaser`, `cosign`, `syft` absents) : tout passe par la CI ou une VM.
 - `-trimpath` retire `-ldflags` des informations de build ; `vcs.modified` devient `true` dès qu'un fichier non suivi (comme `dist/`) est présent.
 - Image `FROM scratch` arm64 sur Docker Desktop : 3,8 Mo ; `Env` = `HUBLOT_LISTEN=0.0.0.0:7878 HUBLOT_DATA_DIR=/data`, utilisateur vide (root) ; le volume nommé `hublot-data` neuf passe `prepareDataDir` ; recréer le conteneur garde le jeton.
+- Inventaire des messages (Q49, `go/ast` sur les fichiers non-test de `cmd/` et `internal/`, après la PR #5 et la tâche 1) : 169 chaînes françaises dans 27 fichiers (133 messages, 35 chaînes de format `… : …`, l'usage), plus l'assemblage `what, ":", err` de `main.go`. Les `slog` sont déjà en anglais. Tests qui comparent un message : 6 fichiers Go (11 assertions), 2 fichiers Vitest (données seulement). L'interface affiche le `detail` du serveur tel quel dans 4 cas (`files.ts:78`, `files.ts:95`, `write.ts:66`, `write.ts:72`).
 - Appels de `dockerx` au démon (pour la doc du proxy de socket) : `Ping`, `ContainerList`, `ContainerInspect`, `ContainerDiff`, `ContainerLogs`, `CopyFromContainer`, `CopyToContainer`, `VolumeInspect`.
 - GoReleaser (doc consultée le 2026-10-13) : `dockers_v2` depuis 2.12 (`platforms` depuis 2.14), nom « provisoire », remplacera `dockers` et `docker_manifests` (dépréciés) en v3 ; en snapshot, une image par plateforme avec suffixe, rien n'est poussé ; images construites dans la phase de publication. Cosign v3 : `--bundle` obligatoire pour `sign-blob`, installeur v4 requis.
-
-#### Constats de la tâche 7
-
-- *à remplir*
 
 #### Constats de la tâche 8
 
 - *à remplir*
 
 #### Constats de la tâche 9
+
+- *à remplir*
+
+#### Constats de la tâche 10
 
 - *à remplir*
