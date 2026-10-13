@@ -30,6 +30,18 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# Journal de l'unité depuis le début du test, capturé d'abord : sous pipefail,
+# `journalctl | grep -q` peut finir en SIGPIPE (141) et masquer une fuite.
+# Aucun jeton ne doit y paraître : ni celui du test, ni un autre (l'agent
+# affiche « … (shown only once): <jeton> » quand il crée ou renouvelle un
+# jeton, par exemple à un premier démarrage sans reset-token préalable).
+check_journal() {
+  journal=$(journalctl -u hublot-kit --since "$since" --no-pager)
+  case $journal in *"$tok"*) hk_fail "le jeton est dans le journal" ;; esac
+  case $journal in *"shown only once"*) hk_fail "un jeton est affiché dans le journal" ;; esac
+  case $journal in *WARNING*) hk_fail "avertissement au démarrage (127.0.0.1 attendu, cgroup de l'hôte)" ;; esac
+}
+
 tar -xzf "$archive" -C "$work"
 # Les commandes de docs/en/install.md, section « Binary and systemd ».
 install -m 0755 "$work/hublot" /usr/local/bin/hublot
@@ -45,16 +57,12 @@ systemctl enable --now hublot-kit
 
 hk_start_targets
 hk_wait_login
+check_journal
 [ "$(stat -c %a /var/lib/hublot-kit)" = 700 ] || hk_fail "/var/lib/hublot-kit n'est pas en 0700"
 hk_login "$tok" "$jar"
 hk_check_meta "$jar" "$want"
 hk_check_targets "$jar"
 hk_check_writes "$jar"
-# Journal capturé d'abord : sous pipefail, `journalctl | grep -q` peut finir en
-# SIGPIPE (141) et masquer une fuite.
-journal=$(journalctl -u hublot-kit --since "$since" --no-pager)
-case $journal in *"$tok"*) hk_fail "le jeton est dans le journal" ;; esac
-case $journal in *WARNING*) hk_fail "avertissement au démarrage (127.0.0.1 attendu, cgroup de l'hôte)" ;; esac
 for prop in NoNewPrivileges=yes ProtectSystem=strict PrivateTmp=yes User= ; do
   systemctl show hublot-kit -p "${prop%%=*}" | grep -qx "$prop" || hk_fail "propriété $prop : $(systemctl show hublot-kit -p "${prop%%=*}")"
 done
@@ -72,4 +80,5 @@ code=$(curl -s -o /dev/null -w '%{http_code}' -H "Origin: $HK_BASE" -H 'Content-
   -d "{\"token\":\"$tok\"}" "$HK_BASE/api/login")
 [ "$code" = 401 ] || hk_fail "ancien jeton après rotation : $code"
 hk_login "$new" "$jar"
+check_journal
 echo "SYSTEMD OK : $archive"
