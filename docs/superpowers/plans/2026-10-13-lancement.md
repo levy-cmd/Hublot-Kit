@@ -3129,7 +3129,7 @@ git push && gh pr checks --watch 2>&1 | tail -n 12
 
 > **À comprendre :** c'est le premier passage de la signature, de GHCR et du brouillon. Le tag se pose sur le dernier commit de `phase/lancement` (Q46). Un tag poussé ne bouge plus : si la chaîne échoue, on corrige sur la branche et on recommence avec `v0.1.0-rc.2` (nouvel ARRÊT).
 
-- [ ] **Step 0: `release.yml` sur `main`** (Q54) — GitHub n'enregistre un `workflow_dispatch` que si le fichier est sur la branche par défaut. Une petite PR qui ne contient que ce fichier (pas une étape ARRÊT ; l'utilisateur la fusionne) :
+- [x] **Step 0: `release.yml` sur `main`** (Q54) — GitHub n'enregistre un `workflow_dispatch` que si le fichier est sur la branche par défaut. Une petite PR qui ne contient que ce fichier (pas une étape ARRÊT ; l'utilisateur la fusionne) :
 
 ```bash
 git fetch origin && git switch -c ci/release-dispatch origin/main
@@ -3145,7 +3145,7 @@ gh pr create --base main --title "ci : workflow de release (lancement manuel)" -
 
 Après la fusion : `gh workflow list | grep Release` → `Release  active`. Le fichier lancé est toujours celui du tag (`--ref`), pas celui de `main`.
 
-- [ ] **Step 1: ARRÊT : accord de l'utilisateur requis — pousser le tag `v0.1.0-rc.1`.** Pousser le tag ne publie rien (Q54) : il rend le tag visible dans le dépôt (privé). Après le « oui » explicite :
+- [x] **Step 1: ARRÊT : accord de l'utilisateur requis — pousser le tag `v0.1.0-rc.1`.** Pousser le tag ne publie rien (Q54) : il rend le tag visible dans le dépôt (privé). Après le « oui » explicite :
 
 ```bash
 git switch phase/lancement && git pull --ff-only
@@ -3154,7 +3154,7 @@ git tag -a v0.1.0-rc.1 -m "Hublot-Kit v0.1.0-rc.1"
 git push origin v0.1.0-rc.1
 ```
 
-- [ ] **Step 2: Le verrou refuse les mauvais lancements** — d'abord le garde en local (même script que la tranche C, étape 4), puis deux vrais lancements refusés sur GitHub, chacun attendu jusqu'au bout et contrôlé : conclusion `failure`, et **seul le job `guard` a tourné** (`web`, `release`, `verify` sautés). Si un contrôle échoue, tout s'arrête : pas d'étape 3, et l'utilisateur est prévenu (un lancement non refusé a pu publier : vérifier `gh release list` et les versions du paquet GHCR).
+- [x] **Step 2: Le verrou refuse les mauvais lancements** — d'abord le garde en local (même script que la tranche C, étape 4), puis deux vrais lancements refusés sur GitHub, chacun attendu jusqu'au bout et contrôlé : conclusion `failure`, et **seul le job `guard` a tourné** (`web`, `release`, `verify` sautés). Si un contrôle échoue, tout s'arrête : pas d'étape 3, et l'utilisateur est prévenu (un lancement non refusé a pu publier : vérifier `gh release list` et les versions du paquet GHCR).
 
 ```bash
 guard=$(awk '/- name: La ref est le tag confirmé/{f=1} f&&/run: \|/{r=1;next} r&&!/^          /{exit} r{sub(/^          /,""); print}' .github/workflows/release.yml)
@@ -3190,7 +3190,7 @@ gh release list | head -n 3
 
 Expected: le tableau local comme à la tranche C, étape 4 ; `ok refus de v0.1.0-rc.1 …`, `ok refus de phase/lancement …`, `VERROU OK` ; `gh release list` vide.
 
-- [ ] **Step 3: ARRÊT : accord de l'utilisateur requis — lancer `release.yml` sur `v0.1.0-rc.1`**, seulement si l'étape 2 a affiché `VERROU OK`. Rappeler ce que cela fait : **l'image `ghcr.io/levy-cmd/hublot-kit:0.1.0-rc.1` est poussée sur GHCR** (paquet créé privé ; ARRÊT « pousser l'image sur GHCR » compris dans celui-ci), une release **brouillon** est créée, et des entrées **permanentes et publiques** sont inscrites dans le journal Rekor (nom du dépôt, chemin du workflow, tag), même dépôt privé. Après le « oui » explicite :
+- [x] **Step 3: ARRÊT : accord de l'utilisateur requis — lancer `release.yml` sur `v0.1.0-rc.1`**, seulement si l'étape 2 a affiché `VERROU OK`. Rappeler ce que cela fait : **l'image `ghcr.io/levy-cmd/hublot-kit:0.1.0-rc.1` est poussée sur GHCR** (paquet créé privé ; ARRÊT « pousser l'image sur GHCR » compris dans celui-ci), une release **brouillon** est créée, et des entrées **permanentes et publiques** sont inscrites dans le journal Rekor (nom du dépôt, chemin du workflow, tag), même dépôt privé. Après le « oui » explicite :
 
 ```bash
 gh workflow run release.yml --ref v0.1.0-rc.1 -f confirm=v0.1.0-rc.1
@@ -3413,7 +3413,16 @@ gh pr create --base main --title "docs : constats du Lancement (v0.1.0)" --body 
 
 #### Constats de la tâche 9
 
-- *à remplir*
+- **Étape 0** (2026-10-15, accord de l'utilisateur transmis par la session principale, fusion faite par l'agent) : PR #7 (`ci/release-dispatch`, un seul fichier, `release.yml` identique à `phase/lancement`), CI verte (6 jobs), fusionnée par commit de fusion `c27d493` sur `main`. `gh workflow list` → `Release  active`. Branche `ci/release-dispatch` gardée.
+- **Étape 1** : `phase/lancement` à jour (`c763472`), checks de la PR #6 verts (9 jobs). Tag annoté `v0.1.0-rc.1` (objet `ba883f2`) sur `c763472`, poussé.
+- **Étape 2** : garde local conforme (seul le premier cas accepté). Lancements refusés : run 38783319487 (`--ref v0.1.0-rc.1`, confirmation `v0.1.0-rc.9`) → `failure`, `guard` seul en échec (« confirmation « v0.1.0-rc.9 » différente du tag « v0.1.0-rc.1 » »), `web`, `release`, `verify` sautés ; run 38783372584 (`--ref phase/lancement`) → `failure`, `guard` seul (« à lancer sur un tag (--ref vX.Y.Z), pas sur branch phase/lancement »). `VERROU OK` ; `gh release list` vide.
+- **Étape 3** : run 38783489392, 18:11:00 → 18:14:36 UTC (3 min 36 s ; GoReleaser 2.18.3 : 1 min 45 s), image de runner `ubuntu24/20261004.327`. `guard`, `web`, `release`, `verify` verts ; `verify` finit par `RELEASE OK : v0.1.0-rc.1` (trois `Verified OK`, `ok` pour les deux archives, `cosign verify` de l'image, `ok ghcr.io/levy-cmd/hublot-kit:0.1.0-rc.1`). Valeurs réelles sous `workflow_dispatch` (journal de `guard`) : `REF_TYPE: tag`, `ACTOR: levy-cmd`, `TRIGGER: levy-cmd`, `OWNER: levy-cmd` ; l'API du run donne aussi `actor` et `triggering_actor` = `levy-cmd`. Droits du jeton : `guard` Metadata read seul ; `release` Contents write, Packages write (et OIDC, la signature keyless a réussi) ; `verify` Contents write, Packages read. L'artefact `web-dist` est passé à `release` (téléchargé, empreinte vérifiée, `index.html` présent). Image poussée : `ghcr.io/levy-cmd/hublot-kit:0.1.0-rc.1`, index `sha256:b9d209c5db635faf4293a9881a587954f6271da85ee9acc69b0d599e13c8bc5b`.
+- **Étape 4** (partielle) : brouillon `isDraft: true`, `isPrerelease: true`, exactement les 8 fichiers attendus. Le jeton de `gh` n'a pas `read:packages` (`gh auth refresh -s read:packages` exige l'utilisateur dans son navigateur) : visibilité et étiquettes non lues par l'API. Paquet privé prouvé autrement : le manifeste `0.1.0-rc.1` en anonyme → 403, alors que le même accès anonyme à un paquet public (témoin `goreleaser/goreleaser`) → 200. Seule étiquette d'après GoReleaser : `0.1.0-rc.1` (non confirmée par l'API).
+- **Étape 5** (partielle) : l'archive arm64, téléchargée du brouillon par `gh release download`, donne `SYSTEMD OK` sur `hk-ubuntu` et sur `hk-fedora` (SELinux `unconfined_service_t`). `check-image.sh` sur l'image GHCR : **en attente** de `read:packages` (connexion `docker login ghcr.io` avec le jeton de `gh`).
+- **Étape 6** (partielle) : cosign v3.1.3 (somme contrôlée) dans `hk-ubuntu` : `cosign verify-blob` du bundle de `checksums.txt` → `Verified OK`, puis `hublot-kit_0.1.0-rc.1_linux_arm64.tar.gz: OK` ; avec l'identité `@refs/tags/v0.1.0-rc.2` → `no matching CertificateIdentity found`. Format des signatures de fichiers : bundles `application/vnd.dev.sigstore.bundle.v0.3+json` (certificat, entrée `hashedrekord` 0.0.1, horodatage). `cosign verify` de l'image et l'inspection SBOM hors de GitHub : **en attente** de `read:packages` (faits dans `verify` sur GitHub, verts) ; le format de la signature d'image (référents OCI ou étiquette `sha256-…`) reste à lire.
+- **Entrées Rekor** (publiques, permanentes) : `checksums.txt` logIndex 3267280145 (lu sur `rekor.sigstore.dev`), archive arm64 3267279982, archive amd64 3267282183, plus la signature de l'image.
+- **Détail** : le brouillon affiche `targetCommitish: main` ; sans effet, le tag existe déjà et pointe sur `c763472`.
+- Aucun correctif, aucune rc supplémentaire.
 
 #### Constats de la tâche 10
 
