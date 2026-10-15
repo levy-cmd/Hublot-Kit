@@ -162,6 +162,7 @@ Aucun n'est retiré ; chacun a une seule tâche ou tranche qui le prouve.
 | Publier la release `v0.1.0` | 10, étape 6 | release visible, marquée « Latest » |
 | Rendre public le paquet GHCR | 10, étape 7 | `docker pull` anonyme ; ne se fait que dans l'interface web de GitHub |
 | Supprimer le brouillon de la rc (facultatif) | 10, étape 9 | suppression définitive du brouillon |
+| Supprimer de GHCR la version d'image d'une release dont le job `verify` échoue alors que le paquet est déjà public (toute release lancée après la tâche 10, étape 7) | 9, étape 3 (consigne en cas d'échec) | suppression définitive de cette version (interface web du paquet, ou `gh api -X DELETE` avec `delete:packages`) ; jusque-là, l'image refusée est tirable par tous. Le brouillon de release reste privé |
 
 Ne sont pas des étapes ARRÊT : les deux lancements refusés de la tâche 9, étape 2 (seul le garde tourne) ; pousser la branche `phase/lancement` et ouvrir sa PR en brouillon (privées, comme aux phases précédentes) ; la petite PR de `release.yml` (tâche 9, étape 0) ; les fusions restent faites par l'utilisateur. Pousser un tag seul ne publie rien (Q54) : c'est le lancement de `release.yml` qui publie.
 
@@ -202,7 +203,7 @@ docs/superpowers/specs/…-design.md     §8, §10, §13 (tâche 8), §12 (tâch
 
 ## Avant la tâche 1 : la branche
 
-- [ ] La branche `phase/lancement` existe déjà (partie de `main` après la PR #5, plan commité dessus) :
+- [x] La branche `phase/lancement` existe déjà (partie de `main` après la PR #5, plan commité dessus) :
 
 ```bash
 gh pr view 5 --json state --jq .state            # attendu : MERGED ; sinon, attendre l'utilisateur
@@ -225,7 +226,7 @@ git merge-base --is-ancestor origin/main HEAD && echo "main inclus"   # attendu 
 - Consumes: `var version` (rempli par `-X main.version=…`).
 - Produces: `hublot --version` (ou `-version`, seul argument) écrit `hublot <version>\n` sur la sortie standard, code 0, avant toute lecture de `HUBLOT_*` et sans toucher au dossier de données. `check-dist.sh` (tâche 6) l'appelle sur le binaire de l'architecture courante ; la doc (tâche 5) le cite.
 
-- [ ] **Step 1: Écrire les tests** — dans `cmd/hublot/main_test.go`, ajouter `--version` à la liste de `TestRunHelp` et le test `TestRunVersion` (partie test du diff ci-dessous) :
+- [x] **Step 1: Écrire les tests** — dans `cmd/hublot/main_test.go`, ajouter `--version` à la liste de `TestRunHelp` et le test `TestRunVersion` (partie test du diff ci-dessous) :
 
 ```diff
 diff --git a/cmd/hublot/main_test.go b/cmd/hublot/main_test.go
@@ -277,12 +278,12 @@ index e4d2897..c859be9 100644
  	blocker := filepath.Join(parent, "file")
 ```
 
-- [ ] **Step 2: Les voir échouer**
+- [x] **Step 2: Les voir échouer**
 
 Run: `go test ./cmd/hublot/ 2>&1 | tail -n 8`
 Expected: FAIL — `TestRunHelp: -h: usage lacks "--version"` et `TestRunVersion: --version: code 2, stderr "configuration : flag provided but not defined: -version\n"`.
 
-- [ ] **Step 3: Écrire le code** (`cmd/hublot/main.go`) :
+- [x] **Step 3: Écrire le code** (`cmd/hublot/main.go`) :
 
 ```diff
 diff --git a/cmd/hublot/main.go b/cmd/hublot/main.go
@@ -311,7 +312,7 @@ index 0b36f18..690349c 100644
  		args = args[1:]
 ```
 
-- [ ] **Step 4: Les voir passer**
+- [x] **Step 4: Les voir passer**
 
 Run: `gofmt -l cmd && go vet ./cmd/hublot && go test ./cmd/... ./internal/... 2>&1 | tail -n 12`
 Expected: `gofmt` n'affiche rien ; `ok` pour chaque paquet.
@@ -319,7 +320,7 @@ Expected: `gofmt` n'affiche rien ; `ok` pour chaque paquet.
 Run: `d=$(mktemp -d) && CGO_ENABLED=0 GOOS=linux go build -ldflags "-X main.version=0.1.0" -o "$d/hublot" ./cmd/hublot && go version -m "$d/hublot" | grep GOOS; rm -rf "$d"`
 Expected: `build	GOOS=linux` (le binaire Linux compile ; il ne s'exécute pas sur le Mac).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add cmd/hublot/main.go cmd/hublot/main_test.go
@@ -330,7 +331,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 EOF
 ```
 
-- [ ] **Step 6: Relecture (CLAUDE.md)** — un sous-agent indépendant, sans le contexte de l'implémentation, puis Codex, relisent le commit contre cette tâche. Points : `--version` répond avant `config.Load` ; `--version` avec d'autres arguments reste une erreur (code 2) ; message d'usage. Chaque correction retenue est un commit `correctif de revue : …` ; la tâche 2 ne commence qu'après les deux avis.
+- [x] **Step 6: Relecture (CLAUDE.md)** — un sous-agent indépendant, sans le contexte de l'implémentation, puis Codex, relisent le commit contre cette tâche. Points : `--version` répond avant `config.Load` ; `--version` avec d'autres arguments reste une erreur (code 2) ; message d'usage. Chaque correction retenue est un commit `correctif de revue : …` ; la tâche 2 ne commence qu'après les deux avis.
 
 ---
 
@@ -353,7 +354,7 @@ EOF
 >
 > **Signalé (l'interface montre un `detail` du serveur tel quel) :** `web/src/lib/files.ts` (`downloadErrorMessage` pour `forbidden_path`, `fsErrorMessage` pour l'explorateur indisponible d'un conteneur arrêté) et `web/src/lib/write.ts` (`writeErrorMessage` pour `read_only` et `forbidden_path`) ajoutent le `detail` entre parenthèses après le message traduit, échappé par Svelte (`files.ts:78`, `files.ts:95`, `write.ts:66`, `write.ts:72`). Après cette tâche, ce détail technique (le montage qui bloque un tar, le refus de Docker) s'affiche en anglais dans l'interface française ; avant, il s'affichait en français dans l'interface anglaise. Rien à changer dans l'interface : le détail nomme une cause technique (chemin, montage) que l'utilisateur doit pouvoir chercher. Aucun autre `detail` n'est affiché (les flux de logs, `streamEnd`, ne lisent que le code).
 
-- [ ] **Step 1: Écrire les tests**
+- [x] **Step 1: Écrire les tests**
 
 Le test de garde, `cmd/hublot/messages_test.go` :
 
@@ -448,7 +449,7 @@ Les assertions qui citent un message, remplacées par leur version anglaise : 27
 
 Restent tels quels : `--cgroupns=host` (`TestRunWarnsPrivateCgroupNamespace`, `cgroup_test.go`), `"make web"` (`web_test.go`), les noms de cas et les messages d'échec des tests (en français, comme les commentaires). Contrôle après coup : `grep -rnE '"(jeton|Jeton|lien symbolique|pas un dossier|appartient|illisible|échappement|racine|refusé|flux de logs|point de montage|peut encore aboutir)' --include='*_test.go' cmd internal` ne doit plus rien trouver dans une assertion.
 
-- [ ] **Step 2: Les voir échouer**
+- [x] **Step 2: Les voir échouer**
 
 Run: `go test ./cmd/... ./internal/... 2>&1 | grep -E '^(--- FAIL|FAIL|ok)|French strings in the agent' | head -n 20`
 Expected: `169 French strings in the agent` (`TestAgentMessagesInEnglish` ; vérifié à la rédaction sur une copie avec la tâche 1) ; dans `cmd/hublot`, `--- FAIL:` pour `TestResetTokenSubcommand`, `TestRunStartsAndStops`, `TestRunRefusesSymlinkDataDir`, `TestRunRefusesDataDirThatIsAFile` (sur macOS, `TestRunRefusesDataDirOwnedByAnotherUser` se saute : il faut root) ; dans `internal/fsview`, `TestHostBind`, `TestPseudoMountUnder`, `TestPseudoMountUnderEdgeCases`, `TestCheckVisibleMounts`, `TestViewsHostBindBuildsNothing` ; `TestPutFailureIsAudited` (`internal/files`) ; `TestWriteTimeoutDetail` et `TestLogsDownloadSlots` (`internal/api`). Les autres paquets : `ok`.
@@ -456,7 +457,7 @@ Expected: `169 French strings in the agent` (`TestAgentMessagesInEnglish` ; vér
 Run: `scripts/test-linux.sh -tags integration ./cmd/hublot/ ./internal/fsview/ ./internal/api/ 2>&1 | grep -E '^(--- FAIL|FAIL|ok)' | head -n 20`
 Expected: en plus, sous Linux root : `TestRunRefusesDataDirOwnedByAnotherUser`, `TestCheckArchiveContainerWideRule`, `TestCheckArchiveDestinationNotVisible`, `TestCheckArchiveDestinationUnderSymlink`, `TestCheckWriteRoot`, `TestCheckWriteRootJail` et `TestIntegrationWriteRunning` en échec (lancer aussi `./cmd/hublot/` pour le premier).
 
-- [ ] **Step 3: Traduire**
+- [x] **Step 3: Traduire**
 
 1. Le message d'usage de `cmd/hublot/main.go` devient :
 
@@ -742,7 +743,7 @@ Subcommand:
 
 4. Les scripts qui lisent la sortie : dans `scripts/e2e.sh`, `sed -n 's/^.* : //p'` devient `sed -n 's/^New access token (shown only once): //p'` ; dans le job `binary` de `.github/workflows/ci.yml`, `grep -q "jeton"` devient `grep -q "New access token"`.
 
-- [ ] **Step 4: Les voir passer**
+- [x] **Step 4: Les voir passer**
 
 Run: `gofmt -l cmd internal && go vet ./cmd/... ./internal/... && go test ./cmd/... ./internal/... 2>&1 | tail -n 12`
 Expected: rien pour `gofmt` ; `ok` pour chaque paquet, `TestAgentMessagesInEnglish` compris.
@@ -756,7 +757,7 @@ Expected: Vitest vert ; le parcours Playwright passe (le jeton est bien extrait 
 Run: `make build >/dev/null && d=$(mktemp -d) && ./bin/hublot reset-token --data-dir "$d/data"; ./bin/hublot --nope; ./bin/hublot --help | head -n 3; rm -rf "$d"`
 Expected: `New access token (shown only once): <jeton>`, `configuration: flag provided but not defined: -nope`, puis les trois lignes `Usage: hublot [options]` … `hublot --version`.
 
-- [ ] **Step 5: Reporter dans la spec** (§8 ; chaque passage est unique, vérifier par `grep -c`)
+- [x] **Step 5: Reporter dans la spec** (§8 ; chaque passage est unique, vérifier par `grep -c`)
 
 1. Remplacer :
 
@@ -784,7 +785,7 @@ Expected: `New access token (shown only once): <jeton>`, `configuration: flag pr
    **Contrôle au démarrage** :
    ```
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add cmd internal web/src/lib/write.test.ts web/src/lib/logs.test.ts scripts/e2e.sh .github/workflows/ci.yml docs/superpowers/specs
@@ -795,7 +796,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 EOF
 ```
 
-- [ ] **Step 7: Relecture (CLAUDE.md)** — sous-agent indépendant puis Codex. Points : plus aucune chaîne française dans ce que l'agent émet (garde verte, et relecture des `fmt.Fprint*` qui assemblent des morceaux) ; codes d'erreur inchangés ; traductions exactes (un `detail` qui nomme un montage le nomme toujours) ; les scripts et la CI lisent la nouvelle ligne du jeton ; commentaires toujours en français. Corrections en commits séparés ; la tâche 3 attend les deux avis.
+- [x] **Step 7: Relecture (CLAUDE.md)** — sous-agent indépendant puis Codex. Points : plus aucune chaîne française dans ce que l'agent émet (garde verte, et relecture des `fmt.Fprint*` qui assemblent des morceaux) ; codes d'erreur inchangés ; traductions exactes (un `detail` qui nomme un montage le nomme toujours) ; les scripts et la CI lisent la nouvelle ligne du jeton ; commentaires toujours en français. Corrections en commits séparés ; la tâche 3 attend les deux avis.
 
 ---
 
@@ -812,7 +813,7 @@ EOF
 
 > **À comprendre :** l'unité lance le binaire en root, comme le dit §8 : il lit `/proc/<pid>/root` des conteneurs et parle au socket. Les directives de durcissement ne servent qu'à limiter les erreurs ; toute directive qui cache `/proc` des autres process ou retire des capacités casserait l'explorateur (Q41). Le script installe exactement comme la doc de la tâche 5 (`install`, unité, `reset-token` **avant** le premier démarrage, `enable --now`), puis désinstalle tout, même en cas d'échec ; il refuse de toucher une machine où Hublot-Kit est déjà installé. Il **écrit** aussi (`hk_check_writes` : une édition `PUT fs/file` avec `If-Match`, puis un envoi `POST fs/upload` avec `If-None-Match: *`, relus par `docker exec`) : c'est sous `ProtectSystem=strict`, `NoNewPrivileges` et, sur Fedora, `unconfined_service_t` que l'écriture doit passer. Le sous-agent de revue l'a fait à la main sur `hk-ubuntu`, avec succès ; Fedora reste à éprouver. Le journal est lu une fois, depuis le démarrage du test, puis cherché (sous `pipefail`, `journalctl | grep -q` peut finir en SIGPIPE et masquer une fuite).
 
-- [ ] **Step 1: Écrire les fonctions communes et le script de vérification**
+- [x] **Step 1: Écrire les fonctions communes et le script de vérification**
 
 `scripts/release-lib.sh` :
 
@@ -1005,7 +1006,7 @@ echo "SYSTEMD OK : $archive"
 Run: `chmod +x scripts/check-systemd.sh && bash -n scripts/release-lib.sh && bash -n scripts/check-systemd.sh && echo ok`
 Expected: `ok`.
 
-- [ ] **Step 2: Le voir échouer** — une archive sans unité, comme avant la tâche :
+- [x] **Step 2: Le voir échouer** — une archive sans unité, comme avant la tâche :
 
 ```bash
 export PATH=/opt/homebrew/bin:$PATH
@@ -1020,7 +1021,7 @@ limactl shell --workdir "$PWD" hk-ubuntu -- sudo scripts/check-systemd.sh /tmp/h
 
 Expected: échec, `install: cannot stat '/tmp/tmp.…/hublot-kit.service': No such file or directory` ; puis `limactl shell hk-ubuntu -- ls /usr/local/bin/hublot /etc/systemd/system/hublot-kit.service` → `No such file or directory` pour les deux (le nettoyage a tourné).
 
-- [ ] **Step 3: Écrire l'unité** — `packaging/systemd/hublot-kit.service` :
+- [x] **Step 3: Écrire l'unité** — `packaging/systemd/hublot-kit.service` :
 
 ```ini
 # Hublot-Kit agent, run as root outside a container (spec §8, alternative).
@@ -1058,7 +1059,7 @@ PrivateTmp=yes
 WantedBy=multi-user.target
 ```
 
-- [ ] **Step 4: La voir passer sur les deux VM** (même shell qu'à l'étape 2 : `$tmp` contient le binaire)
+- [x] **Step 4: La voir passer sur les deux VM** (même shell qu'à l'étape 2 : `$tmp` contient le binaire)
 
 ```bash
 cp packaging/systemd/hublot-kit.service "$tmp/"
@@ -1078,7 +1079,7 @@ Expected: sur chaque VM, `meta : {"readOnly":false,"version":"0.0.0-local"}`, `o
 
 Si un contrôle échoue à cause d'une directive de durcissement (lecture d'une cible, socket, dossier de données) : retirer **cette directive seulement**, relancer, et noter le constat (directive, VM, message) sous « Constats » à la fin du plan. Ne jamais ajouter de capacité ni de `--privileged`-like.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add scripts/release-lib.sh scripts/check-systemd.sh packaging/systemd/hublot-kit.service
@@ -1089,7 +1090,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 EOF
 ```
 
-- [ ] **Step 6: Relecture (CLAUDE.md)** — sous-agent indépendant puis Codex. Points : chaque directive de l'unité contre l'explorateur (`/proc/<pid>/root`, `CAP_SYS_PTRACE`, socket sous `ProtectSystem=strict`) ; le jeton jamais dans le journal ; le nettoyage en cas d'échec (`trap`) ; le refus d'une installation existante ; `systemd-analyze verify` ; bash portable. Corrections en commits séparés ; la tâche 4 attend les deux avis.
+- [x] **Step 6: Relecture (CLAUDE.md)** — sous-agent indépendant puis Codex. Points : chaque directive de l'unité contre l'explorateur (`/proc/<pid>/root`, `CAP_SYS_PTRACE`, socket sous `ProtectSystem=strict`) ; le jeton jamais dans le journal ; le nettoyage en cas d'échec (`trap`) ; le refus d'une installation existante ; `systemd-analyze verify` ; bash portable. Corrections en commits séparés ; la tâche 4 attend les deux avis.
 
 ---
 
@@ -1106,7 +1107,7 @@ EOF
 
 > **À comprendre :** `check-image.sh` ne contient pas la commande : il la lit dans la spec, qui fait foi, et n'y remplace que `ghcr.io/levy-cmd/hublot-kit:0.1` ; la tâche 5 force la doc à reprendre la même commande. Dans l'image, l'agent écoute sur `0.0.0.0:7878` (publié sur `127.0.0.1`) et affiche l'avertissement « sans TLS » : c'est prévu par §7. Seul l'avertissement de l'espace de noms cgroup fait échouer le script. Le script écrit aussi (édition et envoi, `hk_check_writes` de la tâche 3) : l'image `scratch` tourne en root, et l'écriture passe par Docker (`PUT /archive`) ; vérifié à la rédaction sur Docker Desktop, avec un binaire aux messages anglais de la tâche 2.
 
-- [ ] **Step 1: Écrire le script de vérification** — `scripts/check-image.sh` :
+- [x] **Step 1: Écrire le script de vérification** — `scripts/check-image.sh` :
 
 ```bash
 #!/usr/bin/env bash
@@ -1171,7 +1172,7 @@ echo "IMAGE OK : $image"
 Run: `chmod +x scripts/check-image.sh && bash -n scripts/check-image.sh && echo ok`
 Expected: `ok`.
 
-- [ ] **Step 2: Le voir échouer** — pas encore de `Dockerfile`, donc pas d'image :
+- [x] **Step 2: Le voir échouer** — pas encore de `Dockerfile`, donc pas d'image :
 
 ```bash
 export DOCKER_HOST=unix://$HOME/.docker/run/docker.sock PATH=/opt/homebrew/bin:$PATH
@@ -1184,7 +1185,7 @@ scripts/check-image.sh hk-local-test:arm64 0.0.0-local 2>&1 | tail -n 3
 
 Expected: `docker build` échoue (Dockerfile introuvable), puis `check-image.sh` échoue au `docker run` (`Unable to find image 'hk-local-test:arm64' locally` … `pull access denied`) ; `docker ps -a --format '{{.Names}}' | grep -c 'hk-check\|hublot-kit'` → `0` (nettoyé).
 
-- [ ] **Step 3: Écrire le Dockerfile** — `Dockerfile` :
+- [x] **Step 3: Écrire le Dockerfile** — `Dockerfile` :
 
 ```dockerfile
 # Release image, built by GoReleaser (dockers_v2, .goreleaser.yaml): the build
@@ -1202,7 +1203,7 @@ EXPOSE 7878
 ENTRYPOINT ["/hublot"]
 ```
 
-- [ ] **Step 4: Le voir passer sur Docker Desktop, puis sur les deux VM** (même shell qu'à l'étape 2 : `$ctx` contient le binaire)
+- [x] **Step 4: Le voir passer sur Docker Desktop, puis sur les deux VM** (même shell qu'à l'étape 2 : `$ctx` contient le binaire)
 
 ```bash
 docker build -q -f Dockerfile -t hk-local-test:arm64 "$ctx" >/dev/null
@@ -1222,7 +1223,7 @@ rm -rf "$ctx"
 
 Expected, partout : la commande affichée (`+ docker run -d --name hublot-kit \` … `hk-local-test:arm64`), `meta : {"readOnly":false,"version":"0.0.0-local"}`, les cinq `ok hk-check-…`, `ok édition (PUT fs/file)`, `ok envoi (POST fs/upload)`, `ok mise à jour (même volume, même jeton)`, `IMAGE OK : hk-local-test:arm64` ; `0` refus AppArmor ; `<no matches>` pour les AVC. Mesuré à la rédaction sur Docker Desktop : vert, écritures comprises.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add scripts/check-image.sh Dockerfile
@@ -1233,7 +1234,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 EOF
 ```
 
-- [ ] **Step 6: Relecture (CLAUDE.md)** — sous-agent indépendant puis Codex. Points : seule la référence d'image change dans la commande ; aucun conteneur ni volume de l'utilisateur écrasé ; nettoyage complet ; `FROM scratch` en root voulu (§7, §8) ; l'image ne contient que le binaire. Corrections en commits séparés ; la tâche 5 attend les deux avis.
+- [x] **Step 6: Relecture (CLAUDE.md)** — sous-agent indépendant puis Codex. Points : seule la référence d'image change dans la commande ; aucun conteneur ni volume de l'utilisateur écrasé ; nettoyage complet ; `FROM scratch` en root voulu (§7, §8) ; l'image ne contient que le binaire. Corrections en commits séparés ; la tâche 5 attend les deux avis.
 
 ---
 
@@ -1251,7 +1252,7 @@ EOF
 
 > **À comprendre :** la doc est un livrable de sécurité : elle dit en tête que l'agent est root sur l'hôte, et reprend honnêtement les limites de §13 (`limitations.md`). `check-docs.sh` garde trois choses que la relecture rate facilement : la commande de §8 copiée à l'octet près, les blocs de code identiques entre FR et EN (les commandes ne se traduisent pas), et les liens relatifs. Les pages FR sont une traduction fidèle des pages EN, mêmes titres dans le même ordre.
 
-- [ ] **Step 1: Écrire le script de vérification** — `scripts/check-docs.sh` :
+- [x] **Step 1: Écrire le script de vérification** — `scripts/check-docs.sh` :
 
 ```bash
 #!/usr/bin/env bash
@@ -1305,12 +1306,12 @@ done
 echo "DOCS OK"
 ```
 
-- [ ] **Step 2: Le voir échouer**
+- [x] **Step 2: Le voir échouer**
 
 Run: `chmod +x scripts/check-docs.sh && scripts/check-docs.sh 2>&1 | tail -n 10`
 Expected: `ERREUR : README.fr.md absent`, les six pages de `docs/en` et `docs/fr` absentes, `ERREUR : README.md : la commande docker run diffère de la spec §8`, puis `8 erreur(s)`.
 
-- [ ] **Step 3: Écrire la documentation** — les huit fichiers ci-dessous, tels quels.
+- [x] **Step 3: Écrire la documentation** — les huit fichiers ci-dessous, tels quels.
 
 `README.md` :
 
@@ -2344,12 +2345,12 @@ La radiographie masque les secrets par leur nom et par des formes connues. Non r
 La commande elle-même ne se révèle pas en v0.1 (`docker inspect` le peut).
 ````
 
-- [ ] **Step 4: Captures d'écran (Q48)** — les deux PNG que citent les README (`docs/images/containers.png`, `docs/images/explorer.png`). Agent lancé comme dans `scripts/e2e.sh` (conteneur `hublot-e2e`, aucune donnée réelle), interface en anglais ; deux captures Playwright jetables (non commitées) en 1280 × 800 : la liste des conteneurs, puis l'explorateur de `hublot-e2e` sur `/root` avec les marques du diff. 300 Ko au plus chacune (`sips -Z 1280`, puis `pngquant` s'il est installé) ; aucun nom d'hôte, chemin personnel ou jeton visible.
+- [x] **Step 4: Captures d'écran (Q48)** — les deux PNG que citent les README (`docs/images/containers.png`, `docs/images/explorer.png`). Agent lancé comme dans `scripts/e2e.sh` (conteneur `hublot-e2e`, aucune donnée réelle), interface en anglais ; deux captures Playwright jetables (non commitées) en 1280 × 800 : la liste des conteneurs, puis l'explorateur de `hublot-e2e` sur `/root` avec les marques du diff. 300 Ko au plus chacune (`sips -Z 1280`, puis `pngquant` s'il est installé) ; aucun nom d'hôte, chemin personnel ou jeton visible.
 
 Run: `ls -l docs/images/*.png | awk '{print $5, $9}'`
 Expected: deux fichiers, chacun sous 307 200 octets.
 
-- [ ] **Step 5: Le voir passer, puis le job CI**
+- [x] **Step 5: Le voir passer, puis le job CI**
 
 Run: `scripts/check-docs.sh 2>&1 | tail -n 3`
 Expected: `DOCS OK`.
@@ -2367,7 +2368,7 @@ Révision 2026-10-15 (contrat T5/T6 du registre) : le job `docs` n'est pas ajout
       - run: scripts/check-docs.sh
 ```
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add README.md README.fr.md docs/en docs/fr scripts/check-docs.sh
@@ -2379,7 +2380,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 EOF
 ```
 
-- [ ] **Step 7: Relecture (CLAUDE.md)** — sous-agent indépendant puis Codex, avec la spec ouverte. Points : chaque phrase de sécurité contre §7 (rien de plus fort que ce que le code fait) ; chaque limite contre §13 (rien d'omis qui puisse surprendre un utilisateur : écriture non atomique, binds de l'hôte, FUSE et NFS, masquage heuristique, logs non masqués) ; options et valeurs par défaut contre `internal/config` ; commandes de la doc contre `check-systemd.sh` et `check-image.sh` ; traduction fidèle. Corrections en commits séparés ; la tâche 6 attend les deux avis.
+- [x] **Step 7: Relecture (CLAUDE.md)** — sous-agent indépendant puis Codex, avec la spec ouverte. Points : chaque phrase de sécurité contre §7 (rien de plus fort que ce que le code fait) ; chaque limite contre §13 (rien d'omis qui puisse surprendre un utilisateur : écriture non atomique, binds de l'hôte, FUSE et NFS, masquage heuristique, logs non masqués) ; options et valeurs par défaut contre `internal/config` ; commandes de la doc contre `check-systemd.sh` et `check-image.sh` ; traduction fidèle. Corrections en commits séparés ; la tâche 6 attend les deux avis.
 
 ---
 
@@ -2393,7 +2394,7 @@ EOF
 
 **Interfaces (produites, consommées par les tranches) :** `dist/` (archives `hublot-kit_<V>_linux_{amd64,arm64}.tar.gz` au contenu exact `LICENSE README.fr.md README.md hublot hublot-kit.service`, `checksums.txt`, SBOM SPDX par archive, `metadata.json`) ; en snapshot, images locales `ghcr.io/levy-cmd/hublot-kit:<V>-amd64` et `…-arm64` ; artefact CI `release-snapshot` (`hublot-kit-arm64.tar`, archives, `checksums.txt`, `metadata.json`).
 
-- [ ] **Step 5: La CI sur la branche, T5 comprise** — `f05b69f` est poussé et la PR brouillon #6 existe ; la branche contient maintenant la tâche 5 fusionnée (`9d872c7`). Relancer la CI sur le dernier commit et la suivre :
+- [x] **Step 5: La CI sur la branche, T5 comprise** — `f05b69f` est poussé et la PR brouillon #6 existe ; la branche contient maintenant la tâche 5 fusionnée (`9d872c7`). Relancer la CI sur le dernier commit et la suivre :
 
 ```bash
 git switch phase/lancement && git pull --ff-only
@@ -2407,7 +2408,7 @@ Expected: tous les jobs verts, dont `release-snapshot` (le job `docs` arrive ave
 
 Si GoReleaser refuse la configuration, corriger et noter le constat. Points fragiles connus (`dockers_v2` est encore « provisoire » chez GoReleaser) : une étiquette vide (`X.Y` d'une pré-version) — si elle est refusée, remplacer la liste `tags` par deux entrées `dockers_v2` dont la seconde a `disable: "{{ .Prerelease }}"` ; `sbom` en gabarit ; l'emplacement du binaire dans le contexte (`$TARGETPLATFORM/hublot`). Chaque correction : commit `correctif : …`, puis `gh pr checks --watch`.
 
-- [ ] **Step 6: Relecture (CLAUDE.md)** — sous-agent indépendant puis Codex. Points : aucun secret ni jeton dans le job de PR ; le registre local seul reçoit une image ; contenu exact des archives ; SBOM qui voit les modules Go ; drapeaux de compilation (`CGO_ENABLED=0`, `-trimpath`, `vcs.modified=false`) ; étiquettes `X.Y.Z` / `X.Y`, jamais `latest`. Corrections en commits séparés ; la tranche A attend les deux avis.
+- [x] **Step 6: Relecture (CLAUDE.md)** — sous-agent indépendant puis Codex. Points : aucun secret ni jeton dans le job de PR ; le registre local seul reçoit une image ; contenu exact des archives ; SBOM qui voit les modules Go ; drapeaux de compilation (`CGO_ENABLED=0`, `-trimpath`, `vcs.modified=false`) ; étiquettes `X.Y.Z` / `X.Y`, jamais `latest`. Corrections en commits séparés ; la tranche A attend les deux avis.
 
 ---
 
@@ -2427,7 +2428,7 @@ Si GoReleaser refuse la configuration, corriger et noter le constat. Points frag
 
 > **À comprendre :** le test unitaire de la garde cgroup remplace la mutation « retirer `--cgroupns=host` de la commande de §8 », que le contrôle de permissions a bloquée à la tâche 4 (registre) : au lieu de muter la spec, un faux journal d'agent passe par la garde que `check-image.sh` applique à `docker logs`. Pour cela, la garde, aujourd'hui en ligne dans `check-image.sh`, devient une fonction de `release-lib.sh`. La partie image de la chaîne (dockers_v2, snapshot, registre local, image amd64 lancée par la CI) est faite à la tâche 6 : cette tranche la vérifie de bout en bout et y aligne la doc.
 
-- [ ] **Step 1: Écrire les tests** — la garde cgroup dans `scripts/test-release-lib.sh`, et le bloc « Tranche A » de `scripts/check-docs.sh`, inséré juste avant la ligne finale `[ $errors = 0 ] || …` :
+- [x] **Step 1: Écrire les tests** — la garde cgroup dans `scripts/test-release-lib.sh`, et le bloc « Tranche A » de `scripts/check-docs.sh`, inséré juste avant la ligne finale `[ $errors = 0 ] || …` :
 
 La partie test du diff ci-dessous (fichier `scripts/test-release-lib.sh`), et :
 
@@ -2447,7 +2448,7 @@ for f in README.md README.fr.md docs/en/install.md docs/fr/installation.md; do
 done
 ```
 
-- [ ] **Step 2: Les voir échouer**
+- [x] **Step 2: Les voir échouer**
 
 Run: `scripts/test-release-lib.sh 2>&1 | grep -E 'ÉCHEC|échec'`
 Expected (vérifié à la rédaction) : `ÉCHEC : hk_check_startup_logs absente de scripts/release-lib.sh`, `ÉCHEC : garde cgroup : refus pour une autre raison : … hk_check_startup_logs: command not found`, `ÉCHEC : garde cgroup (détail procfs) : refus pour une autre raison : …`, `ÉCHEC : garde cgroup : avertissement TLS seul refusé`, `4 échec(s)`.
@@ -2455,7 +2456,7 @@ Expected (vérifié à la rédaction) : `ÉCHEC : hk_check_startup_logs absente 
 Run: `scripts/check-docs.sh | tail -n 1` (après la fusion de la tâche 5)
 Expected: `DOCS OK` d'emblée (la doc de la tâche 5 est déjà alignée) ; le bloc mord, vérifié à la rédaction par mutation de `.goreleaser.yaml` : image renommée → `ERREUR : .goreleaser.yaml : image « ghcr.io/levy-cmd/hublot »…` ; étiquette `latest` ajoutée → `ERREUR : .goreleaser.yaml : étiquette latest (Q43)`.
 
-- [ ] **Step 3: Écrire le code** — la garde devient une fonction (diff complet, tests compris ; s'applique sur `phase/lancement` après la tâche 6 : `git apply --check` vérifié à la rédaction) :
+- [x] **Step 3: Écrire le code** — la garde devient une fonction (diff complet, tests compris ; s'applique sur `phase/lancement` après la tâche 6 : `git apply --check` vérifié à la rédaction) :
 
 ```diff
 diff --git a/scripts/check-image.sh b/scripts/check-image.sh
@@ -2547,14 +2548,14 @@ Le job `docs` de `.github/workflows/ci.yml`, à la fin de `jobs:` (contrat T5/T6
       - run: bash scripts/test-release-lib.sh
 ```
 
-- [ ] **Step 4: Les voir passer**
+- [x] **Step 4: Les voir passer**
 
 Run: `scripts/test-release-lib.sh | tail -n 4 && scripts/check-docs.sh | tail -n 1 && go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 2>&1 | tail -n 3`
 Expected: `ok garde cgroup : …`, `ok garde cgroup (détail procfs)`, `ok garde cgroup : avertissement TLS seul accepté`, `RELEASE-LIB OK`, `DOCS OK`, rien pour `actionlint`. Mutation (vérifiée à la rédaction, puis annulée) : la garde réduite au seul motif `private cgroup namespace` → `ÉCHEC : garde cgroup : détail procfs accepté`.
 
-- [ ] **Step 5: La doc Docker** — relire les sections possédées (EN et FR) contre `.goreleaser.yaml`, l'image locale de la tâche 4 et le code : image et étiquette, options, messages exacts (`Access token (shown only once): …`, `WARNING: listening on … without TLS`), mise à jour sur le même volume. Corriger s'il le faut (mêmes blocs de code en FR et EN) ; `scripts/check-docs.sh | tail -n 1` → `DOCS OK`.
+- [x] **Step 5: La doc Docker** — relire les sections possédées (EN et FR) contre `.goreleaser.yaml`, l'image locale de la tâche 4 et le code : image et étiquette, options, messages exacts (`Access token (shown only once): …`, `WARNING: listening on … without TLS`), mise à jour sur le même volume. Corriger s'il le faut (mêmes blocs de code en FR et EN) ; `scripts/check-docs.sh | tail -n 1` → `DOCS OK`.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add scripts/release-lib.sh scripts/check-image.sh scripts/test-release-lib.sh scripts/check-docs.sh .github/workflows/ci.yml
@@ -2566,7 +2567,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
 EOF
 ```
 
-- [ ] **Step 7: Pousser, puis la CI de CE commit** — le job `docs` et `release-snapshot` doivent tourner sur le commit de l'étape 6 :
+- [x] **Step 7: Pousser, puis la CI de CE commit** — le job `docs` et `release-snapshot` doivent tourner sur le commit de l'étape 6 :
 
 ```bash
 git push
@@ -2583,7 +2584,7 @@ gh run watch "$run" --exit-status 2>&1 | tail -n 12
 
 Expected: `docs` et `release-snapshot` verts. Dans le journal de `release-snapshot` (`gh run view "$run" --log | grep -E 'IMAGE OK|ok hk-check|ok édition|ok envoi|mise à jour|-amd64|-arm64'`) : l'étape « Étiquettes des images du snapshot » (`…:<V>-amd64`, `…:<V>-arm64`), puis pour l'image amd64 lancée par la commande de §8 : les cinq `ok hk-check-…`, `ok édition (PUT fs/file)`, `ok envoi (POST fs/upload)`, `ok mise à jour …`, `IMAGE OK : ghcr.io/levy-cmd/hublot-kit:<V>-amd64`.
 
-- [ ] **Step 8: L'image arm64 de la CI, sur les deux VM** — artefact du run de l'étape 7 (même commit, `--commit`) :
+- [x] **Step 8: L'image arm64 de la CI, sur les deux VM** — artefact du run de l'étape 7 (même commit, `--commit`) :
 
 ```bash
 run=$(gh run list --workflow ci.yml --branch phase/lancement --commit "$(git rev-parse HEAD)" --status success --limit 1 --json databaseId --jq '.[0].databaseId')
@@ -2606,7 +2607,7 @@ rm -rf "$snap"
 
 Expected, sur chaque VM : `ok édition (PUT fs/file)`, `ok envoi (POST fs/upload)`, `ok mise à jour …`, `IMAGE OK : ghcr.io/levy-cmd/hublot-kit:<V>-arm64` ; `0` refus AppArmor ; `<no matches>` ; Fedora en `Enforcing`. Noter noyau, version de Docker et API de chaque VM, commit et run, au registre (`.claude/handoff/phase-lancement.registre.md`), avec les verdicts de revue. **Un correctif** (doc, script, VM en échec) : nouveau commit, puis de nouveau les étapes 7 et 8 sur ce commit ; la CI et les VM portent toujours sur le dernier commit.
 
-- [ ] **Step 9: Relecture (CLAUDE.md, « Orchestration »)** — `relecteur` puis Codex (`codex:codex-rescue`, lecture seule), concordants ou arbitrés au registre. Points : CI et VM portent sur le dernier commit ; la garde refuse aussi le détail procfs et ne laisse jamais passer le jeton ; le bloc A de `check-docs.sh` lit bien `.goreleaser.yaml` (pas une copie) ; la commande de la doc reste celle de §8 ; résultats VM complets. La tranche B attend les deux avis et la fusion de A.
+- [x] **Step 9: Relecture (CLAUDE.md, « Orchestration »)** — `relecteur` puis Codex (`codex:codex-rescue`, lecture seule), concordants ou arbitrés au registre. Points : CI et VM portent sur le dernier commit ; la garde refuse aussi le détail procfs et ne laisse jamais passer le jeton ; le bloc A de `check-docs.sh` lit bien `.goreleaser.yaml` (pas une copie) ; la commande de la doc reste celle de §8 ; résultats VM complets. La tranche B attend les deux avis et la fusion de A.
 
 ---
 
@@ -2624,7 +2625,7 @@ Expected, sur chaque VM : `ok édition (PUT fs/file)`, `ok envoi (POST fs/upload
 - Consumes: tâche 6 (archives dans l'artefact `release-snapshot`, contenu vérifié par `check-dist.sh`), tâche 3 (`check-systemd.sh ARCHIVE VERSION`, version obligatoire), tranche A (bloc A de `check-docs.sh`, variable `gr`).
 - Produces: le bloc « Tranche B » de `check-docs.sh` ; la preuve VM que l'archive de la CI s'installe comme la doc le dit.
 
-- [ ] **Step 1: Écrire le test** — le bloc « Tranche B » de `scripts/check-docs.sh`, après le bloc A :
+- [x] **Step 1: Écrire le test** — le bloc « Tranche B » de `scripts/check-docs.sh`, après le bloc A :
 
 ```bash
 # Tranche B (plan Lancement) : l'archive et l'unité que cite la doc sont
@@ -2645,14 +2646,14 @@ for f in docs/en/install.md docs/fr/installation.md; do
 done
 ```
 
-- [ ] **Step 2: Le voir passer, puis mordre**
+- [x] **Step 2: Le voir passer, puis mordre**
 
 Run: `scripts/check-docs.sh | tail -n 1`
 Expected: `DOCS OK` (doc de la tâche 5 déjà alignée). Mutations de `.goreleaser.yaml` (vérifiées à la rédaction, puis annulées) : `name_template` en tirets → `ERREUR : .goreleaser.yaml : archives « {{ .ProjectName }}-{{ .Version }}-… »…` ; `strip_parent: false` → `ERREUR : .goreleaser.yaml : l'unité hublot-kit.service n'est pas à la racine de l'archive`.
 
-- [ ] **Step 3: La doc systemd** — relire les sections possédées (EN et FR) contre `check-systemd.sh`, l'unité et les résultats VM de la tâche 3 : `install`, unité, `sudo /usr/local/bin/hublot reset-token` avant le premier démarrage, `enable --now`, réglages par `systemctl edit`, SELinux (`restorecon`). Corriger s'il le faut ; `scripts/check-docs.sh | tail -n 1` → `DOCS OK`.
+- [x] **Step 3: La doc systemd** — relire les sections possédées (EN et FR) contre `check-systemd.sh`, l'unité et les résultats VM de la tâche 3 : `install`, unité, `sudo /usr/local/bin/hublot reset-token` avant le premier démarrage, `enable --now`, réglages par `systemctl edit`, SELinux (`restorecon`). Corriger s'il le faut ; `scripts/check-docs.sh | tail -n 1` → `DOCS OK`.
 
-- [ ] **Step 4: Commit, pousser, puis la CI de CE commit**
+- [x] **Step 4: Commit, pousser, puis la CI de CE commit**
 
 ```bash
 git add scripts/check-docs.sh docs/en/install.md docs/fr/installation.md
@@ -2678,7 +2679,7 @@ gh run watch "$run" --exit-status 2>&1 | tail -n 12
 
 Expected: `docs` et `release-snapshot` verts (`check-dist.sh` : `ok hublot-kit_<V>_linux_amd64.tar.gz`, `…_arm64…`, `DIST OK : <V>`).
 
-- [ ] **Step 5: L'archive arm64 de la CI, sur les deux VM** — artefact du run de l'étape 4 (même commit), sommes contrôlées, Fedora en `Enforcing` exigé :
+- [x] **Step 5: L'archive arm64 de la CI, sur les deux VM** — artefact du run de l'étape 4 (même commit), sommes contrôlées, Fedora en `Enforcing` exigé :
 
 ```bash
 run=$(gh run list --workflow ci.yml --branch phase/lancement --commit "$(git rev-parse HEAD)" --status success --limit 1 --json databaseId --jq '.[0].databaseId')
@@ -2704,7 +2705,7 @@ Expected: `hk-fedora : Enforcing` ; sur chaque VM : `hublot-kit_<V>_linux_arm64.
 
 Au registre : commit, run, résultats des deux VM, contexte SELinux, verdicts de revue. **Un correctif** : nouveau commit, puis de nouveau les étapes 4 et 5 sur ce commit.
 
-- [ ] **Step 6: Relecture (CLAUDE.md, « Orchestration »)** — `relecteur` puis Codex (lecture seule). Points : l'archive testée est celle du dernier commit, CI comprise (filtre `--commit`, sommes) ; le bloc B lit `.goreleaser.yaml` ; commandes de la doc identiques à celles de `check-systemd.sh`. La tranche C attend les deux avis.
+- [x] **Step 6: Relecture (CLAUDE.md, « Orchestration »)** — `relecteur` puis Codex (lecture seule). Points : l'archive testée est celle du dernier commit, CI comprise (filtre `--commit`, sommes) ; le bloc B lit `.goreleaser.yaml` ; commandes de la doc identiques à celles de `check-systemd.sh`. La tranche C attend les deux avis.
 
 ---
 
@@ -2728,7 +2729,7 @@ Au registre : commit, run, résultats des deux VM, contexte SELinux, verdicts de
 
 > **À comprendre :** quatre jobs. `guard` (aucun droit) refuse tout lancement qui n'est pas le tag confirmé par le propriétaire : c'est le verrou technique (Q54 : un environnement avec relecteur n'est pas disponible sur ce dépôt privé). `web` (lecture seule) lance `make web`, donc `npm ci` et le build de l'interface, et passe `internal/web/dist` en artefact : **aucun code npm ne tourne dans le job qui signe et pousse** (d'où la fin du hook `before` de GoReleaser). Le job `release` a seul les droits d'écrire (`contents`, `packages`) et de signer (`id-token`) ; il récupère l'interface, sans Node ; aucun cache n'y entre (un cache empoisonné par une PR signerait un binaire piégé) ; les actions tierces sont épinglées par empreinte. Le job `verify` tourne sur une machine neuve et relit ce qui a été publié, comme le ferait un utilisateur. Lire une release **brouillon** demande le droit d'écriture sur le dépôt, d'où `contents: write` dans `verify`.
 
-- [ ] **Step 1: Écrire les tests** — le bloc « Tranche C » de `scripts/check-docs.sh` (après le bloc B), puis le script de vérification.
+- [x] **Step 1: Écrire les tests** — le bloc « Tranche C » de `scripts/check-docs.sh` (après le bloc B), puis le script de vérification.
 
 ```bash
 # Tranche C (plan Lancement) : les commandes de vérification de la doc
@@ -2824,12 +2825,12 @@ done
 echo "RELEASE OK : $tag"
 ```
 
-- [ ] **Step 2: Les voir échouer** — juste après le bloc C, **avant** d'écrire `verify-release.sh` : `scripts/check-docs.sh 2>&1 | grep ERREUR` → `ERREUR : .github/workflows/release.yml absent` et `ERREUR : scripts/verify-release.sh : identité différente de celle de la doc` (le script n'existe pas encore ; `grep` dit aussi `No such file or directory`). Une fois `verify-release.sh` écrit, la seconde erreur disparaît ; la première reste jusqu'à l'étape 3. Et aucune release n'existe :
+- [x] **Step 2: Les voir échouer** — juste après le bloc C, **avant** d'écrire `verify-release.sh` : `scripts/check-docs.sh 2>&1 | grep ERREUR` → `ERREUR : .github/workflows/release.yml absent` et `ERREUR : scripts/verify-release.sh : identité différente de celle de la doc` (le script n'existe pas encore ; `grep` dit aussi `No such file or directory`). Une fois `verify-release.sh` écrit, la seconde erreur disparaît ; la première reste jusqu'à l'étape 3. Et aucune release n'existe :
 
 Run: `chmod +x scripts/verify-release.sh && bash -n scripts/verify-release.sh && { scripts/verify-release.sh v0.0.0-absent 2>&1 | tail -n 2; }; scripts/verify-release.sh v0.0.0-absent >/dev/null 2>&1 || echo "échec attendu"`
 Expected: `release not found`, puis `échec attendu`.
 
-- [ ] **Step 3: Écrire le workflow** — `.github/workflows/release.yml` :
+- [x] **Step 3: Écrire le workflow** — `.github/workflows/release.yml` :
 
 ```yaml
 name: Release
@@ -2974,7 +2975,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
 ```
 
-- [ ] **Step 4: Le contrôler**
+- [x] **Step 4: Le contrôler**
 
 Run: `go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12 2>&1 | tail -n 5`
 Expected: aucune sortie (vérifié à la rédaction).
@@ -3000,12 +3001,12 @@ g tag v0.1 v0.1 levy-cmd levy-cmd
 
 Expected (vérifié à la rédaction) : `accepte` pour la première ligne seulement ; `refuse` pour la confirmation fausse, la branche, la relance par un autre compte (`triggering_actor`), un autre auteur, et un tag `v0.1`.
 
-- [ ] **Step 5: La doc de vérification** — relire « Verify the release » / « Vérifier la release » (EN et FR) contre `verify-release.sh` et `release.yml` : commandes `cosign verify-blob` et `cosign verify`, identité (`release.yml@refs/tags/v$V`, expression régulière pour `:0.1`), émetteur, ce que `checksums.txt` liste (archives et SBOM, pas les bundles), ce que la signature couvre et ne couvre pas (en-tête de `verify-release.sh`). Corriger s'il le faut.
+- [x] **Step 5: La doc de vérification** — relire « Verify the release » / « Vérifier la release » (EN et FR) contre `verify-release.sh` et `release.yml` : commandes `cosign verify-blob` et `cosign verify`, identité (`release.yml@refs/tags/v$V`, expression régulière pour `:0.1`), émetteur, ce que `checksums.txt` liste (archives et SBOM, pas les bundles), ce que la signature couvre et ne couvre pas (en-tête de `verify-release.sh`). Corriger s'il le faut.
 
 Run: `scripts/check-docs.sh | tail -n 1`
 Expected: `DOCS OK`. Mutation (vérifiée à la rédaction, puis annulée) : identité de `verify-release.sh` en `refs/heads/` → `ERREUR : scripts/verify-release.sh : identité différente de celle de la doc`.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add scripts/verify-release.sh .github/workflows/release.yml scripts/check-docs.sh docs/en/install.md docs/fr/installation.md
@@ -3019,7 +3020,7 @@ git push && gh pr checks --watch 2>&1 | tail -n 12
 
 Expected: tous les jobs verts (`release.yml` ne tourne pas sur une PR).
 
-- [ ] **Step 7: Relecture (CLAUDE.md, « Orchestration »)** — `relecteur` puis Codex (lecture seule). Points : le garde (ref, confirmation, auteur) avant tout job qui a des droits ; aucun code npm dans le job qui signe ; permissions minimales par job ; `persist-credentials: false` ; pas de cache ; épinglage ; identité et émetteur de `verify-release.sh` identiques à ceux de la doc ; le brouillon ; `concurrency` sans annulation ; ce qui se passe si `verify` échoue (la release reste brouillon, l'image privée reste poussée). Corrections en commits séparés ; la tâche 8 (spec et audit) attend les deux avis.
+- [x] **Step 7: Relecture (CLAUDE.md, « Orchestration »)** — `relecteur` puis Codex (lecture seule). Points : le garde (ref, confirmation, auteur) avant tout job qui a des droits ; aucun code npm dans le job qui signe ; permissions minimales par job ; `persist-credentials: false` ; pas de cache ; épinglage ; identité et émetteur de `verify-release.sh` identiques à ceux de la doc ; le brouillon ; `concurrency` sans annulation ; ce qui se passe si `verify` échoue (la release reste brouillon, l'image privée reste poussée). Corrections en commits séparés ; la tâche 8 (spec et audit) attend les deux avis.
 
 ---
 
@@ -3032,7 +3033,7 @@ Expected: tous les jobs verts (`release.yml` ne tourne pas sur une PR).
 **Files:**
 - Modify: `docs/superpowers/specs/2026-10-07-hublot-kit-v0.1-design.md` (§8, §10, §13), `docs/superpowers/plans/2026-10-13-lancement.md` (cases cochées, constats)
 
-- [ ] **Step 1: Reporter dans la spec** — remplacer chaque passage par le suivant (chacun est unique dans la spec ; vérifier par `grep -c`).
+- [x] **Step 1: Reporter dans la spec** — remplacer chaque passage par le suivant (chacun est unique dans la spec ; vérifier par `grep -c`).
 
 1. §8, alternative — remplacer :
 
@@ -3087,7 +3088,7 @@ Expected: tous les jobs verts (`release.yml` ne tourne pas sur une PR).
 Run: `scripts/check-docs.sh | tail -n 1 && grep -c 'service systemd non testé' docs/superpowers/specs/2026-10-07-hublot-kit-v0.1-design.md`
 Expected: `DOCS OK` (la commande de §8 n'a pas bougé), puis `1` (il ne reste que le résultat historique du spike, §11).
 
-- [ ] **Step 2: Audit avant publication** (Q47) — rien n'est modifié ici ; les constats vont à l'utilisateur.
+- [x] **Step 2: Audit avant publication** (Q47) — rien n'est modifié ici ; les constats vont à l'utilisateur.
 
 ```bash
 limactl shell --workdir "$PWD" hk-ubuntu -- sudo docker run --rm \
@@ -3103,7 +3104,7 @@ Expected: `no leaks found` (sinon, lister chaque fuite à l'utilisateur, sans ri
 
 - [ ] **Step 3: Revue de branche** — demander la revue complète de `phase/lancement` (sous-agent indépendant + Codex) contre ce plan et la spec ; corriger ; cocher les cases ; noter sous « Constats de la tâche 8 » : verdicts de la revue, résultat de l'audit (les résultats VM sont au registre, tranches A et B).
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add docs/superpowers
@@ -3399,7 +3400,16 @@ gh pr create --base main --title "docs : constats du Lancement (v0.1.0)" --body 
 
 #### Constats de la tâche 8
 
-- *à remplir*
+- **Spec** (étape 1) : les quatre remplacements du plan sont faits (§8 alternative, §8 image et release, §10 CI, §13 repli) ; `grep -c 'service systemd non testé'` → `1` (§11, résultat historique du spike) ; `DOCS OK`. En plus, pour décrire tout ce que livre le Lancement (registre) : §1 (dépôt `levy-cmd/Hublot-Kit`, casse exacte, et module Go), §2 (hors v0.1 : `.deb`/`.rpm`, `latest`, provenance SLSA), §3 (quatre décisions : langue de l'agent, distribution, chaîne d'approvisionnement, publication), §4 (fichiers de packaging et scripts de release), §6 (`X-Accel-Buffering: no` du flux de logs), §7 (aucune connexion sortante ; ancien jeton accepté jusqu'au redémarrage ; `Cache-Control: no-store` sur `/api/`), §8 (détail de `check-systemd.sh` et `check-image.sh`, drop-in `ReadWritePaths` du dossier de données déplacé, mise à jour, « Vérifier une release », règles du dossier de données, ce qui n'est éprouvé qu'à la rc), §12 (contenu du Lancement, avancement au 2026-10-15), §13 (quatre risques de release : verrou de lancement, dépendance npm embarquée, release défectueuse et image déjà sur GHCR, entrées Rekor publiques).
+- **Spec contre doc publique** (EN et FR, mêmes blocs et mêmes titres d'après `check-docs.sh`) : aucune contradiction trouvée. Les écarts étaient des manques de la spec, que la doc disait déjà : les ajouts de §6, §7 et §8 ci-dessus (connexions sortantes, ancien jeton, en-têtes, dossier de données, mise à jour). La doc FR suit la doc EN point par point (limites relues en entier).
+- **`check-docs.sh`** (Minor reporté de la tranche B) : le drop-in qui déplace `HUBLOT_DATA_DIR` doit porter `ReadWritePaths=` sur le même dossier, dans le même bloc `ini`, et la doc doit créer ce dossier avant (`sudo install -d -m 0700 <dossier>`) ; l'unité doit garder `ProtectSystem=strict`. Six mutations jouées sur une copie hors du dépôt (EN et FR), toutes attrapées : `ReadWritePaths` retiré, sur un autre dossier, déplacé dans un autre bloc `ini` ; création du dossier retirée ; drop-in du dossier retiré ; `ProtectSystem=strict` retiré de l'unité. Vert sous bash 3.2 (macOS).
+- **Audit** (étape 2) :
+  - `gitleaks` v8.30.1 (conteneur sur `hk-ubuntu`, dépôt monté en lecture seule, image supprimée ensuite) sur tout l'historique (`--all`, branches distantes comprises) : **238 commits analysés, `no leaks found`**, rapport JSON vide (`[]`). Les 240 commits hors fusions moins 2 qui ne font que supprimer (`dd5e116`, `9521bd3`) ; gitleaks ne lit que les lignes ajoutées.
+  - Auteurs et adresses : `Livaille An-nour <51993811+levy-cmd@users.noreply.github.com>` (adresse « noreply » de GitHub, aucune adresse personnelle) et `GitHub <noreply@github.com>` (fusions faites dans l'interface web). Le nom `levy` figure aussi dans `.claude/handoff/spike-semaine-1.md` (`de: levy`).
+  - Aucun PDF ni `.superpowers` dans l'historique ; aucun chemin `/Users/…`, `/private/…` ni adresse IP réelle (seulement des adresses d'exemple dans les tests).
+  - Deviendraient publics, à trancher par l'utilisateur avant la tâche 10, étape 5 : `CLAUDE.md`, `.claude/agents/*` et `.claude/handoff/*` (cinq fichiers suivis, plus trois passations supprimées mais présentes dans l'historique) : orchestration par agents (Claude, Codex), revues, défauts trouvés puis corrigés, refus du classifieur de permissions ; le lien `claude.ai` du cahier des charges (spec, ligne 5 : privé, inaccessible au public, mais visible) ; des détails de la machine de développement (`/opt/homebrew/bin`, `$HOME/.docker/run/docker.sock`, disque du Mac à 91 %, noms et versions des VM `hk-ubuntu` et `hk-fedora`, `~/.lima/hk-ubuntu/lima.yaml`) ; l'état du compte GitHub dans le plan (compte `User`, offre Free, dépôt privé) ; toutes les branches poussées (dont `phase/observation-t7-wip`) et les PR, dont la PR brouillon #6.
+- **Revue de branche** (étape 3) et relecture (étape 5) : à faire par la session principale (`relecteur` puis Codex).
+- **Cases cochées** : avant la tâche 1, tâches 1 à 6, tranches A à C (validées au registre), et les étapes 1, 2 et 4 de cette tâche. La mutation « retirer `--cgroupns=host` » de la tâche 4 n'a pas été jouée (refusée par le classifieur de permissions) : le test de la garde cgroup de la tranche A la remplace (registre).
 
 #### Constats de la tâche 9
 
