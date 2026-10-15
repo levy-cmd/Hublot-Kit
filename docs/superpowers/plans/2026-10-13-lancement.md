@@ -808,7 +808,7 @@ EOF
 
 **Interfaces:**
 - Consumes: `hublot reset-token` (écrit `New access token (shown only once): <jeton>`, tâche 2), `POST /api/login` (`{"token"}`, `Origin` exigé, `401` si refusé), `GET /api/meta`, `GET /api/containers/{nom}/fs?path=`, `GET /api/containers/{nom}/fs/file?path=`.
-- Produces: `scripts/release-lib.sh` (à sourcer) : `HK_TARGETS`, `HK_BASE`, `hk_fail MESSAGE`, `hk_spec_command` (la commande de §8), `hk_start_targets`, `hk_remove_targets`, `hk_wait_login`, `hk_login JETON COOKIES`, `hk_check_meta COOKIES [VERSION]`, `hk_check_targets COOKIES` — utilisés par `check-image.sh` (tâche 4) et `check-docs.sh` (tâche 5). `scripts/check-systemd.sh ARCHIVE [VERSION]`, lancé en root, utilisé par les tâches 8 et 9. L'unité `hublot-kit.service`, que l'archive de la tâche 6 embarque à sa racine.
+- Produces: `scripts/release-lib.sh` (à sourcer) : `HK_TARGETS`, `HK_BASE`, `hk_fail MESSAGE`, `hk_spec_command` (la commande de §8), `hk_start_targets`, `hk_remove_targets`, `hk_wait_login`, `hk_login JETON COOKIES`, `hk_check_meta COOKIES [VERSION]`, `hk_check_targets COOKIES` — utilisés par `check-image.sh` (tâche 4) et `check-docs.sh` (tâche 5). `scripts/check-systemd.sh ARCHIVE VERSION` (version obligatoire), lancé en root, utilisé par les tâches 8 et 9. L'unité `hublot-kit.service`, que l'archive de la tâche 6 embarque à sa racine.
 
 > **À comprendre :** l'unité lance le binaire en root, comme le dit §8 : il lit `/proc/<pid>/root` des conteneurs et parle au socket. Les directives de durcissement ne servent qu'à limiter les erreurs ; toute directive qui cache `/proc` des autres process ou retire des capacités casserait l'explorateur (Q41). Le script installe exactement comme la doc de la tâche 5 (`install`, unité, `reset-token` **avant** le premier démarrage, `enable --now`), puis désinstalle tout, même en cas d'échec ; il refuse de toucher une machine où Hublot-Kit est déjà installé. Il **écrit** aussi (`hk_check_writes` : une édition `PUT fs/file` avec `If-Match`, puis un envoi `POST fs/upload` avec `If-None-Match: *`, relus par `docker exec`) : c'est sous `ProtectSystem=strict`, `NoNewPrivileges` et, sur Fedora, `unconfined_service_t` que l'écriture doit passer. Le sous-agent de revue l'a fait à la main sur `hk-ubuntu`, avec succès ; Fedora reste à éprouver. Le journal est lu une fois, depuis le démarrage du test, puis cherché (sous `pipefail`, `journalctl | grep -q` peut finir en SIGPIPE et masquer une fuite).
 
@@ -2621,7 +2621,7 @@ Expected, sur chaque VM : `ok édition (PUT fs/file)`, `ok envoi (POST fs/upload
 **Fichiers lus (chez d'autres) :** `.goreleaser.yaml` hors `archives` (`project_name`, `checksum`), `README.md`, `README.fr.md`, `LICENSE` (contenus dans l'archive ; tranche A, tâche 5), `scripts/release-lib.sh` et le bloc A de `check-docs.sh` (tranche A), l'artefact CI `release-snapshot`.
 
 **Interfaces:**
-- Consumes: tâche 6 (archives dans l'artefact `release-snapshot`, contenu vérifié par `check-dist.sh`), tâche 3 (`check-systemd.sh ARCHIVE [VERSION]`), tranche A (bloc A de `check-docs.sh`, variable `gr`).
+- Consumes: tâche 6 (archives dans l'artefact `release-snapshot`, contenu vérifié par `check-dist.sh`), tâche 3 (`check-systemd.sh ARCHIVE VERSION`, version obligatoire), tranche A (bloc A de `check-docs.sh`, variable `gr`).
 - Produces: le bloc « Tranche B » de `check-docs.sh` ; la preuve VM que l'archive de la CI s'installe comme la doc le dit.
 
 - [ ] **Step 1: Écrire le test** — le bloc « Tranche B » de `scripts/check-docs.sh`, après le bloc A :
