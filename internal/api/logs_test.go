@@ -785,6 +785,17 @@ func TestLogsResumeLongLine(t *testing.T) {
 	}
 }
 
+// A line Docker gave without a timestamp, after a resumption: never taken
+// for the end of a long line whose start was dropped.
+func TestLogsResumeNoTimestamp(t *testing.T) {
+	f, c := logsFixture(t)
+	f.docker.LogStreams[webID] = muxAll(mux(1, lts2+" a\n"), mux(1, "sans horodatage\n"))
+	events := openSSE(t, f, "/api/containers/web/logs", c, map[string]string{"Last-Event-ID": lts2 + "/stdout/0"}).all(t)
+	if len(events) != 2 || events[0].ID != "" || lineOf(t, events[0]).Line != "sans horodatage" || lineOf(t, events[0]).Truncated {
+		t.Fatalf("%+v", events)
+	}
+}
+
 // A silent stream gets a comment line now and then: proxies keep it open,
 // and a gone client is noticed.
 func TestLogsHeartbeat(t *testing.T) {

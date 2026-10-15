@@ -73,7 +73,10 @@ The technical spec ([§13, in French](../superpowers/specs/2026-10-07-hublot-kit
 - A client gone without closing its connection (sleep, network change) keeps its stream open on the agent side for
   about 15 minutes, and holds one of the 8 slots until then, unless a newer stream takes it.
 - Resuming after a cut can replay a few lines that share a timestamp, count dropped lines twice, or skip lines after
-  a log rotation or a clock going backwards.
+  a log rotation or a clock going backwards (or mark them as cut, when the clock goes back more than a second).
+- A line longer than 16 KiB that was still being written when the stream was cut, and begun more than a second before
+  the cut, comes back without its start: the live view loses that start, but marks the line as cut instead of showing
+  it as complete. The download has the whole line.
 - A logging driver Docker cannot read back (`none`, `syslog`…) gives `logs_unavailable`.
 
 ## Secret masking
