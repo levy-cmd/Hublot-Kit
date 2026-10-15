@@ -3196,7 +3196,7 @@ gh workflow run release.yml --ref v0.1.0-rc.1 -f confirm=v0.1.0-rc.1
 sleep 10; gh run watch "$(gh run list --workflow release.yml --event workflow_dispatch --branch v0.1.0-rc.1 --limit 1 --json databaseId --jq '.[0].databaseId')" --exit-status 2>&1 | tail -n 15
 ```
 
-Expected: `guard`, `web`, `release` puis `verify` verts ; le journal de `verify` finit par `RELEASE OK : v0.1.0-rc.1`. En cas d'échec : `gh run view --log-failed | tail -n 60`, corriger sur la branche (commit `correctif : …`, relecture), puis ARRÊT pour `v0.1.0-rc.2` (étapes 1 à 3 à nouveau).
+Expected: `guard`, `web`, `release` puis `verify` verts ; le journal de `verify` finit par `RELEASE OK : v0.1.0-rc.1`. En cas d'échec : `gh run view --log-failed | tail -n 60`, corriger sur la branche (commit `correctif : …`, relecture), puis ARRÊT pour `v0.1.0-rc.2` (étapes 1 à 3 à nouveau). Si `verify` échoue alors que le paquet GHCR est déjà public (toute release lancée après la tâche 10, étape 7), l'image de la version refusée est tirable par tous : **ARRÊT : accord de l'utilisateur requis — supprimer cette version de GHCR** (suppression définitive ; interface web du paquet, ou `gh api -X DELETE /user/packages/container/hublot-kit/versions/<id>` avec le droit `delete:packages`), puis vérifier que `docker buildx imagetools inspect ghcr.io/levy-cmd/hublot-kit:<V>` échoue. Le brouillon de release, lui, reste privé.
 
 - [ ] **Step 4: Contrôler ce qui a été créé** — le droit `read:packages` manque d'ordinaire au jeton de `gh` : `gh auth refresh -h github.com -s read:packages` (l'utilisateur valide dans son navigateur).
 

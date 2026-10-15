@@ -13,6 +13,9 @@
 # release de ce dépôt, lancé sur ce tag, et n'ont pas changé depuis.
 # Ce qu'elles ne couvrent pas : la relecture du code du tag ; l'exactitude et
 # l'exhaustivité des SBOM (ce que syft et BuildKit ont trouvé dans le binaire) ;
+# le contenu de l'interface, construite par `npm ci` à partir de
+# web/package-lock.json et embarquée dans le binaire signé (le job web à part
+# protège les jetons de signature, pas ce que npm produit) ;
 # le texte de la page de release ; les bundles .sigstore.json eux-mêmes (absents
 # de checksums.txt : chacun porte son certificat, vérifié par cosign) ; aucune
 # provenance SLSA n'est publiée en v0.1.

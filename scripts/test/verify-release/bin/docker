@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# Faux docker : `docker buildx imagetools inspect --raw REF` et
+# `docker buildx imagetools inspect REF --format '{{ json .SBOM }}'`,
+# servis depuis $FAKE/images/ÉTIQUETTE/{raw,sbom}.json.
+set -euo pipefail
+[ "$1 $2 $3" = "buildx imagetools inspect" ] || { echo "faux docker : appel inattendu : $*" >&2; exit 2; }
+shift 3
+raw=0 fmt='' ref=''
+while [ $# -gt 0 ]; do
+  case $1 in
+    --raw) raw=1; shift ;;
+    --format) fmt=$2; shift 2 ;;
+    -*) echo "faux docker : option inattendue $1" >&2; exit 2 ;;
+    *) ref=$1; shift ;;
+  esac
+done
+t=${ref##*:}
+d=$FAKE/images/$t
+[ -d "$d" ] || { echo "ERROR: $ref: not found" >&2; exit 1; }
+if [ $raw = 1 ]; then cat "$d/raw.json"
+elif [ "$fmt" = '{{ json .SBOM }}' ]; then cat "$d/sbom.json"
+else echo "faux docker : format inattendu $fmt" >&2; exit 2
+fi

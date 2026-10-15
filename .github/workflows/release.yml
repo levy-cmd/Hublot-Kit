@@ -30,8 +30,10 @@ jobs:
     runs-on: ubuntu-latest
     permissions: {}
     steps:
-      # Une relance (« Re-run failed jobs ») par un autre compte garde l'auteur
-      # d'origine dans github.actor : triggering_actor est vérifié aussi.
+      # github.actor reste l'auteur du premier lancement, même après une relance ;
+      # triggering_actor est celui qui lance ou relance. guard ne tourne qu'au
+      # lancement et sur « Re-run all jobs » : « Re-run failed jobs » saute un
+      # guard déjà réussi, d'où l'étape « Relance » en tête de release et verify.
       - name: La ref est le tag confirmé, lancé par le propriétaire
         env:
           REF_TYPE: ${{ github.ref_type }}
@@ -46,7 +48,7 @@ jobs:
           # =~ de bash compare toute la chaîne (grep, lui, accepterait une ligne sur plusieurs).
           [[ "$REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-rc\.[0-9]+)?$ ]] || { echo "tag inattendu : $REF_NAME" >&2; exit 1; }
           [ "$ACTOR" = "$OWNER" ] || { echo "lancé par $ACTOR, pas par $OWNER" >&2; exit 1; }
-          [ "$TRIGGER" = "$OWNER" ] || { echo "relancé par $TRIGGER, pas par $OWNER" >&2; exit 1; }
+          [ "$TRIGGER" = "$OWNER" ] || { echo "lancé ou relancé par $TRIGGER, pas par $OWNER" >&2; exit 1; }
 
   # npm ne tourne jamais là où l'on signe et pousse.
   web:
@@ -77,6 +79,13 @@ jobs:
       packages: write # pousser l'image sur ghcr.io/levy-cmd/hublot-kit
       id-token: write # cosign keyless : jeton OIDC de GitHub Actions
     steps:
+      # Première étape de tout job qui a des droits : « Re-run failed jobs »
+      # relance ce job sans repasser par guard. Le relanceur est dans
+      # GITHUB_TRIGGERING_ACTOR (variables du runner, pas de gabarit ${{ }}).
+      - name: Relance par le propriétaire seulement, sur un tag
+        run: |
+          [ "$GITHUB_TRIGGERING_ACTOR" = "$GITHUB_REPOSITORY_OWNER" ] || { echo "lancé ou relancé par $GITHUB_TRIGGERING_ACTOR, pas par $GITHUB_REPOSITORY_OWNER" >&2; exit 1; }
+          [ "$GITHUB_REF_TYPE" = tag ] || { echo "à lancer sur un tag, pas sur $GITHUB_REF_TYPE" >&2; exit 1; }
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
@@ -116,9 +125,16 @@ jobs:
     needs: release
     runs-on: ubuntu-latest
     permissions:
-      contents: write # lire une release encore en brouillon (réservé aux droits d'écriture)
+      contents: write # exigé : l'API ne montre un brouillon qu'avec le droit d'écriture (gh release download)
       packages: read
     steps:
+      # Première étape de tout job qui a des droits : « Re-run failed jobs »
+      # relance ce job sans repasser par guard. Le relanceur est dans
+      # GITHUB_TRIGGERING_ACTOR (variables du runner, pas de gabarit ${{ }}).
+      - name: Relance par le propriétaire seulement, sur un tag
+        run: |
+          [ "$GITHUB_TRIGGERING_ACTOR" = "$GITHUB_REPOSITORY_OWNER" ] || { echo "lancé ou relancé par $GITHUB_TRIGGERING_ACTOR, pas par $GITHUB_REPOSITORY_OWNER" >&2; exit 1; }
+          [ "$GITHUB_REF_TYPE" = tag ] || { echo "à lancer sur un tag, pas sur $GITHUB_REF_TYPE" >&2; exit 1; }
       - uses: actions/checkout@v7
         with:
           persist-credentials: false

@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# Faux cosign. Un « bundle » est un JSON {identity, issuer, sha256} ; une
+# signature d'image, $FAKE/images/ÉTIQUETTE/sig.json {identity, issuer}.
+# Comme le vrai : identité et émetteur comparés à l'identique, empreinte du
+# fichier comparée à celle du bundle. Toute autre option est refusée.
+set -euo pipefail
+cmd=$1; shift
+bundle='' id='' iss='' target=''
+while [ $# -gt 0 ]; do
+  case $1 in
+    --bundle) bundle=$2; shift 2 ;;
+    --certificate-identity) id=$2; shift 2 ;;
+    --certificate-oidc-issuer) iss=$2; shift 2 ;;
+    -*) echo "faux cosign : option inattendue $1" >&2; exit 2 ;;
+    *) [ -z "$target" ] || { echo "faux cosign : deux cibles" >&2; exit 2; }; target=$1; shift ;;
+  esac
+done
+[ -n "$id" ] && [ -n "$iss" ] && [ -n "$target" ] || { echo "faux cosign : identité, émetteur ou cible manquant" >&2; exit 2; }
+case $cmd in
+  verify-blob)
+    [ -f "$bundle" ] || { echo "Error: open $bundle: no such file or directory" >&2; exit 1; }
+    [ -f "$target" ] || { echo "Error: open $target: no such file or directory" >&2; exit 1; }
+    want_id=$(jq -r .identity "$bundle") want_iss=$(jq -r .issuer "$bundle") want_sum=$(jq -r .sha256 "$bundle")
+    sum=$(sha256sum "$target" | cut -d' ' -f1)
+    ;;
+  verify)
+    t=${target##*:}
+    [ "${target%:*}" = ghcr.io/levy-cmd/hublot-kit ] || { echo "faux cosign : image $target" >&2; exit 2; }
+    sig=$FAKE/images/$t/sig.json
+    [ -f "$sig" ] || { echo "Error: no signatures found" >&2; exit 1; }
+    want_id=$(jq -r .identity "$sig") want_iss=$(jq -r .issuer "$sig") want_sum=x sum=x
+    ;;
+  *) echo "faux cosign : commande $cmd" >&2; exit 2 ;;
+esac
+[ "$id" = "$want_id" ] || { echo "Error: none of the expected identities matched (got $want_id)" >&2; exit 1; }
+[ "$iss" = "$want_iss" ] || { echo "Error: expected oidc issuer not found" >&2; exit 1; }
+[ "$sum" = "$want_sum" ] || { echo "Error: invalid signature when validating ASN.1 encoded signature" >&2; exit 1; }
+echo "Verified OK" >&2
+[ "$cmd" = verify-blob ] || echo '[{"critical":{"image":{"docker-manifest-digest":"sha256:0"}}}]'

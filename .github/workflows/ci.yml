@@ -284,3 +284,16 @@ jobs:
           persist-credentials: false
       - run: bash scripts/check-docs.sh
       - run: bash scripts/test-release-lib.sh
+
+  # Plan Lancement, tranche C : scripts/verify-release.sh éprouvé sur de faux
+  # jeux d'artefacts (faux gh, cosign, docker). Ni réseau, ni secret, ni Node :
+  # bash, jq et coreutils du runner.
+  verify-release-bench:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - run: bash scripts/test/verify-release/run.sh

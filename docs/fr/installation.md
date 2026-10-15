@@ -232,8 +232,11 @@ sans clé (keyless), liées au workflow de release de ce dépôt. Il faut cosign
 
 Ce que prouve une signature valide : le fichier ou l'image sort de ce workflow, lancé sur ce tag, et n'a pas changé
 depuis. Ce qu'elle ne prouve pas : que le code du tag a été relu, ni qu'un SBOM est complet (il liste ce que syft,
-pour les archives, et BuildKit, pour l'image, ont trouvé dans le binaire). Le texte de la page de release n'est pas
-signé non plus. Aucune provenance SLSA n'est publiée en v0.1.
+pour les archives, et BuildKit, pour l'image, ont trouvé dans le binaire), ni rien de l'interface web au-delà de son
+origine : elle est construite par `npm ci` à partir de `web/package-lock.json` et embarquée dans le binaire signé ; une
+dépendance npm compromise serait donc signée aussi (la construire dans un job à part tient les jetons de signature loin
+de npm, pas son résultat). Le texte de la page de release n'est pas signé non plus. Aucune provenance SLSA n'est publiée
+en v0.1.
 
 Chaque release est contrôlée par [scripts/verify-release.sh](../../scripts/verify-release.sh) avant sa publication :
 les commandes ci-dessous, avec la même identité et le même émetteur, plus le bundle propre à chaque archive, les SBOM
@@ -243,7 +246,8 @@ les commandes ci-dessous, avec la même identité et le même émetteur, plus le
 
 `checksums.txt` donne le SHA-256 des archives et de leurs SBOM SPDX (`.sbom.json`) ; sa signature les couvre. Les
 bundles `.sigstore.json` n'y figurent pas : chacun porte son propre certificat, contrôlé par `cosign verify-blob`.
-Chaque archive a aussi son propre bundle.
+La signature de `checksums.txt` suivie de la somme suffit ; chaque archive a aussi son propre bundle
+(`<archive>.sigstore.json`), contrôle direct facultatif par la même commande `cosign verify-blob`.
 
 ```sh
 V=0.1.0

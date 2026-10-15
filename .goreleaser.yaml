@@ -85,6 +85,7 @@ docker_signs:
 
 release:
   draft: true # published by hand after scripts/verify-release.sh (plan Lancement)
+  replace_existing_draft: true # a re-run replaces its own draft instead of adding a second one
   prerelease: auto
   header: |
     **Security: Hublot-Kit is root on the host in practice.** It talks to the Docker socket and reads container files. Keep it on `127.0.0.1` and reach it through an SSH tunnel or an HTTPS reverse proxy. See [docs/en/security.md](https://github.com/levy-cmd/Hublot-Kit/blob/{{ .Tag }}/docs/en/security.md).

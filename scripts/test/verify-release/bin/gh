@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# Faux gh (banc de scripts/verify-release.sh) : seulement `gh release download TAG -R REPO -D DIR`, servi depuis $FAKE/releases/TAG.
+set -euo pipefail
+[ "$1 $2" = "release download" ] || { echo "faux gh : appel inattendu : $*" >&2; exit 2; }
+tag=$3; shift 3
+repo='' dir=''
+while [ $# -gt 0 ]; do
+  case $1 in
+    -R) repo=$2; shift 2 ;;
+    -D) dir=$2; shift 2 ;;
+    *) echo "faux gh : option inattendue $1" >&2; exit 2 ;;
+  esac
+done
+[ "$repo" = levy-cmd/Hublot-Kit ] || { echo "faux gh : dépôt $repo" >&2; exit 2; }
+[ -d "$FAKE/releases/$tag" ] || { echo "release not found" >&2; exit 1; }
+mkdir -p "$dir"
+cp "$FAKE/releases/$tag"/* "$dir/"

@@ -228,8 +228,10 @@ the release workflow of this repository. You need cosign 3.0 or later.
 
 What a valid signature proves: the file or the image was produced by that workflow, run on that tag, and has not
 changed since. What it does not prove: that the code of the tag was reviewed, or that an SBOM is complete (it lists
-what syft, for the archives, and BuildKit, for the image, found in the binary). The text of the release page is not
-signed either. No SLSA provenance is published in v0.1.
+what syft, for the archives, and BuildKit, for the image, found in the binary), nor anything about the web interface
+beyond its origin: it is built by `npm ci` from `web/package-lock.json` and embedded in the signed binary, so a
+compromised npm dependency would be signed too (building it in a separate job keeps the signing tokens away from npm,
+not its output). The text of the release page is not signed either. No SLSA provenance is published in v0.1.
 
 Every release is checked by [scripts/verify-release.sh](../../scripts/verify-release.sh) before it is published: the
 commands below, with the same identity and issuer, plus each archive's own bundle, the SBOMs (SPDX, agent module
@@ -239,7 +241,8 @@ listed) and the image platforms.
 
 `checksums.txt` lists the SHA-256 of the archives and of their SPDX SBOMs (`.sbom.json`); its signature covers them.
 The `.sigstore.json` bundles are not listed: each one carries its own certificate, checked by `cosign verify-blob`.
-Each archive also has its own bundle.
+The signature of `checksums.txt` followed by the checksum is enough; each archive also has its own bundle
+(`<archive>.sigstore.json`), an optional direct check with the same `cosign verify-blob` command.
 
 ```sh
 V=0.1.0
