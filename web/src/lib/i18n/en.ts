@@ -131,7 +131,7 @@ export const en: Record<Key, string> = {
 	'logs.noMatch': 'No line matches.',
 	'logs.dropped': 'line(s) not shown, rate too high: download the logs to see them.',
 	'logs.removed': 'older line(s) left the view (5,000 at most): download the logs to see them.',
-	'logs.truncated': 'line cut at 16 KiB (whole in the download)',
+	'logs.truncated': 'incomplete line (whole in the download)',
 	'logs.shown': 'line(s) shown',
 	'xray.identity': 'Identity',
 	'xray.image': 'Image',

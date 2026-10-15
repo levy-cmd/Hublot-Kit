@@ -134,7 +134,7 @@ export const fr = {
 	'logs.noMatch': 'Aucune ligne ne correspond.',
 	'logs.dropped': 'ligne(s) non affichée(s), débit trop élevé : téléchargez les logs pour les voir.',
 	'logs.removed': 'ligne(s) plus ancienne(s) retirée(s) de la vue (5 000 au plus) : téléchargez les logs pour les voir.',
-	'logs.truncated': 'ligne tronquée à 16 Kio (complète dans le téléchargement)',
+	'logs.truncated': 'ligne incomplète (entière dans le téléchargement)',
 	'logs.shown': 'ligne(s) affichée(s)',
 	'xray.identity': 'Identité',
 	'xray.image': 'Image',

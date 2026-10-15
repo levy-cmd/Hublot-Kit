@@ -111,6 +111,73 @@ func (s *countingStream) Close() error {
 	return err
 }
 
+// Review of the Lancement phase, reproduced on real Docker: a stdout line
+// of more than 16 KiB is written in parts (Docker cuts at 16 KiB, every
+// part behind the timestamp of the first), a stderr line between two parts,
+// and the client's stream is cut just after that stderr line. Docker's since
+// stops at the first entry it keeps and sends the rest, so a resumption
+// from the stderr line may get the end of the long line without its start.
+// The line then comes marked truncated, never as complete (user's decision
+// of 2026-10-15: neither duplicate nor silent loss). Within a second of the
+// cut, the start comes back: the line arrives whole, cut at 16 KiB.
+func TestIntegrationLogsResumeLongLine(t *testing.T) {
+	sfx := strconv.FormatInt(time.Now().UnixNano(), 36)
+	head := strings.Repeat("a", dockerx.MaxLogLine)
+	real, err := dockerx.New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := &fixture{}
+	f.init(t, false, real, nil)
+	c := f.session(t)
+	for _, tc := range []struct {
+		name  string
+		sleep string // between the first part and the stderr line
+		line  string // the stdout line received after the resumption
+	}{
+		{"début dans la seconde", "0.1", head},
+		{"début perdu", "2", "fin"},
+	} {
+		name := "hublot-it-longline-" + sfx + "-" + tc.sleep
+		rm := func() { exec.Command("docker", "rm", "-f", name).Run() }
+		rm()
+		t.Cleanup(rm)
+		// 16 384 bytes without "\n": Docker's buffer is full, the first part
+		// goes to the journal; "fin\n" ends the line later. The container
+		// stops: each stream ends with "end".
+		dockerRun(t, "run", "--name", name, "alpine:3", "sh", "-c",
+			`head -c 16384 /dev/zero | tr '\0' a; sleep `+tc.sleep+`; echo err >&2; sleep 0.2; echo fin; sleep 0.2; echo après`)
+		path := "/api/containers/" + name + "/logs"
+		all := openSSE(t, f, path, c, nil).all(t)
+		cut, long := "", ""
+		for _, e := range all {
+			if e.Event != "" {
+				continue
+			}
+			switch l := lineOf(t, e); {
+			case l.Stream == "stderr" && l.Line == "err":
+				cut = e.ID
+			case l.Stream == "stdout" && l.Line == head && l.Truncated:
+				long = e.ID
+			}
+		}
+		if len(all) != 4 || all[3].Event != "end" || cut == "" || long == "" {
+			t.Fatalf("%s, premier flux : %d événements, coupure %q, ligne longue %q", tc.name, len(all), cut, long)
+		}
+		got := openSSE(t, f, path, c, map[string]string{"Last-Event-ID": cut}).all(t)
+		if len(got) != 3 || got[2].Event != "end" {
+			t.Fatalf("%s, reprise : %d événements", tc.name, len(got))
+		}
+		if l := lineOf(t, got[0]); l.Stream != "stdout" || l.Line != tc.line || !l.Truncated || got[0].ID != long {
+			t.Errorf("%s : ligne longue reprise %q… (%d octets), tronquée %v, id %q (attendu %q)",
+				tc.name, l.Line[:min(len(l.Line), 8)], len(l.Line), l.Truncated, got[0].ID, long)
+		}
+		if l := lineOf(t, got[1]); l.Stream != "stdout" || l.Line != "après" || l.Truncated {
+			t.Errorf("%s : ligne suivante %+v", tc.name, l)
+		}
+	}
+}
+
 func TestIntegrationObservation(t *testing.T) {
 	// A unique suffix: two runs (or a run and a leftover) never share a name.
 	sfx := strconv.FormatInt(time.Now().UnixNano(), 36)
@@ -295,6 +362,9 @@ func TestIntegrationObservation(t *testing.T) {
 			l := lineOf(t, e)
 			if e.ID == "" || e.ID == lastID || l.Stream+":"+l.Line == lastLine {
 				t.Fatalf("reprise : %q (%s) déjà reçu en dernier", e.ID, l.Line)
+			}
+			if l.Truncated { // short lines only: none is marked
+				t.Fatalf("reprise : %q (%s) marquée tronquée à tort", e.ID, l.Line)
 			}
 			if n := counter(l); n != want[l.Stream] {
 				t.Fatalf("reprise de %s, ligne %d : n° %d, attendu %d (doublon ou trou)", l.Stream, read, n, want[l.Stream])

@@ -50,15 +50,16 @@ const sseWriteTimeout = 30 * time.Second
 // stream Docker's timestamps rise; between stdout and stderr its journal is
 // not in timestamp order (two goroutines stamp them), and two streams may
 // share a timestamp. Docker's since returns every line, in journal order,
-// from the first one that reaches it: resuming asks from the timestamp and
-// skips up to the cut line itself (see logsStream).
+// from the first one that reaches it: resuming asks from maxStreamSkew
+// before the timestamp and skips up to the cut line itself (see logsStream).
 var lineID = regexp.MustCompile(`^(\d{4}-\d\d-\d\dT[0-9:.]+Z)/(stdout|stderr)/(\d{1,9})$`)
 
 // maxStreamSkew bounds the skip of a resumption whose cut line is gone and
 // whose stream stays silent (journal rotated, or an ID from another
 // container): a line of the other stream this far past the cut stops it.
 // The largest gap measured between stdout and stderr is 2.6 ms; too small a
-// bound gives a duplicate, never a hole.
+// bound gives a duplicate, never a hole. A resumption also asks Docker from
+// this far before the cut (see logsStream).
 const maxStreamSkew = time.Second
 
 // linePos is where a line stands in its stream: its timestamp and rank.
@@ -280,8 +281,21 @@ func (s *server) logsStream(w http.ResponseWriter, r *http.Request) {
 	defer release()
 	opt := dockerx.LogsOptions{Tail: lim.tailOf(r), Follow: true}
 	cut, skipping := resumePoint(r)
+	// since: what Docker is asked from when resuming, maxStreamSkew before
+	// the cut (zero otherwise). Docker cuts a long line into parts, each
+	// behind the timestamp of the first, and its since drops every entry
+	// before the first one that reaches it: a part sent after that entry
+	// with an older timestamp is the end of a line whose start was dropped.
+	// Starting a second early brings the start of a line begun within that
+	// second back; a line older still comes marked truncated. A whole line
+	// stamped before since and written after the first entry kept would
+	// need a gap between the streams beyond maxStreamSkew (the cut line,
+	// written after it, is a second later); a line of several parts whose
+	// start came back is longer than MaxLogLine, so already truncated.
+	var since time.Time
 	if skipping {
-		opt = dockerx.LogsOptions{Tail: "all", Since: cut.ts.Format(time.RFC3339Nano), Follow: true}
+		since = cut.ts.Add(-maxStreamSkew)
+		opt = dockerx.LogsOptions{Tail: "all", Since: since.Format(time.RFC3339Nano), Follow: true}
 	}
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
@@ -391,7 +405,8 @@ func (s *server) logsStream(w http.ResponseWriter, r *http.Request) {
 				ts = l.TS.Format(time.RFC3339Nano)
 				id = ts + "/" + l.Stream + "/" + strconv.Itoa(p.rank)
 			}
-			if out.event("", id, logJSON{TS: ts, Stream: l.Stream, Line: l.Text, Truncated: l.Truncated}) != nil {
+			headLost := !l.TS.IsZero() && l.TS.Before(since) // see since
+			if out.event("", id, logJSON{TS: ts, Stream: l.Stream, Line: l.Text, Truncated: l.Truncated || headLost}) != nil {
 				return
 			}
 		}
