@@ -135,8 +135,28 @@ Environment=HUBLOT_READ_ONLY=true
 sudo systemctl restart hublot-kit
 ```
 
-If the drop-in changes `HUBLOT_DATA_DIR`, give the same directory to `reset-token`
-(`sudo /usr/local/bin/hublot reset-token --data-dir DIR`): run from a shell, it does not read the unit.
+To move the data directory, create it first, owned by root with mode 0700: systemd refuses to start the unit if a
+`ReadWritePaths=` directory is missing. Put a token in it before the restart (`reset-token` run from a shell does not
+read the unit, hence `--data-dir`), then add both lines to the drop-in: `ProtectSystem=strict` makes every other path
+read-only for the agent, which would then fail to open its audit log and exit.
+
+```sh
+sudo install -d -m 0700 /srv/hublot-kit
+sudo /usr/local/bin/hublot reset-token --data-dir /srv/hublot-kit
+sudo systemctl edit hublot-kit
+```
+
+```ini
+[Service]
+Environment=HUBLOT_DATA_DIR=/srv/hublot-kit
+ReadWritePaths=/srv/hublot-kit
+```
+
+```sh
+sudo systemctl restart hublot-kit
+```
+
+From then on, give the same `--data-dir` to every `reset-token`.
 
 ## Access token
 
@@ -198,6 +218,8 @@ sudo rm -rf /usr/local/bin/hublot /etc/systemd/system/hublot-kit.service /etc/sy
 sudo systemctl daemon-reload
 sudo rm -rf /var/lib/hublot-kit
 ```
+
+If you moved the data directory ([Settings](#settings)), remove it too.
 
 ## Verify the release
 

@@ -107,6 +107,31 @@ for f in docs/en/install.md docs/fr/installation.md; do
     err "$f : installation de l'unité absente"
   grep -qxF 'sudo /usr/local/bin/hublot reset-token' "$f" || err "$f : reset-token par chemin complet absent (sudo sur Fedora)"
 done
+# Toute mention de l'archive, du binaire installé et de l'unité dans la doc
+# égale ce que produisent .goreleaser.yaml et l'unité : une commande modifiée
+# en anglais ET en français (blocs identiques) ne passe pas.
+unit=packaging/systemd/hublot-kit.service
+exe=$(sed -n 's/^ExecStart=\([^ ]*\).*/\1/p' "$unit")
+svc=$(basename "$unit")
+fmt=$(awk '/^archives:/{a=1} a&&/formats:/{gsub(/.*\[ *| *\].*/,""); print; exit}' "$gr")
+want_ar=$(printf '%s' "$nt" | sed -e "s/{{ \.ProjectName }}/$proj/" -e 's/{{ \.Version }}/${V}/' \
+  -e 's/{{ \.Os }}/linux/' -e 's/{{ \.Arch }}/${ARCH}/').$fmt
+[ "$exe" = /usr/local/bin/hublot ] || err "$unit : ExecStart « $exe », la doc installe /usr/local/bin/hublot"
+for f in docs/en/install.md docs/fr/installation.md; do
+  [ -f "$f" ] || continue
+  for a in $(grep -oE '[A-Za-z0-9_${}.-]+\.tar\.gz' "$f" | sort -u); do
+    [ "$a" = "$want_ar" ] || err "$f : archive « $a », .goreleaser.yaml produit « $want_ar »"
+  done
+  for b in $(grep -oE '/[a-z/]*bin/hublot' "$f" | sort -u); do
+    [ "$b" = "$exe" ] || err "$f : binaire « $b », l'unité lance « $exe » (ExecStart)"
+  done
+  for s in $(grep -oE '[A-Za-z0-9_-]+\.service' "$f" | sort -u); do
+    [ "$s" = "$svc" ] || err "$f : unité « $s », le fichier est « $svc »"
+  done
+  for s in $(grep -E 'systemctl ' "$f" | grep -v 'daemon-reload' | awk '{l=$NF; gsub(/[`.,:;)]+$/,"",l); print l}' | sort -u); do
+    [ "$s" = "${svc%.service}" ] || err "$f : systemctl sur « $s », l'unité est « ${svc%.service} »"
+  done
+done
 
 [ $errors = 0 ] || { echo "$errors erreur(s)" >&2; exit 1; }
 echo "DOCS OK"

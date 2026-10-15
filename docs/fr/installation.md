@@ -137,8 +137,28 @@ Environment=HUBLOT_READ_ONLY=true
 sudo systemctl restart hublot-kit
 ```
 
-Si le fichier complémentaire change `HUBLOT_DATA_DIR`, donnez le même dossier à `reset-token`
-(`sudo /usr/local/bin/hublot reset-token --data-dir DOSSIER`) : lancé depuis un shell, il ne lit pas l'unité.
+Pour déplacer le dossier de données, créez-le d'abord, à root et en 0700 : systemd refuse de démarrer l'unité si un
+dossier de `ReadWritePaths=` manque. Mettez-y un jeton avant le redémarrage (`reset-token` lancé depuis un shell ne lit
+pas l'unité, d'où `--data-dir`), puis ajoutez les deux lignes au fichier complémentaire : `ProtectSystem=strict` met
+tout autre chemin en lecture seule pour l'agent, qui ne pourrait alors pas ouvrir son journal d'audit et s'arrêterait.
+
+```sh
+sudo install -d -m 0700 /srv/hublot-kit
+sudo /usr/local/bin/hublot reset-token --data-dir /srv/hublot-kit
+sudo systemctl edit hublot-kit
+```
+
+```ini
+[Service]
+Environment=HUBLOT_DATA_DIR=/srv/hublot-kit
+ReadWritePaths=/srv/hublot-kit
+```
+
+```sh
+sudo systemctl restart hublot-kit
+```
+
+Par la suite, donnez le même `--data-dir` à chaque `reset-token`.
 
 ## Jeton d'accès
 
@@ -202,6 +222,8 @@ sudo rm -rf /usr/local/bin/hublot /etc/systemd/system/hublot-kit.service /etc/sy
 sudo systemctl daemon-reload
 sudo rm -rf /var/lib/hublot-kit
 ```
+
+Si vous avez déplacé le dossier de données ([Réglages](#réglages)), supprimez-le aussi.
 
 ## Vérifier la release
 

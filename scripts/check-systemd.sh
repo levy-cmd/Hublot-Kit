@@ -9,12 +9,15 @@
 # déjà installé sur la machine.
 #
 # Usage (root, sur hk-ubuntu ou hk-fedora) :
-#   sudo scripts/check-systemd.sh /tmp/hublot-kit_0.1.0_linux_arm64.tar.gz [VERSION_ATTENDUE]
+#   sudo scripts/check-systemd.sh /tmp/hublot-kit_0.1.0_linux_arm64.tar.gz 0.1.0
+# La version attendue est obligatoire : elle est comparée à `hublot --version`
+# et à /api/meta.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 . scripts/release-lib.sh
-archive=${1:?usage : scripts/check-systemd.sh ARCHIVE.tar.gz [VERSION_ATTENDUE]}
-want=${2:-}
+usage="usage : scripts/check-systemd.sh ARCHIVE.tar.gz VERSION_ATTENDUE"
+archive=${1:?$usage}
+want=${2:?$usage}
 [ "$(id -u)" = 0 ] || hk_fail "à lancer en root"
 
 # Garde : si Hublot-Kit (fichiers, unité connue de systemd, surcharge), une
@@ -75,7 +78,7 @@ install -m 0755 "$work/hublot" /usr/local/bin/hublot
 # (la CI ne peut exécuter que l'amd64).
 ver=$(/usr/local/bin/hublot --version) || hk_fail "hublot --version : $ver"
 echo "version : $ver"
-[ -z "$want" ] || [ "$ver" = "hublot $want" ] || hk_fail "hublot --version : « $ver », attendu « hublot $want »"
+[ "$ver" = "hublot $want" ] || hk_fail "hublot --version : « $ver », attendu « hublot $want »"
 made_unit=1
 install -m 0644 "$work/hublot-kit.service" /etc/systemd/system/hublot-kit.service
 # Seuls les avertissements sur notre unité comptent (verify parle aussi de ses dépendances).
