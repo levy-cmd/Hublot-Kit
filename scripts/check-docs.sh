@@ -70,10 +70,23 @@ gr=.goreleaser.yaml
 img=$(awk '/^dockers_v2:/{d=1} d&&/images:/{gsub(/.*\[|\].*/,""); print; exit}' "$gr")
 [ "$img" = ghcr.io/levy-cmd/hublot-kit ] || err "$gr : image « $img », la doc cite ghcr.io/levy-cmd/hublot-kit"
 grep -qF -- '- "{{ if not .Prerelease }}{{ .Major }}.{{ .Minor }}{{ end }}"' "$gr" || err "$gr : pas d'étiquette X.Y, que cite la doc (:0.1)"
-! grep -qE '^ +- "?latest"?$' "$gr" || err "$gr : étiquette latest (Q43)"
+# Toutes les étiquettes des blocs `tags:` de dockers_v2, quelle que soit leur
+# forme (liste, guillemets, gabarit, ou liste en ligne `tags: [...]`), hors
+# commentaires : aucune ne doit contenir latest, même produite par un gabarit
+# (le job release-snapshot contrôle aussi les étiquettes réellement produites).
+tags=$(awk '
+  /^[^ #]/ { d = /^dockers_v2:/; t = 0; next }
+  !d || /^ *#/ || /^ *$/ { next }
+  t { match($0, /^ */); if (RLENGTH >= ki && $0 ~ /^ *- /) { print; next } t = 0 }
+  /^ *(- )?tags:/ { match($0, /^ *(- )?/); ki = RLENGTH; sub(/^ *(- )?tags:/, ""); if ($0 ~ /[^ ]/) print; else t = 1 }
+' "$gr")
+[ -n "$tags" ] || err "$gr : aucune étiquette trouvée dans dockers_v2"
+! printf '%s\n' "$tags" | grep -qi latest || err "$gr : étiquette latest (Q43) : $(printf '%s\n' "$tags" | grep -i latest | tr -s ' ')"
+# Références d'image de la doc, casse comprise : toute variante (Levy-cmd,
+# GHCR.IO…) diffère de l'image de .goreleaser.yaml et est refusée.
 for f in README.md README.fr.md docs/en/install.md docs/fr/installation.md; do
   [ -f "$f" ] || continue
-  for ref in $(grep -oE 'ghcr\.io/[a-z0-9._/-]+(:[A-Za-z0-9._-]+|@sha256)?' "$f" | sort -u); do
+  for ref in $(grep -oiE 'ghcr\.io/[a-z0-9._/-]+(:[a-z0-9._-]+|@sha256)?' "$f" | sort -u); do
     case $ref in "$img:0.1" | "$img@sha256") ;; *) err "$f : image « $ref », attendu $img:0.1 (ou $img@sha256:…)" ;; esac
   done
 done

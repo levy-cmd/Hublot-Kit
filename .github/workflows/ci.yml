@@ -224,6 +224,20 @@ jobs:
               and .["org.opencontainers.image.source"] == "https://github.com/levy-cmd/Hublot-Kit"
               and .["org.opencontainers.image.licenses"] == "MIT"' <<<"$labels" >/dev/null
           done
+      # Q43 : aucune étiquette latest réellement PRODUITE, même par un gabarit
+      # que l'analyse du YAML (check-docs.sh) ne verrait pas : étiquettes des
+      # images chargées (les deux attendues doivent y être), et toute chaîne de
+      # dist/artifacts.json.
+      - name: Aucune étiquette latest produite
+        run: |
+          v=$(jq -r .version dist/metadata.json)
+          tags=$(docker images --format '{{.Tag}}' ghcr.io/levy-cmd/hublot-kit)
+          grep -qx -- "$v-amd64" <<<"$tags"
+          grep -qx -- "$v-arm64" <<<"$tags"
+          if { echo "$tags"; jq -r '.. | strings' dist/artifacts.json; } | grep -i latest; then
+            echo "étiquette latest produite (Q43)"
+            exit 1
+          fi
       - name: Image multi-arch, SBOM (registre local, rien sur GHCR)
         run: |
           ctx="$RUNNER_TEMP/ctx"
