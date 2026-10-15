@@ -58,3 +58,23 @@ Plan : `docs/superpowers/plans/2026-10-13-lancement.md`. Décisions de l'utilisa
 - **Tranche A (Docker)**, lancée en parallèle du correctif « tests instables » :
   - fichiers possédés : ceux listés par le plan pour A, dont `ci.yml` (job `docs`), `.goreleaser.yaml`, `scripts/release-lib.sh`, `scripts/check-image.sh`, `scripts/test-release-lib.sh`, `scripts/check-docs.sh`, `Dockerfile`, les README et les sections Docker de la doc ;
   - aucun `_test.go` (ils sont au correctif « tests instables »), ce qui fait zéro recouvrement.
+- **Tranche A (Docker)** : b46ce01, 4136e96. Validée par le relecteur et par Codex ; run 38766476986 vert (8 jobs).
+  - VM, image arm64 de l'artefact du run 38764213596 :
+    - hk-ubuntu : noyau 7.0.0-38, Docker 29.8.2, API 1.56, AppArmor sans refus ;
+    - hk-fedora : noyau 6.19.10-300.fc44, Docker 29.8.2, SELinux Enforcing, aucun AVC ;
+    - sur les deux : `--version` exécuté, et `check-image.sh` vert (lecture, édition, envoi, mise à jour, rotation du jeton).
+  - Le relecteur a rejoué lui-même `check-image.sh` sur les deux VM.
+  - Ajouts au plan :
+    - vérification de la rotation du jeton (`docker exec … reset-token` puis `restart`) ;
+    - contrôle que `check-image.sh` appelle la garde ;
+    - `latest` refusé deux fois : dans le bloc `tags:` (gabarit compris) et dans les étiquettes produites par le snapshot ;
+    - référence d'image comparée en respectant la casse.
+  - Ruling: la garde cgroup ne lit que le journal du premier démarrage, et cela suffit : l'avertissement y figure toujours, et le détail procfs fait déjà échouer `hk_check_targets`. Le commit unique est conforme à l'étape 6 du plan : ce n'est pas une tâche d'évasion.
+- **Tests instables** : 94d29e6, 65e59c7. Validés (relecteur, et Codex sur les tests) ; fusionnés (8fcd8cf) ; `make test` vert.
+  - Causes : dans fsview, une construction finie avant `finished(b)` donnait un index servi, donc évinçable ; dans dockerx, Docker n'ordonne pas stdout et stderr entre eux.
+  - Établi en chemin : le `Since` de Docker s'arrête à la première entrée retenue puis envoie la suite ; `ReadLogs` ne rend une ligne longue qu'avec sa dernière partie.
+- **DÉFAUT PRODUIT TROUVÉ (Important, hérité de la T6 d'Observation)**, reproduit sur Docker réel par le relecteur :
+  - scénario : une ligne longue de stdout (plus de 16 Kio, donc en plusieurs parties) reçoit une ligne de stderr entre ses parties, et la connexion tombe juste après la ligne de stderr (coupure `t2/stderr/0`) ;
+  - à la reprise avec `since=t2`, Docker saute la 1re partie et renvoie la ligne de stderr puis la fin seule de la ligne longue ;
+  - `api/logs.go:376` émet alors cette fin avec `truncated=false` : 16 Kio sont perdus en silence.
+  - Le critère « ni doublon ni trou » n'est pas tenu dans ce cas. Décision demandée à l'utilisateur.
