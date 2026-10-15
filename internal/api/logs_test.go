@@ -291,7 +291,10 @@ func TestLogsResume(t *testing.T) {
 			lineOf(t, events[1]).Line != "c" || events[1].ID != lts3+"/stderr/0" {
 			t.Errorf("%s : %+v", name, events)
 		}
-		if calls := f.docker.LogsCalls(); len(calls) != 1 || calls[0].Since != lts2 || calls[0].Tail != "all" {
+		// Docker is asked from maxStreamSkew before the cut: the start of a
+		// long line written in parts around the cut comes back with it.
+		since, _ := time.Parse(time.RFC3339Nano, lts2)
+		if calls := f.docker.LogsCalls(); len(calls) != 1 || calls[0].Since != since.Add(-time.Second).Format(time.RFC3339Nano) || calls[0].Tail != "all" {
 			t.Errorf("%s : appels %+v", name, calls)
 		}
 	}
@@ -586,8 +589,11 @@ func TestLogsResumeAfterDrops(t *testing.T) {
 // journalDocker imitates Docker's since on a journal written by two
 // goroutines (stdout, stderr): each stream's timestamps rise, but the file
 // is not in timestamp order between streams, and two streams may share a
-// timestamp. Docker returns every line from the first one, in file order,
+// timestamp. Docker returns every entry from the first one, in file order,
 // whose timestamp reaches since (moby's forwarder stops filtering there).
+// An entry whose text ends with partMark is a part of a long line, written
+// without "\n" behind the timestamp of the line's first part, as Docker
+// does.
 type journalDocker struct {
 	*dockerx.Fake
 	lines []journalLine
@@ -598,6 +604,8 @@ type journalLine struct {
 	ts     time.Time
 	text   string
 }
+
+const partMark = "\x00part"
 
 func (d *journalDocker) Logs(_ context.Context, _ string, opt dockerx.LogsOptions) (io.ReadCloser, error) {
 	var since time.Time
@@ -614,7 +622,11 @@ func (d *journalDocker) Logs(_ context.Context, _ string, opt dockerx.LogsOption
 			continue
 		}
 		reached = true
-		frames = append(frames, mux(l.stream, l.ts.Format(time.RFC3339Nano)+" "+l.text+"\n"))
+		text, part := strings.CutSuffix(l.text, partMark)
+		if !part {
+			text += "\n"
+		}
+		frames = append(frames, mux(l.stream, l.ts.Format(time.RFC3339Nano)+" "+text))
 	}
 	if n, err := strconv.Atoi(opt.Tail); err == nil && n < len(frames) {
 		frames = frames[len(frames)-n:]
@@ -648,7 +660,16 @@ func TestLogsResumeJournal(t *testing.T) {
 			burst = append(burst, journalLine{2, at(2*j + 1), fmt.Sprintf("e%d", j)})
 		}
 	}
+	// Over several seconds: Docker's since drops the start of the journal,
+	// and each stderr line, stamped 2 ms before a stdout line, is written
+	// after it.
+	var slow []journalLine
+	for i := range 12 {
+		ts := t0.Add(time.Duration(i) * 400 * time.Millisecond)
+		slow = append(slow, journalLine{1, ts, fmt.Sprintf("o%d", i)}, journalLine{2, ts.Add(-2 * time.Millisecond), fmt.Sprintf("e%d", i)})
+	}
 	journals := map[string][]journalLine{
+		"sur plusieurs secondes": slow,
 		"désordre entre flux": {
 			{1, at(2), "o1"}, {2, at(1), "e1"}, {2, at(3), "e2"}, {1, at(5), "o2"}, {2, at(4), "e3"}, {1, at(6), "o3"},
 		},
@@ -689,6 +710,12 @@ func TestLogsResumeJournal(t *testing.T) {
 			if g, w := text(got[:len(got)-1]), text(all[k+1:]); !slices.Equal(g, w) {
 				t.Fatalf("%s, coupure après %s : %q, attendu %q", name, text(all[k:k+1]), g, w)
 			}
+			// No long line here: none is marked truncated.
+			for _, e := range got[:len(got)-1] {
+				if lineOf(t, e).Truncated {
+					t.Fatalf("%s, coupure après %s : %s marquée tronquée à tort", name, text(all[k:k+1]), text([]sseEvent{e}))
+				}
+			}
 		}
 	}
 }
@@ -715,6 +742,46 @@ func TestLogsResumeCutGone(t *testing.T) {
 	events = openSSE(t, f, "/api/containers/web/logs", c, map[string]string{"Last-Event-ID": cut}).all(t)
 	if len(events) != 3 || lineOf(t, events[0]).Line != "g" || lineOf(t, events[1]).Line != "h" || events[2].Event != "end" {
 		t.Fatalf("flux coupé muet : %+v", events)
+	}
+}
+
+// A long line of stdout is written in parts (Docker cuts at 16 KiB, every
+// part behind the timestamp of the first), a stderr line between two parts,
+// and the client's stream cut just after that stderr line. Resumed, the
+// line never comes as complete without its start: the start comes back
+// (Docker is asked from maxStreamSkew before the cut), or the line is
+// marked truncated (user's decision of 2026-10-15: neither duplicate nor
+// silent loss).
+func TestLogsResumeLongLine(t *testing.T) {
+	t0 := time.Date(2026, 10, 12, 8, 0, 0, 0, time.UTC)
+	head := strings.Repeat("a", dockerx.MaxLogLine)
+	for name, tc := range map[string]struct {
+		gap  time.Duration // from the first part to the stderr line
+		line string        // the stdout line received after the resumption
+	}{
+		"début dans la seconde": {100 * time.Millisecond, head}, // whole, cut at 16 KiB
+		"début perdu":           {2 * time.Second, "fin"},
+	} {
+		f, c := journalFixture(t, []journalLine{
+			{1, t0, head + partMark},
+			{2, t0.Add(tc.gap), "err"},
+			{1, t0, "fin"},
+			{1, t0.Add(tc.gap + time.Second), "après"},
+		})
+		all := openSSE(t, f, "/api/containers/web/logs", c, nil).all(t)
+		if len(all) != 4 || lineOf(t, all[0]).Line != "err" || lineOf(t, all[1]).Line != head || !lineOf(t, all[1]).Truncated {
+			t.Fatalf("%s, premier flux : %+v", name, all)
+		}
+		got := openSSE(t, f, "/api/containers/web/logs", c, map[string]string{"Last-Event-ID": all[0].ID}).all(t)
+		if len(got) != 3 || got[2].Event != "end" {
+			t.Fatalf("%s, reprise : %+v", name, got)
+		}
+		if l := lineOf(t, got[0]); l.Stream != "stdout" || l.Line != tc.line || !l.Truncated || got[0].ID != all[1].ID {
+			t.Errorf("%s : ligne longue reprise %q… (%d octets), tronquée %v, id %q", name, l.Line[:min(len(l.Line), 8)], len(l.Line), l.Truncated, got[0].ID)
+		}
+		if l := lineOf(t, got[1]); l.Line != "après" || l.Truncated {
+			t.Errorf("%s : ligne suivante %+v", name, l)
+		}
 	}
 }
 
