@@ -41,3 +41,12 @@ Plan : `docs/superpowers/plans/2026-10-13-lancement.md`. Décisions de l'utilisa
     - Instabilité : `TestViewsUnseenIndexesExpire` (`internal/fsview`, délai de grâce de 300 ms sous `-race`) a échoué une fois en CI. À analyser à part.
   - **Garde cgroup de `check-image.sh`** : la mutation bloquée par les permissions est remplacée par un test unitaire (faux journal) dans la tranche A. L'utilisateur en est informé.
   - **Révision du plan en tranches A, B, C** : validée par Codex et par le relecteur après un correctif (ordre commit → CI → VM dans A et B, fichiers lus listés par tranche).
+- 2026-10-15, CI de 33e2d2c (run 38759795800) :
+  - `release-snapshot`, `binary` et `e2e` sont verts : l'objectif CI de T6 est atteint, T6 part en revue.
+  - `integration (overlay2)` est rouge sur `TestLogsRealDocker` (`internal/dockerx/integration_test.go:303`). Le test exige un ordre global entre stdout et stderr, que Docker ne garantit pas : c'est la cause trouvée en T6 d'Observation.
+  - **Correctif « tests instables », en parallèle de la revue de T6**, hors tranches, en worktree sur la branche `phase/lancement-flaky` :
+    - fichiers possédés : `internal/dockerx/integration_test.go` et les `_test.go` de `internal/fsview` ;
+    - fichiers lus : le code de `dockerx` et de `fsview`, qu'il ne modifie PAS ;
+    - critère : `TestLogsRealDocker` exige l'ordre au sein de chaque flux, sans rien perdre de ce qu'il couvre ; `TestViewsUnseenIndexesExpire` ne dépend plus du temps réel sous `-race` ;
+    - preuve : `-count=20` sous Linux.
+- CLAUDE.md, section Orchestration complétée : contenu d'une délégation, déléguer seulement si c'est utile, adaptation en cours de route, rapport de fin sur preuves.
