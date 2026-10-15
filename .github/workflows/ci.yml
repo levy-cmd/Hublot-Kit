@@ -10,7 +10,8 @@ permissions:
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # Jamais d'annulation sur main : chaque commit fusionné garde son run complet.
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   go:
@@ -25,11 +26,15 @@ jobs:
 
   web:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     defaults:
       run:
         working-directory: web
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v7
         with:
           node-version: 24
@@ -71,9 +76,13 @@ jobs:
   # Spec §10: the single Playwright journey, real agent and real Docker.
   e2e:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     needs: [go, web]
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
@@ -90,9 +99,13 @@ jobs:
 
   binary:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     needs: [go, web]
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
@@ -150,6 +163,8 @@ jobs:
   # spec §8. L'image arm64 et les archives partent en artefact pour les VM.
   release-snapshot:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     needs: [go, web]
     services:
       registry:
@@ -158,6 +173,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
+          persist-credentials: false
           fetch-depth: 0
       - uses: actions/setup-go@v7
         with:
@@ -171,6 +187,8 @@ jobs:
         with:
           driver-opts: network=host
       - uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        with:
+          syft-version: v1.54.1 # plan Lancement, Q40 (sans cela, la version par défaut de l'action)
       - run: make web
       - uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
         with:
@@ -182,7 +200,12 @@ jobs:
           distribution: goreleaser
           version: "~> v2.18"
           args: release --snapshot --clean --skip=sign
+      # amd64 exécuté (--version) : preuve que la version est injectée. arm64
+      # n'est pas exécutable ici (pas d'émulation) : même entrée `builds`,
+      # mêmes ldflags ; la tâche 8 le lance sur les VM.
       - run: scripts/check-dist.sh dist
+        env:
+          CHECK_DIST_EXEC: amd64
       # dockers_v2 en snapshot : une image par plateforme, chargée dans le Docker
       # du runner, étiquette suffixée par l'architecture (<V>-amd64, <V>-arm64).
       # C'est la référence que reçoivent check-image.sh et la tâche 8.
