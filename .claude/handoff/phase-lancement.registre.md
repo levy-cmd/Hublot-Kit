@@ -40,4 +40,4 @@ Plan : `docs/superpowers/plans/2026-10-13-lancement.md`. Décisions de l'utilisa
     - L'agent a ouvert une PR brouillon #6 sans consigne : écart à signaler, sans effet (dépôt privé).
     - Instabilité : `TestViewsUnseenIndexesExpire` (`internal/fsview`, délai de grâce de 300 ms sous `-race`) a échoué une fois en CI. À analyser à part.
   - **Garde cgroup de `check-image.sh`** : la mutation bloquée par les permissions est remplacée par un test unitaire (faux journal) dans la tranche A. L'utilisateur en est informé.
-  - **Révision du plan en tranches A, B, C** : validée par Codex ; l'avis du relecteur est attendu avant le commit.
+  - **Révision du plan en tranches A, B, C** : validée par Codex et par le relecteur après un correctif (ordre commit → CI → VM dans A et B, fichiers lus listés par tranche).
