@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os/exec"
 	"slices"
 	"strings"
@@ -251,9 +252,8 @@ func collect(t *testing.T, c Client, id string, opt LogsOptions, tty bool) []Log
 	return out
 }
 
-// texts: "stream:text" per line, a long text shortened to its length (the
-// test output stays readable). The first two lines are sorted: stdout and
-// stderr written at the same instant reach the log file in either order.
+// texts: "stream:text" per line, in the order read; a long text shortened
+// to its length (the test output stays readable).
 func texts(ls []LogLine) []string {
 	var out []string
 	for _, l := range ls {
@@ -263,8 +263,17 @@ func texts(ls []LogLine) []string {
 		}
 		out = append(out, s)
 	}
-	if len(out) >= 2 {
-		slices.Sort(out[:2])
+	return out
+}
+
+// byStream: texts per stream, each in the order read. Docker copies stdout
+// and stderr apart (one goroutine each): their lines reach the log file in
+// any interleaving, only the order within a stream holds (phase Observation,
+// task 6).
+func byStream(ls []LogLine) map[string][]string {
+	out := map[string][]string{}
+	for i, s := range texts(ls) {
+		out[ls[i].Stream] = append(out[ls[i].Stream], s)
 	}
 	return out
 }
@@ -299,20 +308,37 @@ func TestLogsRealDocker(t *testing.T) {
 
 	long := fmt.Sprintf("stdout:%d×a tronquée=true", MaxLogLine)
 	got := collect(t, c, plain, LogsOptions{Tail: "all", Follow: true}, false)
-	if want := []string{"stderr:err1", "stdout:out1", long, "stdout:out2"}; !slices.Equal(texts(got), want) || got[0].TS.IsZero() {
-		t.Fatalf("sans TTY : %q, attendu %q", texts(got), want)
+	want := map[string][]string{"stdout": {"stdout:out1", long, "stdout:out2"}, "stderr": {"stderr:err1"}}
+	if !maps.EqualFunc(byStream(got), want, slices.Equal[[]string]) || slices.ContainsFunc(got, func(l LogLine) bool { return l.TS.IsZero() }) {
+		t.Fatalf("sans TTY : %q, attendu par flux %q, horodatées", texts(got), want)
 	}
-	// Since is inclusive: from the timestamp of the long line, it comes again.
-	again := collect(t, c, plain, LogsOptions{Tail: "all", Since: got[2].TS.Format(time.RFC3339Nano), Follow: true}, false)
-	if want := []string{long, "stdout:out2"}; !slices.Equal(texts(again), want) {
-		t.Fatalf("Since inclusif : %q, attendu %q", texts(again), want)
+	// Since is inclusive: from the timestamp of the long line, it comes again,
+	// out1 does not. err1 depends on where Docker wrote it. Docker applies
+	// Since only up to the first entry it lets through, then sends the rest
+	// of the file (moby loggerutils/logfile.go: the timestamps of the two
+	// streams are not monotonic). ReadLogs gives a long line once its last
+	// part is read, so err1 may sit between its parts in the file. err1 comes
+	// again when it is not older than the long line, or was read after it;
+	// otherwise it may come or not.
+	i := slices.IndexFunc(got, func(l LogLine) bool { return l.Truncated })
+	e := slices.IndexFunc(got, func(l LogLine) bool { return l.Stream == "stderr" })
+	since := got[i].TS
+	again := collect(t, c, plain, LogsOptions{Tail: "all", Since: since.Format(time.RFC3339Nano), Follow: true}, false)
+	b := byStream(again)
+	errMay := got[e].TS.Before(since) && e < i
+	if !slices.Equal(b["stdout"], []string{long, "stdout:out2"}) ||
+		!slices.Equal(b["stderr"], []string{"stderr:err1"}) && !(errMay && len(b["stderr"]) == 0) {
+		t.Fatalf("Since inclusif : %q, attendu stdout %q, et err1 (facultatif : %v)", texts(again), []string{long, "stdout:out2"}, errMay)
 	}
-	if tail := collect(t, c, plain, LogsOptions{Tail: "1"}, false); !slices.Equal(texts(tail), []string{"stdout:out2"}) {
-		t.Fatalf("Tail 1 : %q", texts(tail))
+	// Tail counts entries of the log file: the last one is out2 or err1,
+	// whichever Docker wrote last, a one-part line, hence the last one read.
+	if tail, last := collect(t, c, plain, LogsOptions{Tail: "1"}, false), texts(got)[len(got)-1:]; !slices.Equal(texts(tail), last) {
+		t.Fatalf("Tail 1 : %q, attendu %q", texts(tail), last)
 	}
 
+	// A TTY: one stream, written in the order of the script.
 	got = collect(t, c, tty, LogsOptions{Tail: "all", Follow: true}, true)
-	if want := []string{"stdout:err1", "stdout:out1", long, "stdout:out2"}; !slices.Equal(texts(got), want) {
+	if want := []string{"stdout:out1", "stdout:err1", long, "stdout:out2"}; !slices.Equal(texts(got), want) {
 		t.Fatalf("TTY : %q, attendu %q", texts(got), want)
 	}
 
