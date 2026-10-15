@@ -137,6 +137,9 @@ Environment=HUBLOT_READ_ONLY=true
 sudo systemctl restart hublot-kit
 ```
 
+Si le fichier complémentaire change `HUBLOT_DATA_DIR`, donnez le même dossier à `reset-token`
+(`sudo /usr/local/bin/hublot reset-token --data-dir DOSSIER`) : lancé depuis un shell, il ne lit pas l'unité.
+
 ## Jeton d'accès
 
 Un nouveau jeton invalide l'ancien une fois l'agent relancé ; d'ici là, un agent déjà lancé accepte encore l'ancien.

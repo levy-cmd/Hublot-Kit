@@ -71,6 +71,11 @@ tar -xzf "$archive" -C "$work"
 # Les commandes de docs/en/install.md, section « Binary and systemd ».
 made_bin=1
 install -m 0755 "$work/hublot" /usr/local/bin/hublot
+# Le binaire de l'archive s'exécute sur cette architecture et porte sa version
+# (la CI ne peut exécuter que l'amd64).
+ver=$(/usr/local/bin/hublot --version) || hk_fail "hublot --version : $ver"
+echo "version : $ver"
+[ -z "$want" ] || [ "$ver" = "hublot $want" ] || hk_fail "hublot --version : « $ver », attendu « hublot $want »"
 made_unit=1
 install -m 0644 "$work/hublot-kit.service" /etc/systemd/system/hublot-kit.service
 # Seuls les avertissements sur notre unité comptent (verify parle aussi de ses dépendances).

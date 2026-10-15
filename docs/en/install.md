@@ -135,6 +135,9 @@ Environment=HUBLOT_READ_ONLY=true
 sudo systemctl restart hublot-kit
 ```
 
+If the drop-in changes `HUBLOT_DATA_DIR`, give the same directory to `reset-token`
+(`sudo /usr/local/bin/hublot reset-token --data-dir DIR`): run from a shell, it does not read the unit.
+
 ## Access token
 
 A new token invalidates the old one once the agent restarts; until then, a running agent still accepts the old one.

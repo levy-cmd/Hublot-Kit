@@ -91,5 +91,22 @@ for f in README.md README.fr.md docs/en/install.md docs/fr/installation.md; do
   done
 done
 
+# Tranche B (plan Lancement) : l'archive et l'unité que cite la doc sont
+# celles que produit .goreleaser.yaml (archives).
+proj=$(sed -n 's/^project_name: *//p' "$gr")
+nt=$(awk '/^archives:/{a=1} a&&/name_template:/{sub(/.*name_template: */,""); gsub(/"/,""); print; exit}' "$gr")
+[ "$proj" = hublot-kit ] && [ "$nt" = '{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}' ] ||
+  err "$gr : archives « $nt » (projet $proj), la doc attend hublot-kit_\${V}_linux_\${ARCH}.tar.gz"
+grep -A1 -F 'src: packaging/systemd/hublot-kit.service' "$gr" | grep -q 'strip_parent: true' ||
+  err "$gr : l'unité hublot-kit.service n'est pas à la racine de l'archive"
+[ -f packaging/systemd/hublot-kit.service ] || err "packaging/systemd/hublot-kit.service absent"
+for f in docs/en/install.md docs/fr/installation.md; do
+  [ -f "$f" ] || continue
+  grep -qF 'hublot-kit_${V}_linux_${ARCH}.tar.gz' "$f" || err "$f : nom d'archive de .goreleaser.yaml absent"
+  grep -qxF 'sudo install -m 0644 hublot-kit.service /etc/systemd/system/hublot-kit.service' "$f" ||
+    err "$f : installation de l'unité absente"
+  grep -qxF 'sudo /usr/local/bin/hublot reset-token' "$f" || err "$f : reset-token par chemin complet absent (sudo sur Fedora)"
+done
+
 [ $errors = 0 ] || { echo "$errors erreur(s)" >&2; exit 1; }
 echo "DOCS OK"
