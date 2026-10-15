@@ -78,3 +78,16 @@ Plan : `docs/superpowers/plans/2026-10-13-lancement.md`. Décisions de l'utilisa
   - à la reprise avec `since=t2`, Docker saute la 1re partie et renvoie la ligne de stderr puis la fin seule de la ligne longue ;
   - `api/logs.go:376` émet alors cette fin avec `truncated=false` : 16 Kio sont perdus en silence.
   - Le critère « ni doublon ni trou » n'est pas tenu dans ce cas. Décision demandée à l'utilisateur.
+- **Tranche B (systemd)** : bb34bfd, cf62663. Validée par le relecteur et par Codex ; run 38770184602 vert.
+  - VM, archive arm64 de la CI, sommes contrôlées : hk-ubuntu et hk-fedora (systemd 259, Enforcing, `unconfined_service_t`) donnent `SYSTEMD OK`, la version exécutée, les cinq cibles, l'édition et l'envoi sous durcissement, et la rotation du jeton. Aucun refus AppArmor, aucun AVC.
+  - Commandes LITTÉRALES de la doc rejouées : installation, drop-in, désinstallation complète.
+  - Défaut trouvé en revue puis corrigé : un drop-in qui déplace `HUBLOT_DATA_DIR` doit ajouter `ReadWritePaths=DIR`, avec un dossier créé au préalable en root 0700 ; sans cela, `ProtectSystem=strict` empêche le démarrage.
+  - `check-docs.sh` compare les commandes de la doc à `ExecStart`, au `name_template` et à l'unité. `check-systemd.sh` exige la version.
+  - Note : la CI d'une PR construit le commit de fusion (ex. 7b98876 = bb34bfd fusionné dans 253056a, arbre identique). La rc et la release partent d'un tag, donc de l'empreinte du commit tagué.
+  - Minor reporté à la T8 : `check-docs.sh` ne vérifie pas que le drop-in contient `ReadWritePaths`.
+  - Plan à corriger : il écrit encore `check-systemd.sh … [VERSION]`, alors que la version est obligatoire.
+- **Reprise des logs, perte signalée** : e045daf (tests rouges), 964080e, 0d4710e. Validée par le relecteur ; Codex arbitré. Fusionnée (40b0a28) ; `make test` et `check-docs` sont verts.
+  - Décision de l'utilisateur (2026-10-15) : le critère devient « ni doublon, ni perte silencieuse ».
+  - Règle : la reprise demande `since = cut.ts - maxStreamSkew` ; toute ligne horodatée avant ce `since` est marquée `truncated`. Une ligne longue récente revient entière.
+  - La spec (§6, §9, §13), les limites EN/FR et l'infobulle (« ligne incomplète ») sont mises à jour. La limite `tail=N` (départ ordinaire au milieu d'une ligne longue, indétectable) est documentée.
+  - Ruling: les constats de Codex qui supposent un écart entre stdout et stderr de plus d'une seconde (faux « tronquée », doublon ou perte, écart négatif à `logs.go:373`) sont écartés. Ils sortent de l'hypothèse `maxStreamSkew` arbitrée en T6 d'Observation (2,6 ms mesurées), documentée en §13 ; pendant le saut, une ligne qui précède la coupure dans le journal est déjà reçue.
