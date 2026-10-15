@@ -358,7 +358,7 @@ Base 5 à 10 h par semaine. 12 semaines maintenues : le code du spike a été é
 | Observation | 10 | F6, F7 | |
 | Lancement | 11 à 12 | docs FR/EN, GoReleaser, image GHCR, unité systemd, release signée ; pré-version `v0.1.0-rc.1` privée, puis `v0.1.0` | v0.1 publique |
 
-Avancement (2026-10-15) : Spike, Socle, Explorateur et Observation sont fusionnés. Lancement : messages de l'agent en anglais, `hublot --version`, unité systemd, image, docs FR/EN, GoReleaser, installation Docker et systemd depuis une release (vérifiées sur les deux VM), vérification d'une release et `release.yml` sont faits sur `phase/lancement` ; restent la pré-version `v0.1.0-rc.1` (première vraie signature, GHCR) puis la `v0.1.0` publique, étape par étape avec l'accord de l'utilisateur (plan Lancement, tâches 9 et 10).
+Avancement (2026-10-15) : Spike, Socle, Explorateur et Observation sont fusionnés. Lancement : messages de l'agent en anglais, `hublot --version`, unité systemd, image, docs FR/EN, GoReleaser, installation Docker et systemd (vérifiées sur les deux VM avec l'image et les archives du snapshot de la CI ; une vraie release sera éprouvée à la pré-version), vérification d'une release et `release.yml` sont faits sur `phase/lancement` ; restent la pré-version `v0.1.0-rc.1` (première vraie signature, GHCR) puis la `v0.1.0` publique, étape par étape avec l'accord de l'utilisateur (plan Lancement, tâches 9 et 10).
 
 ## 13. Risques
 

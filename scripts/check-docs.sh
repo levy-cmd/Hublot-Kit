@@ -117,6 +117,9 @@ fmt=$(awk '/^archives:/{a=1} a&&/formats:/{gsub(/.*\[ *| *\].*/,""); print; exit
 want_ar=$(printf '%s' "$nt" | sed -e "s/{{ \.ProjectName }}/$proj/" -e 's/{{ \.Version }}/${V}/' \
   -e 's/{{ \.Os }}/linux/' -e 's/{{ \.Arch }}/${ARCH}/').$fmt
 [ "$exe" = /usr/local/bin/hublot ] || err "$unit : ExecStart « $exe », la doc installe /usr/local/bin/hublot"
+# L'unité écoute en local seulement (spec §7, §8 ; la doc l'annonce sur 127.0.0.1:7878).
+listen=$(sed -n 's/^Environment=HUBLOT_LISTEN=//p' "$unit")
+[ "$listen" = 127.0.0.1:7878 ] || err "$unit : HUBLOT_LISTEN « $listen », attendu 127.0.0.1:7878"
 for f in docs/en/install.md docs/fr/installation.md; do
   [ -f "$f" ] || continue
   for a in $(grep -oE '[A-Za-z0-9_${}.-]+\.tar\.gz' "$f" | sort -u); do

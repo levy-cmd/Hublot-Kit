@@ -120,6 +120,9 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Le tag lancé (contrôlé par guard), pas celui que GoReleaser choisirait
+          # parmi plusieurs tags du même commit (v0.1.0-rc.1 et v0.1.0, par exemple).
+          GORELEASER_CURRENT_TAG: ${{ github.ref_name }}
 
   verify:
     needs: release
