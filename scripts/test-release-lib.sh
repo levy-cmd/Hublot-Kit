@@ -75,5 +75,33 @@ case $out in
   *) bad "hk_redact : $out" ;;
 esac
 
+# Garde du démarrage (hk_check_startup_logs, appelée par check-image.sh) : un
+# faux journal d'agent avec l'avertissement cgroup, ou le détail procfs « start
+# the agent with --cgroupns=host », échoue sans afficher le jeton ;
+# l'avertissement « without TLS » seul passe. Remplace la mutation « retirer
+# --cgroupns=host » de la commande de §8, que le contrôle de permissions a bloquée.
+(. scripts/release-lib.sh && type hk_check_startup_logs > /dev/null 2>&1) || bad "hk_check_startup_logs absente de scripts/release-lib.sh"
+grep -qx 'hk_check_startup_logs "$logs"' scripts/check-image.sh || bad "check-image.sh n'applique pas hk_check_startup_logs à docker logs"
+cg=$(printf 'WARNING: listening on 0.0.0.0:7878 without TLS.\nWARNING: private cgroup namespace (/proc/self/cgroup = 0::/): the explorer will answer container_changed. Start the agent with --cgroupns=host.\nAccess token (shown only once): %s\n' "$tok")
+if (. scripts/release-lib.sh && hk_check_startup_logs "$cg") > "$tmp/out" 2>&1; then
+  bad "garde cgroup : journal avec l'avertissement accepté"
+elif ! grep -q 'avertissement cgroup' "$tmp/out"; then
+  bad "garde cgroup : refus pour une autre raison : $(tail -n 1 "$tmp/out")"
+elif grep -qF "$tok" "$tmp/out"; then
+  bad "garde cgroup : le jeton est affiché"
+else
+  echo "ok garde cgroup : $(tail -n 1 "$tmp/out" | cut -c1-60)"
+fi
+detail='file route error: the container changed: pid 42 is not in the cgroup of container 0123456789ab; start the agent with --cgroupns=host'
+if (. scripts/release-lib.sh && hk_check_startup_logs "$detail") > "$tmp/out" 2>&1; then
+  bad "garde cgroup : détail procfs accepté"
+elif ! grep -q 'avertissement cgroup' "$tmp/out"; then
+  bad "garde cgroup (détail procfs) : refus pour une autre raison : $(tail -n 1 "$tmp/out")"
+else
+  echo "ok garde cgroup (détail procfs)"
+fi
+(. scripts/release-lib.sh && hk_check_startup_logs 'WARNING: listening on 0.0.0.0:7878 without TLS.') > /dev/null 2>&1 &&
+  echo "ok garde cgroup : avertissement TLS seul accepté" || bad "garde cgroup : avertissement TLS seul refusé"
+
 [ "$fails" = 0 ] || { echo "$fails échec(s)" >&2; exit 1; }
 echo "RELEASE-LIB OK"

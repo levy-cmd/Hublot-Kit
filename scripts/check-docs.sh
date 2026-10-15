@@ -64,5 +64,19 @@ for f in README.md README.fr.md docs/en/*.md docs/fr/*.md; do
   done
 done
 
+# Tranche A (plan Lancement) : l'image que cite la doc est celle que publie
+# .goreleaser.yaml (dockers_v2), avec l'étiquette X.Y et sans latest (Q43).
+gr=.goreleaser.yaml
+img=$(awk '/^dockers_v2:/{d=1} d&&/images:/{gsub(/.*\[|\].*/,""); print; exit}' "$gr")
+[ "$img" = ghcr.io/levy-cmd/hublot-kit ] || err "$gr : image « $img », la doc cite ghcr.io/levy-cmd/hublot-kit"
+grep -qF -- '- "{{ if not .Prerelease }}{{ .Major }}.{{ .Minor }}{{ end }}"' "$gr" || err "$gr : pas d'étiquette X.Y, que cite la doc (:0.1)"
+! grep -qE '^ +- "?latest"?$' "$gr" || err "$gr : étiquette latest (Q43)"
+for f in README.md README.fr.md docs/en/install.md docs/fr/installation.md; do
+  [ -f "$f" ] || continue
+  for ref in $(grep -oE 'ghcr\.io/[a-z0-9._/-]+(:[A-Za-z0-9._-]+|@sha256)?' "$f" | sort -u); do
+    case $ref in "$img:0.1" | "$img@sha256") ;; *) err "$f : image « $ref », attendu $img:0.1 (ou $img@sha256:…)" ;; esac
+  done
+done
+
 [ $errors = 0 ] || { echo "$errors erreur(s)" >&2; exit 1; }
 echo "DOCS OK"

@@ -54,6 +54,10 @@ Le jeton d'accès s'affiche une seule fois, au premier lancement, sur la ligne
 docker logs hublot-kit
 ```
 
+Les journaux montrent aussi `WARNING: listening on 0.0.0.0:7878 without TLS. …` : c'est attendu dans l'image, dont
+le port n'est publié que sur `127.0.0.1`. Une ligne `WARNING: private cgroup namespace`, en revanche, signale
+qu'il manque `--cgroupns=host`.
+
 Depuis votre ordinateur, ouvrez un tunnel, allez sur <http://127.0.0.1:7878> et collez le jeton.
 
 ```sh

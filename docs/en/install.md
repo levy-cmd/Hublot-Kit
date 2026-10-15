@@ -52,6 +52,10 @@ The access token is printed once, on the first start, on the line `Access token 
 docker logs hublot-kit
 ```
 
+The logs also show `WARNING: listening on 0.0.0.0:7878 without TLS. …`: expected in the image, whose port is
+published on `127.0.0.1` only. A `WARNING: private cgroup namespace` line, on the other hand, means that
+`--cgroupns=host` is missing.
+
 From your computer, open a tunnel, browse to <http://127.0.0.1:7878> and paste the token.
 
 ```sh

@@ -257,3 +257,16 @@ jobs:
           name: release-snapshot
           path: ${{ runner.temp }}/vm/
           retention-days: 3
+
+  # Plan Lancement : documentation publique (commande de §8, FR et EN alignés,
+  # liens, et ce que la doc cite de .goreleaser.yaml), gardes des scripts.
+  docs:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - run: bash scripts/check-docs.sh
+      - run: bash scripts/test-release-lib.sh

@@ -59,6 +59,17 @@ hk_redact() {
   sed -E 's/(shown only once):.*/\1: [masqué]/; s/[A-Za-z0-9_-]{43,}/[masqué]/g'
 }
 
+# hk_check_startup_logs JOURNAL : échoue si l'agent signale un espace de noms
+# cgroup privé (avertissement de démarrage, ou détail « start the agent with
+# --cgroupns=host » d'une erreur procfs, spec §8) ; l'avertissement « without
+# TLS » est attendu dans l'image (0.0.0.0 publié sur 127.0.0.1, spec §7).
+hk_check_startup_logs() {
+  case $1 in
+    *"private cgroup namespace"* | *"--cgroupns=host"*)
+      hk_fail "avertissement cgroup au démarrage : $(printf '%s\n' "$1" | hk_redact)" ;;
+  esac
+}
+
 # Conteneurs créés par ce script, les seuls que hk_remove_targets supprime :
 # un conteneur hk-check-* qui existait avant le test n'est jamais touché.
 HK_CREATED=

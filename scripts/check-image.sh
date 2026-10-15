@@ -3,7 +3,8 @@
 # la doc (plan Lancement). Seule la référence d'image change : IMAGE remplace
 # ghcr.io/levy-cmd/hublot-kit:0.1. Puis : jeton lu dans `docker logs`, connexion,
 # /api/meta, l'explorateur sur les cinq cibles de scripts/release-lib.sh, une
-# édition et un envoi, et la recréation du conteneur sur le même volume.
+# édition et un envoi, la recréation du conteneur sur le même volume, et la
+# rotation du jeton par docker exec.
 # Nettoie à la fin ce que le script a créé, et seulement cela ; refuse de
 # toucher un conteneur hublot-kit, un volume hublot-data, une cible ou un
 # port 7878 déjà présents.
@@ -56,9 +57,7 @@ tok=$(printf '%s\n' "$logs" | sed -n 's/^Access token (shown only once): //p')
 # Les journaux ne s'affichent que masqués (hk_redact) : le jeton n'entre
 # jamais dans la sortie, ni dans celle de la CI.
 [ -n "$tok" ] || hk_fail "jeton absent de docker logs : $(printf '%s\n' "$logs" | hk_redact)"
-# L'avertissement « without TLS » est attendu dans l'image (0.0.0.0 publié sur 127.0.0.1, spec §7) ;
-# celui de l'espace de noms cgroup ne doit jamais paraître (spec §8).
-case $logs in *"private cgroup namespace"*) hk_fail "avertissement cgroup au démarrage : $(printf '%s\n' "$logs" | hk_redact)" ;; esac
+hk_check_startup_logs "$logs"
 hk_login "$tok" "$jar"
 hk_check_meta "$jar" "$want"
 hk_check_targets "$jar"
@@ -72,4 +71,15 @@ hk_wait_login
 case $(docker logs hublot-kit 2>&1) in *"Access token"*) hk_fail "nouveau jeton après recréation : le volume n'a pas gardé l'empreinte" ;; esac
 hk_login "$tok" "$jar"
 echo "ok mise à jour (même volume, même jeton)"
+
+# Rotation (docs, « Access token », Docker) : les deux commandes de la doc ;
+# après le redémarrage, l'ancien jeton est refusé et le nouveau accepté. Le
+# nouveau jeton ne passe que par une variable, jamais par la sortie.
+new=$(docker exec hublot-kit /hublot reset-token | sed -n 's/^New access token (shown only once): //p')
+[ -n "$new" ] || hk_fail "reset-token : pas de nouveau jeton"
+docker restart hublot-kit >/dev/null
+hk_wait_login
+[ "$(hk_login_code "$tok")" = 401 ] || hk_fail "ancien jeton encore accepté après reset-token et redémarrage"
+hk_login "$new" "$jar"
+echo "ok rotation du jeton (docker exec reset-token, docker restart)"
 echo "IMAGE OK : $image"
