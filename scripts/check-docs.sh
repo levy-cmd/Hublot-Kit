@@ -131,7 +131,24 @@ for f in docs/en/install.md docs/fr/installation.md; do
   for s in $(grep -E 'systemctl ' "$f" | grep -v 'daemon-reload' | awk '{l=$NF; gsub(/[`.,:;)]+$/,"",l); print l}' | sort -u); do
     [ "$s" = "${svc%.service}" ] || err "$f : systemctl sur « $s », l'unité est « ${svc%.service} »"
   done
+  # Dossier de données déplacé : sous ProtectSystem=strict, le drop-in qui
+  # change HUBLOT_DATA_DIR doit aussi ouvrir ce dossier en écriture
+  # (ReadWritePaths=, même chemin), et la doc le crée avant, root en 0700.
+  # Une ligne par bloc ```ini qui déplace le dossier : « dossier|ReadWritePaths ».
+  moved=$(awk '
+    /^```ini/ { b = 1; d = ""; r = ""; next }
+    b && /^```/ { b = 0; if (d != "") print d "|" r; next }
+    b && /^Environment=HUBLOT_DATA_DIR=/ { sub(/^Environment=HUBLOT_DATA_DIR=/, ""); d = $0; next }
+    b && /^ReadWritePaths=/ { sub(/^ReadWritePaths=/, ""); r = $0 }
+  ' "$f")
+  [ -n "$moved" ] || err "$f : aucun drop-in ne déplace le dossier de données (HUBLOT_DATA_DIR)"
+  for m in $moved; do
+    d=${m%%|*} r=${m#*|}
+    [ "$r" = "$d" ] || err "$f : le drop-in HUBLOT_DATA_DIR=$d n'a pas ReadWritePaths=$d (ProtectSystem=strict)"
+    grep -qxF "sudo install -d -m 0700 $d" "$f" || err "$f : $d n'est pas créé avant le drop-in (sudo install -d -m 0700 $d)"
+  done
 done
+grep -qx 'ProtectSystem=strict' "$unit" || err "$unit : ProtectSystem=strict absent, la règle ReadWritePaths de la doc est à revoir"
 
 # Tranche C (plan Lancement) : les commandes de vérification de la doc
 # visent ce que signent .goreleaser.yaml et release.yml, avec l'identité et
