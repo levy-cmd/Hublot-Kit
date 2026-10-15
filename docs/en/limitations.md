@@ -77,6 +77,8 @@ The technical spec ([§13, in French](../superpowers/specs/2026-10-07-hublot-kit
 - A line longer than 16 KiB that was still being written when the stream was cut, and begun more than a second before
   the cut, comes back without its start: the live view loses that start, but marks the line as cut instead of showing
   it as complete. The download has the whole line.
+- When the view opens, the past lines shown may start with the end of a line longer than 16 KiB, without any mark:
+  Docker counts the parts of a long line, not lines, and gives no way to tell. The download has the whole line.
 - A logging driver Docker cannot read back (`none`, `syslog`…) gives `logs_unavailable`.
 
 ## Secret masking

@@ -88,6 +88,9 @@ tous les détails.
 - Une ligne de plus de 16 Kio encore en cours d'écriture au moment de la coupure, et commencée plus d'une seconde
   avant elle, revient sans son début : la vue en direct perd ce début, mais marque la ligne comme coupée au lieu de
   la montrer complète. Le téléchargement contient la ligne entière.
+- À l'ouverture de la vue, les lignes passées affichées peuvent commencer par la fin d'une ligne de plus de 16 Kio,
+  sans marque : Docker compte les morceaux d'une ligne longue, pas les lignes, et ne permet pas de le détecter. Le
+  téléchargement contient la ligne entière.
 - Un pilote de logs que Docker ne sait pas relire (`none`, `syslog`…) donne `logs_unavailable`.
 
 ## Masquage des secrets
