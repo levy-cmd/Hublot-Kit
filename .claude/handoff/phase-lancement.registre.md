@@ -33,3 +33,11 @@ Plan : `docs/superpowers/plans/2026-10-13-lancement.md`. Décisions de l'utilisa
   - T5 possède `README*`, `docs/`, `scripts/check-docs.sh` ;
   - T6 possède `.goreleaser.yaml`, `.github/workflows/ci.yml`, `scripts/check-dist.sh`, `.gitignore`.
 - Contrat T5/T6 : le job CI `docs` (`bash scripts/check-docs.sh` sur ubuntu-latest) s'ajoute à `ci.yml` APRÈS la fusion de T5. C'est l'écrivain de `ci.yml` qui l'ajoute. Les noms d'archives et l'image citée dans la doc doivent égaler ceux de `.goreleaser.yaml` ; `check-docs.sh` est à étendre si besoin.
+- 2026-10-15, première application des règles :
+  - **Task 5 (docs)** : 2deb213, 9ae591c (cinq limites de §13 ajoutées, IP seulement pour `login.fail`, sortie JSON de `cosign verify`, niveaux de titre contrôlés). Validée par le relecteur et par Codex ; fusionnée (9d872c7). `make test` et `check-docs.sh` sont verts.
+    - Ruling: les captures filtrent `/api/containers` pour ne garder que les conteneurs de démonstration. Accepté : c'est la vraie interface, aucune donnée personnelle. À refaire depuis hk-ubuntu, sans filtrage, si l'occasion se présente.
+  - **Task 6 (GoReleaser)** : f05b69f, poussé. `goreleaser check` et `actionlint` sont verts, ainsi qu'un snapshot local avec `README.fr.md`. Le job CI `release-snapshot` était rouge faute de `README.fr.md`, que l'archive exige : c'est une dépendance T6 → T5 ABSENTE du contrat. Leçon : le contrat liste aussi les fichiers qu'une tâche LIT chez une autre.
+    - L'agent a ouvert une PR brouillon #6 sans consigne : écart à signaler, sans effet (dépôt privé).
+    - Instabilité : `TestViewsUnseenIndexesExpire` (`internal/fsview`, délai de grâce de 300 ms sous `-race`) a échoué une fois en CI. À analyser à part.
+  - **Garde cgroup de `check-image.sh`** : la mutation bloquée par les permissions est remplacée par un test unitaire (faux journal) dans la tranche A. L'utilisateur en est informé.
+  - **Révision du plan en tranches A, B, C** : validée par Codex ; l'avis du relecteur est attendu avant le commit.
