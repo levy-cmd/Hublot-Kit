@@ -99,3 +99,13 @@ Plan : `docs/superpowers/plans/2026-10-13-lancement.md`. Décisions de l'utilisa
   - Mutation refusée par le classifieur de permissions (« Security Weaken », identité en `refs/heads/` dans le vrai script) : non contournée, prouvée sur une copie.
   - NON VÉRIFIÉ, à prouver à la rc (T9) : la vraie signature keyless (`signs`, `docker_signs`) et le format des bundles ; `cosign verify` sur GHCR ; `gh release download` d'un brouillon ; le passage de l'artefact `web` au job `release` ; les valeurs réelles de `actor`, `triggering_actor` et `ref_type` sous `workflow_dispatch` ; les droits de `verify` ; l'attestation SBOM de BuildKit au vrai push ; la liste réelle des 8 fichiers.
   - Plan T9 : si `verify` échoue alors que le paquet GHCR est public, supprimer la version (ARRÊT). À ajouter au tableau « Étapes extérieures » en T8.
+- **Task 8 (spec, audit)** : 23dd6a0, 2dc8390, 04af14d.
+  - La spec décrit ce qui est livré : §1 à §4, §6 à §8, §10, §12, §13.
+  - gitleaks v8.30.1 sur tout l'historique (238 commits) : 0 constat.
+  - `check-docs.sh` exige `ReadWritePaths` dans le drop-in.
+  - Ce qui deviendra visible en public (décision avant la T10) : auteur « Livaille An-nour » (noreply GitHub) ; `CLAUDE.md`, `.claude/agents` et `.claude/handoff`, y compris 3 passations supprimées mais restées dans l'historique ; le lien `claude.ai` en spec ligne 5 ; des détails de la machine de dev (Homebrew, socket Docker, disque, VM) ; le type de compte GitHub ; toutes les branches et PR, dont `phase/observation-t7-wip` et le brouillon #6.
+- **Revue finale de branche** (253056a..0cb5b1b) : « branche prête pour la rc », selon le relecteur et selon Codex. Run 38780793049 vert (9 jobs).
+  - Défaut Important trouvé, puis corrigé (0cb5b1b) : sans `GORELEASER_CURRENT_TAG`, un lancement sur `v0.1.0` posé sur le commit de la rc construisait `0.1.0-rc.1`. Il repoussait l'image de la rc avec une signature `refs/tags/v0.1.0` et réécrivait son brouillon. Prouvé puis corrigé avec GoReleaser 2.18.3.
+  - Minors corrigés : `check-docs.sh` exige `HUBLOT_LISTEN=127.0.0.1:7878` dans l'unité ; §12 précise que les VM ont testé des artefacts de snapshot.
+  - Ruling: le job `integration` exécute le code d'une PR sous `sudo` sur `pull_request`. Écarté : ce n'est pas `pull_request_target`, il n'y a aucun secret, le jeton est en lecture, le runner est éphémère, et le job existe depuis le Socle. Codex est d'accord.
+  - POUR LA T9 : `ubuntu-latest` passe à Ubuntu 26 le 2026-10-19. Si la rc part après cette date, relancer d'abord la CI sur la nouvelle image.
