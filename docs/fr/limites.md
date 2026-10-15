@@ -41,6 +41,14 @@ tous les détails.
   un pseudo-système ou un FUSE, et toujours pour `/`. Un montage ajouté entre le contrôle et le téléchargement (il
   faut `CAP_SYS_ADMIN` dans le conteneur) ou un montage NFS « dur » sous le dossier n'est pas refusé, et peut bloquer
   `dockerd`.
+- Un montage ajouté plus tard sur l'hôte sous la source d'un montage de l'hôte n'apparaît pas dans le conteneur actif
+  (propagation `rprivate` par défaut) et n'est pas détecté, alors que Docker peut le voir en construisant l'archive.
+- Un conteneur ouvert arrêté, puis démarré avant le téléchargement : seul le contrôle des montages de l'hôte est
+  refait, pas les autres contrôles de montage d'un conteneur actif.
+- Un conteneur dont la racine du process a été déplacée par un chroot : l'explorateur montre la vue depuis la racine
+  de son PID 1, et le téléchargement d'un dossier est refusé quand la table des montages n'a pas `/` ou un montage que
+  Docker déclare. Une destination de montage visible telle quelle, sans lien symbolique sur son chemin, est prise sans
+  preuve d'identité : un téléchargement peut alors bloquer `dockerd`.
 
 ## Écritures
 
@@ -59,6 +67,12 @@ tous les détails.
   pour l'écriture jusqu'au redémarrage de l'agent ; l'interface peut alors dire à tort que l'écriture a peut-être eu
   lieu.
 - Une prison chroot montée par le conteneur lui-même (`CAP_SYS_ADMIN`) n'est pas vue.
+- Un tmpfs leurre monté par le conteneur lui-même (`CAP_SYS_ADMIN`) sur la cible d'un lien symbolique posé après le
+  démarrage : une écriture peut alors réussir sans que le conteneur la voie (ce n'est pas une évasion).
+- Conteneur arrêté dont la destination d'un tmpfs passe par un lien symbolique situé dans un volume ou un montage de
+  l'hôte : un lien posé là plus tard (par l'hôte ou un autre conteneur) n'est pas vu par l'index, et le tmpfs peut
+  être monté ailleurs au démarrage suivant ; une écriture peut alors réussir sans que le conteneur redémarré la voie
+  (ce n'est pas une évasion).
 
 ## Logs
 
@@ -66,6 +80,8 @@ tous les détails.
 - Au-delà de 1 000 lignes par seconde, les lignes en trop ne s'affichent pas mais sont comptées ; le téléchargement
   les contient toutes.
 - 8 flux au plus pour l'agent ; quand ils sont tous pris, le flux le plus ancien cède sa place et le dit.
+- Un client parti sans fermer sa connexion (veille, changement de réseau) garde son flux ouvert côté agent pendant
+  environ 15 minutes, et tient l'un des 8 créneaux jusque-là, sauf si un flux plus récent le lui prend.
 - La reprise après une coupure peut rejouer quelques lignes de même horodatage, compter deux fois des lignes
   écartées, ou sauter des lignes après une rotation du journal ou un recul de l'horloge.
 - Un pilote de logs que Docker ne sait pas relire (`none`, `syslog`…) donne `logs_unavailable`.

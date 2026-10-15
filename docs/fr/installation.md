@@ -240,4 +240,5 @@ docker buildx imagetools inspect ghcr.io/levy-cmd/hublot-kit:0.1 --format '{{ js
 ```
 
 Pour lancer exactement l'image vérifiée, remplacez `:0.1` dans la commande de [Docker](#docker-recommandé) par
-l'empreinte qu'affiche `cosign verify` (`ghcr.io/levy-cmd/hublot-kit@sha256:…`).
+l'empreinte de l'image vérifiée : `cosign verify` affiche du JSON, où `critical.image.docker-manifest-digest` la
+donne (`sha256:…`). La référence devient `ghcr.io/levy-cmd/hublot-kit@sha256:…`.

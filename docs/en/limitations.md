@@ -35,6 +35,14 @@ The technical spec ([§13, in French](../superpowers/specs/2026-10-07-hublot-kit
 - Downloading a folder of a running container is refused when the archive would cross a host bind, a
   pseudo-filesystem or a FUSE mount, and always for `/`. A mount added between the check and the download (it needs
   `CAP_SYS_ADMIN` in the container) or a "hard" NFS mount below the folder is not refused, and can block `dockerd`.
+- A mount added later on the host below the source of a bind does not appear in the running container (default
+  `rprivate` propagation) and is not detected, although Docker may see it when it builds the archive.
+- A container opened while stopped, then started before the download: only the check of the host binds is run again,
+  not the other mount checks of a running container.
+- A container whose process root was moved by a chroot: the explorer shows the view from the root of its PID 1, and
+  folder downloads are refused when the mount table lacks `/` or a mount that Docker declares. A mount destination
+  visible as is, with no symbolic link on its path, is taken without proof of identity: a download may then block
+  `dockerd`.
 
 ## Writes
 
@@ -51,12 +59,19 @@ The technical spec ([§13, in French](../superpowers/specs/2026-10-07-hublot-kit
 - A write under a stuck FUSE or "hard" NFS mount can block `dockerd`, and the container stays locked for writes until
   the agent restarts; the interface may then wrongly say that the write may have happened.
 - A chroot jail mounted by the container itself (`CAP_SYS_ADMIN`) is not seen.
+- A decoy tmpfs mounted by the container itself (`CAP_SYS_ADMIN`) on the target of a symbolic link placed after the
+  start: a write can then succeed without the container seeing it (not an escape).
+- Stopped container whose tmpfs destination goes through a symbolic link located in a volume or a bind: a link
+  placed there later (by the host or another container) is not seen by the index, and the tmpfs may be mounted
+  elsewhere at the next start; a write can then succeed without the restarted container seeing it (not an escape).
 
 ## Logs
 
 - Logs are shown as `docker logs` shows them: secrets written by the application are not masked.
 - Beyond 1,000 lines per second, extra lines are not displayed but counted; the download has them all.
 - At most 8 streams for the agent; when they are all taken, the oldest stream gives its place and says so.
+- A client gone without closing its connection (sleep, network change) keeps its stream open on the agent side for
+  about 15 minutes, and holds one of the 8 slots until then, unless a newer stream takes it.
 - Resuming after a cut can replay a few lines that share a timestamp, count dropped lines twice, or skip lines after
   a log rotation or a clock going backwards.
 - A logging driver Docker cannot read back (`none`, `syslog`…) gives `logs_unavailable`.

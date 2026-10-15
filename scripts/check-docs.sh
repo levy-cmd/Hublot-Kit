@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Contrôles de la documentation publique (plan Lancement, spec §8 et §12) :
-# - chaque page existe en anglais et en français, avec le même nombre de titres
+# - chaque page existe en anglais et en français, avec les mêmes niveaux de titres
 #   et exactement les mêmes blocs de code (les commandes ne se traduisent pas) ;
 # - la commande `docker run` de README.md, README.fr.md et des pages
 #   d'installation est celle de la spec §8, à l'octet près ;
@@ -31,7 +31,8 @@ for p in $pairs; do
   ok=1
   for f in "$en" "$fr"; do [ -f "$f" ] || { err "$f absent"; ok=0; }; done
   [ $ok = 1 ] || continue
-  [ "$(grep -c '^#' "$en")" = "$(grep -c '^#' "$fr")" ] || err "$en et $fr : nombre de titres différent"
+  # Suite des niveaux de titres (#, ##, ###…) : même nombre, même ordre, même niveau.
+  [ "$(grep -o '^#*' "$en")" = "$(grep -o '^#*' "$fr")" ] || err "$en et $fr : titres différents (nombre ou niveau)"
   [ "$(code_blocks "$en")" = "$(code_blocks "$fr")" ] || err "$en et $fr : blocs de code différents"
 done
 
