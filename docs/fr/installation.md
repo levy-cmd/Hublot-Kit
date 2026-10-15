@@ -232,8 +232,12 @@ sans clé (keyless), liées au workflow de release de ce dépôt. Il faut cosign
 
 Ce que prouve une signature valide : le fichier ou l'image sort de ce workflow, lancé sur ce tag, et n'a pas changé
 depuis. Ce qu'elle ne prouve pas : que le code du tag a été relu, ni qu'un SBOM est complet (il liste ce que syft,
-pour les archives, et BuildKit, pour l'image, ont trouvé dans le binaire). Aucune provenance SLSA n'est publiée en
-v0.1.
+pour les archives, et BuildKit, pour l'image, ont trouvé dans le binaire). Le texte de la page de release n'est pas
+signé non plus. Aucune provenance SLSA n'est publiée en v0.1.
+
+Chaque release est contrôlée par [scripts/verify-release.sh](../../scripts/verify-release.sh) avant sa publication :
+les commandes ci-dessous, avec la même identité et le même émetteur, plus le bundle propre à chaque archive, les SBOM
+(SPDX, module de l'agent présent) et les plateformes de l'image.
 
 ### Archives
 
@@ -258,7 +262,9 @@ sha256sum --ignore-missing -c checksums.txt
 
 ### Image
 
-L'image est signée par son empreinte, pour linux/amd64 et linux/arm64, et porte une attestation SBOM.
+L'image est signée par son empreinte, pour linux/amd64 et linux/arm64, et porte une attestation SBOM. La signature
+couvre l'index de l'image, qui désigne par empreinte l'image de chaque plateforme et son attestation SBOM. L'identité
+ci-dessous accepte toute release `v0.1.N` et refuse une pré-version (`-rc.N`).
 
 ```sh
 cosign verify \

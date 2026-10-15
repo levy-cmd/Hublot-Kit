@@ -228,8 +228,12 @@ the release workflow of this repository. You need cosign 3.0 or later.
 
 What a valid signature proves: the file or the image was produced by that workflow, run on that tag, and has not
 changed since. What it does not prove: that the code of the tag was reviewed, or that an SBOM is complete (it lists
-what syft, for the archives, and BuildKit, for the image, found in the binary). No SLSA provenance is published in
-v0.1.
+what syft, for the archives, and BuildKit, for the image, found in the binary). The text of the release page is not
+signed either. No SLSA provenance is published in v0.1.
+
+Every release is checked by [scripts/verify-release.sh](../../scripts/verify-release.sh) before it is published: the
+commands below, with the same identity and issuer, plus each archive's own bundle, the SBOMs (SPDX, agent module
+listed) and the image platforms.
 
 ### Archives
 
@@ -254,7 +258,9 @@ sha256sum --ignore-missing -c checksums.txt
 
 ### Image
 
-The image is signed by digest, for linux/amd64 and linux/arm64, and carries an SBOM attestation.
+The image is signed by digest, for linux/amd64 and linux/arm64, and carries an SBOM attestation. The signature covers
+the image index, which names by digest the image of each platform and its SBOM attestation. The identity below accepts
+any `v0.1.N` release and refuses a pre-release (`-rc.N`).
 
 ```sh
 cosign verify \

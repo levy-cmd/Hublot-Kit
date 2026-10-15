@@ -133,5 +133,26 @@ for f in docs/en/install.md docs/fr/installation.md; do
   done
 done
 
+# Tranche C (plan Lancement) : les commandes de vérification de la doc
+# visent ce que signent .goreleaser.yaml et release.yml, avec l'identité et
+# l'émetteur que vérifie scripts/verify-release.sh.
+wf=.github/workflows/release.yml
+vr=scripts/verify-release.sh
+[ -f "$wf" ] || err "$wf absent"
+grep -qx 'name_template: checksums.txt' <(sed 's/^ *//' "$gr") || err "$gr : checksums.txt renommé"
+[ "$(grep -c 'signature: "${artifact}.sigstore.json"' "$gr")" = 2 ] || err "$gr : bundles .sigstore.json (checksums et archives) attendus"
+grep -qF 'identity="https://github.com/$repo/.github/workflows/release.yml@refs/tags/$tag"' "$vr" ||
+  err "$vr : identité différente de celle de la doc"
+grep -qxF 'issuer=https://token.actions.githubusercontent.com' "$vr" || err "$vr : émetteur différent de celui de la doc"
+for f in docs/en/install.md docs/fr/installation.md; do
+  [ -f "$f" ] || continue
+  grep -qF -- '--certificate-identity "https://github.com/levy-cmd/Hublot-Kit/.github/workflows/release.yml@refs/tags/v$V"' "$f" ||
+    err "$f : identité de signature des archives"
+  grep -qF -- "--certificate-identity-regexp '^https://github\.com/levy-cmd/Hublot-Kit/\.github/workflows/release\.yml@refs/tags/v0\.1\.[0-9]+\$'" "$f" ||
+    err "$f : identité de signature de l'image"
+  grep -qF -- '--certificate-oidc-issuer https://token.actions.githubusercontent.com' "$f" || err "$f : émetteur OIDC"
+  grep -qF 'checksums.txt.sigstore.json' "$f" || err "$f : bundle de checksums.txt"
+done
+
 [ $errors = 0 ] || { echo "$errors erreur(s)" >&2; exit 1; }
 echo "DOCS OK"
