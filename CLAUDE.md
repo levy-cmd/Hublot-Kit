@@ -13,3 +13,10 @@ Interface web pour explorer l'intérieur des conteneurs Docker d'un serveur. Age
 - Le code Linux (`/proc`, `openat2`, pidfd) se teste sous Linux : conteneur `golang`, ou VM Lima `hk-ubuntu` (AppArmor) / `hk-fedora` (SELinux). macOS ne suffit pas.
 - Chaque tâche est relue par un sous-agent indépendant **et** par Codex avant de passer à la suivante.
 - Commits et docs en français.
+
+## Orchestration (tranches verticales, plan adaptatif)
+- **Tranche verticale** : une fonctionnalité se livre de bout en bout (code, tests, doc, vérification sur la cible) ; elle n'est pas répartie en couches entre plusieurs tâches.
+- **Fixe / révisable** : l'objectif métier et les critères d'acceptation, écrits dans le plan, ne changent pas sans l'accord de l'utilisateur. Le plan d'exécution peut évoluer selon les résultats ; chaque révision est consignée au registre de la phase (`.claude/handoff/<phase>.registre.md`) avec sa raison.
+- **Contrat avant parallèle** : avant deux implémentations en parallèle, écrire au registre le contrat partagé (formats, interfaces) et la propriété des fichiers. Un fichier n'a qu'un seul écrivain à la fois ; le travail parallèle se fait en worktree ; la fusion revient au coordinateur, suivie de `make test`.
+- **Terminé** veut dire : tests pertinents exécutés, revue `relecteur` et revue Codex (`codex:codex-rescue` en lecture seule) concordantes ou arbitrées au registre, CI verte si la branche est poussée.
+- **Rôles** : la session principale coordonne ; `implementeur` écrit (`.claude/agents/implementeur.md`) ; `relecteur` relit sans écrire (`.claude/agents/relecteur.md`). Les prompts ne recopient pas ces règles, ils donnent la tâche, les fichiers possédés et le contrat.

@@ -23,3 +23,13 @@ Plan : `docs/superpowers/plans/2026-10-13-lancement.md`. Décisions de l'utilisa
   - `scripts/test-release-lib.sh` joue 11 mutations et fait partie de `make test`. `hk_redact` masque le jeton, en supposant le format de 43 caractères en base64url.
   - Étiquettes OCI reportées à la tâche 6 (`dockers_v2`).
   - En attente de l'utilisateur : la mutation « retirer `--cgroupns=host` » n'a pas été jouée. Le classifieur de permissions a refusé la modification ; personne ne l'a contourné.
+
+## Orchestration (2026-10-15, passage aux tranches verticales)
+- Règles ajoutées à `CLAUDE.md` (section « Orchestration ») ; sous-agents de projet `implementeur` et `relecteur` dans `.claude/agents/`.
+- État au moment du passage : la session précédente s'est arrêtée avec trois agents interrompus.
+  - **T5 (docs)** : terminée sur `phase/lancement-t5` (2deb213), NON relue. Les deux revues ont été interrompues ; le worktree du relecteur est resté verrouillé.
+  - **T6 (GoReleaser)** : un commit local NON poussé (f05b69f) ; la fin de la tâche n'est pas vérifiée (`goreleaser check`, snapshot, job CI).
+- Propriété des fichiers (aucun recouvrement constaté) :
+  - T5 possède `README*`, `docs/`, `scripts/check-docs.sh` ;
+  - T6 possède `.goreleaser.yaml`, `.github/workflows/ci.yml`, `scripts/check-dist.sh`, `.gitignore`.
+- Contrat T5/T6 : le job CI `docs` (`bash scripts/check-docs.sh` sur ubuntu-latest) s'ajoute à `ci.yml` APRÈS la fusion de T5. C'est l'écrivain de `ci.yml` qui l'ajoute. Les noms d'archives et l'image citée dans la doc doivent égaler ceux de `.goreleaser.yaml` ; `check-docs.sh` est à étendre si besoin.
