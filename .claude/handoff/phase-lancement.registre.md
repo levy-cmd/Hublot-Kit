@@ -50,3 +50,11 @@ Plan : `docs/superpowers/plans/2026-10-13-lancement.md`. Décisions de l'utilisa
     - critère : `TestLogsRealDocker` exige l'ordre au sein de chaque flux, sans rien perdre de ce qu'il couvre ; `TestViewsUnseenIndexesExpire` ne dépend plus du temps réel sous `-race` ;
     - preuve : `-count=20` sous Linux.
 - CLAUDE.md, section Orchestration complétée : contenu d'une délégation, déléguer seulement si c'est utile, adaptation en cours de route, rapport de fin sur preuves.
+- **Task 6 (GoReleaser, `release-snapshot`)** : f05b69f, e3a8f8c. Validée par le relecteur et par Codex ; run 38762439283 entièrement vert.
+  - Correctifs : `LC_ALL=C sort` dans `check-dist.sh` ; `CHECK_DIST_EXEC` exécute `--version` sur amd64 ; `permissions` déclarées par job ; `persist-credentials: false` sur les jobs npm ; pas d'annulation sur `main` ; syft v1.54.1.
+  - Ruling: l'épinglage par empreinte de `checkout`, `setup-go` et `setup-node` est écarté (Q40 : actions de GitHub en version majeure). Codex est d'accord.
+  - Non couvert : en CI, la version arm64 n'est vérifiée que par recherche dans le binaire. Son exécution est faite sur les VM (tranches A et B).
+  - Minor accepté : GitHub remplace un run en attente, donc trois pushes rapides sur `main` annulent celui du milieu.
+- **Tranche A (Docker)**, lancée en parallèle du correctif « tests instables » :
+  - fichiers possédés : ceux listés par le plan pour A, dont `ci.yml` (job `docs`), `.goreleaser.yaml`, `scripts/release-lib.sh`, `scripts/check-image.sh`, `scripts/test-release-lib.sh`, `scripts/check-docs.sh`, `Dockerfile`, les README et les sections Docker de la doc ;
+  - aucun `_test.go` (ils sont au correctif « tests instables »), ce qui fait zéro recouvrement.
