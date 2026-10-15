@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -298,15 +299,23 @@ func TestViewsFourPolledAtOnce(t *testing.T) {
 func TestViewsUnseenIndexesExpire(t *testing.T) {
 	f := stoppedDocker(t)
 	addStopped(t, f, "c2", "c3", "c4")
-	v := NewViews(f, Options{MaxCached: 3, Grace: 300 * time.Millisecond})
+	// The gate keeps the three builds running while their first request
+	// returns: no request ever sees them (without it, a build finished
+	// before For returned was served, hence evictable at once). Grace is
+	// long: the test ages the indexes itself instead of waiting.
+	g := &gated{Fake: f, open: make(chan struct{})}
+	v := NewViews(g, Options{MaxCached: 3, Grace: time.Hour})
 	for _, n := range []string{"db", "c2", "c3"} {
-		v.For(tctx, n) // 202, then never asked again
+		if _, err := v.For(tctx, n); !errors.Is(err, ErrIndexing) { // 202, then never asked again
+			t.Fatalf("%s : %v, attendu 202", n, err)
+		}
 	}
+	close(g.open)
 	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(time.Millisecond) {
 		v.mu.Lock()
 		done := 0
 		for _, b := range v.builds {
-			if finished(b) {
+			if finished(b) && !b.served {
 				done++
 			}
 		}
@@ -319,10 +328,24 @@ func TestViewsUnseenIndexesExpire(t *testing.T) {
 		}
 	}
 	c4 := strings.Repeat("4", 64)
-	if _, err := v.For(tctx, "c4"); !errors.Is(err, ErrIndexing) || archiveCalls(f, c4, "/") != 0 {
-		t.Fatalf("pendant Grace : %v, %d construction(s) de c4 (attendu 202 et 0)", err, archiveCalls(f, c4, "/"))
+	_, err := v.For(tctx, "c4")
+	v.mu.Lock() // an eviction happens under the lock, before For returns
+	var ids []string
+	for _, b := range v.builds {
+		ids = append(ids, b.id)
 	}
-	time.Sleep(400 * time.Millisecond)
+	v.mu.Unlock()
+	slices.Sort(ids)
+	if want := []string{strings.Repeat("2", 64), strings.Repeat("3", 64), vID}; !errors.Is(err, ErrIndexing) ||
+		!slices.Equal(ids, want) || archiveCalls(f, c4, "/") != 0 {
+		t.Fatalf("pendant Grace : %v, index %v, %d construction(s) de c4 (attendu 202, aucun évincé, 0)",
+			err, ids, archiveCalls(f, c4, "/"))
+	}
+	v.mu.Lock() // Grace has passed for the three unseen indexes
+	for _, b := range v.builds {
+		b.touched = b.touched.Add(-2 * time.Hour)
+	}
+	v.mu.Unlock()
 	ready(t, v, "c4")
 }
 
