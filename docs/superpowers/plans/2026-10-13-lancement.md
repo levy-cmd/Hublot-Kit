@@ -3269,14 +3269,14 @@ git push && gh pr ready && gh pr checks --watch 2>&1 | tail -n 12
 **Files:**
 - Modify: `docs/superpowers/specs/2026-10-07-hublot-kit-v0.1-design.md` (§12), `docs/superpowers/plans/2026-10-13-lancement.md` (constats), par une petite PR sur `main`
 
-- [ ] **Step 1: La PR est fusionnée** — `gh pr view phase/lancement --json state --jq .state` → `MERGED` (fusion faite par l'utilisateur ; la branche est gardée, règle du dépôt). Puis :
+- [x] **Step 1: La PR est fusionnée** — `gh pr view phase/lancement --json state --jq .state` → `MERGED` (fusion faite par l'utilisateur ; la branche est gardée, règle du dépôt). Puis :
 
 ```bash
 git fetch origin && git switch main && git pull --ff-only
 gh run list --workflow ci.yml --branch main --limit 1 --json conclusion --jq '.[0].conclusion'   # attendu : success
 ```
 
-- [ ] **Step 2: ARRÊT : accord de l'utilisateur requis — pousser le tag `v0.1.0`** sur le commit de fusion de `main`, **puis lancer `release.yml` dessus** (le verrou a été éprouvé à la tâche 9, étape 2, et `release.yml` n'a pas changé depuis : `git diff v0.1.0-rc.1 v0.1.0 -- .github/workflows/release.yml` vide, sinon refaire l'étape 2 de la tâche 9 sur `v0.1.0` avant de lancer) : **images `0.1.0` et `0.1` poussées sur GHCR** (paquet encore privé), release **brouillon**, entrées Rekor. Après le « oui » explicite :
+- [x] **Step 2: ARRÊT : accord de l'utilisateur requis — pousser le tag `v0.1.0`** sur le commit de fusion de `main`, **puis lancer `release.yml` dessus** (le verrou a été éprouvé à la tâche 9, étape 2, et `release.yml` n'a pas changé depuis : `git diff v0.1.0-rc.1 v0.1.0 -- .github/workflows/release.yml` vide, sinon refaire l'étape 2 de la tâche 9 sur `v0.1.0` avant de lancer) : **images `0.1.0` et `0.1` poussées sur GHCR** (paquet encore privé), release **brouillon**, entrées Rekor. Après le « oui » explicite :
 
 ```bash
 git tag -a v0.1.0 -m "Hublot-Kit v0.1.0"
@@ -3287,7 +3287,7 @@ sleep 10; gh run watch "$(gh run list --workflow release.yml --event workflow_di
 
 Expected: `guard`, `web`, `release` et `verify` verts, `RELEASE OK : v0.1.0`.
 
-- [ ] **Step 3: Étiquettes et brouillon**
+- [x] **Step 3: Étiquettes et brouillon**
 
 ```bash
 gh api --paginate /users/levy-cmd/packages/container/hublot-kit/versions --jq '.[] | select(.metadata.container.tags | length > 0) | .metadata.container.tags'
@@ -3299,7 +3299,7 @@ gh release view v0.1.0 --json isDraft,isPrerelease --jq '{isDraft, isPrerelease}
 
 Expected: exactement **quatre** versions étiquetées, dans un ordre quelconque : `["0.1.0","0.1"]` sur une même version (même empreinte, l'index 0.1.0) ; `["sha256-<condensé de l'index 0.1.0>"]` ; `["0.1.0-rc.1"]` ; `["sha256-b9d209c5…"]` (index de la rc). Les deux étiquettes `sha256-…` ne sont **pas** un écart : GHCR n'a pas l'API `referrers`, cosign signe donc chaque index en ajoutant cette étiquette de repli (constats de la tâche 9, étapes 4 et 6). Ensuite le condensé de l'index 0.1.0 (`sha256:…`, lu à l'exécution : la version qui porte `0.1.0`), à comparer à celui du journal de la release (étape 2), puis `SIGNATURES OK` : les étiquettes `sha256-…` sont **exactement** celles des index `0.1.0-rc.1` (`sha256:b9d209c5db635faf4293a9881a587954f6271da85ee9acc69b0d599e13c8bc5b`) et `0.1.0`, ni plus ni moins (sinon `diff` affiche l'écart et il n'y a pas de `SIGNATURES OK`). Ni `latest` ni autre étiquette ; `isDraft: true`, `isPrerelease: false`. Le job `verify` a relu les deux étiquettes : `gh run view "$(gh run list --workflow release.yml --limit 1 --json databaseId --jq '.[0].databaseId')" --log | grep -E 'ok ghcr.io'` → `ok ghcr.io/levy-cmd/hublot-kit:0.1.0` et `ok ghcr.io/levy-cmd/hublot-kit:0.1`.
 
-- [ ] **Step 4: La commande de la doc, inchangée, sur les deux VM** (connexion GHCR en lecture, comme à la tâche 9 ; `check-image.sh` sans remplacement : `:0.1` est la référence de la spec)
+- [x] **Step 4: La commande de la doc, inchangée, sur les deux VM** (connexion GHCR en lecture, comme à la tâche 9 ; `check-image.sh` sans remplacement : `:0.1` est la référence de la spec)
 
 ```bash
 for vm in hk-ubuntu hk-fedora; do
@@ -3441,4 +3441,9 @@ gh pr create --base main --title "docs : constats du Lancement (v0.1.0)" --body 
 
 #### Constats de la tâche 10
 
-- *à remplir*
+- **Accord** : le 2026-10-16, l'utilisateur a accordé les étapes 1 à 4, enchaînées (dont l'ARRÊT de l'étape 2), transmis par la session principale ; l'agent a fait la fusion et le tag. Les étapes 5 à 11 attendent un nouvel accord.
+- **Étape 1** (2026-10-16) : checks de la PR #6 verts sur son dernier commit `569ec4f` (9 jobs, run 38909688956). Fusion par commit de fusion à 13:44:23 UTC : `b8e11da` sur `main` (parents `c27d493` et `569ec4f`, arbre identique à `569ec4f`). Branche `phase/lancement` gardée. CI de `main` sur `b8e11da` : `success` (run 38910190514, 9 jobs). Écart au texte : pas de `git switch main` ; le dépôt principal est resté sur `phase/lancement`, le tag a été posé sur le condensé explicite.
+- **Étape 2** : blob de `release.yml` `00cb891` (`00cb8917c4a6a63176193bf5849c503849d749dc`) identique sur `main`, sur `v0.1.0` et sur `v0.1.0-rc.1` ; `git diff v0.1.0-rc.1 v0.1.0 -- .github/workflows/release.yml` vide, l'étape 2 de la tâche 9 n'est donc pas refaite. Tag annoté `v0.1.0` (objet `5389ae2`) sur `b8e11da`, poussé à 13:48:56 UTC. Run 38910819137 lancé à 13:49:13 UTC, 13:49:16 → 13:52:41 UTC : `guard`, `web`, `release`, `verify` verts ; `verify` finit par `RELEASE OK : v0.1.0` (trois `Verified OK`, `ok` pour les deux archives, `ok ghcr.io/levy-cmd/hublot-kit:0.1.0` et `ok ghcr.io/levy-cmd/hublot-kit:0.1`). Binaires construits avec `-X main.version=0.1.0`. Index poussé (journal de GoReleaser) : `sha256:95d771483b3c862ded30eb5cc3d85663010c079f0525212a729584d2245d2de5`. Le `metadata.json` de GoReleaser donne `previous_tag: ""` (la rc n'est pas prise comme tag précédent).
+- **Étape 3** : quatre versions étiquetées, comme attendu : `["0.1.0","0.1"]` sur l'index `sha256:95d77148…` (même condensé que le journal de la release), `["sha256-95d77148…"]`, `["0.1.0-rc.1"]`, `["sha256-b9d209c5…"]` ; `SIGNATURES OK`. Ni `latest` ni autre étiquette. Seize versions en tout : sept pour la rc, neuf pour 0.1.0 (GoReleaser signe une fois par étiquette, `:0.1` puis `:0.1.0`, sur le même condensé : deux référents de signature et un index de repli intermédiaire sans étiquette). Brouillon : `isDraft: true`, `isPrerelease: false`, les 8 fichiers attendus ; `targetCommitish: main`, sans effet (le tag existe et pointe sur `b8e11da`).
+- **Étape 4** (13:54:00 → 13:54:26 UTC) : connexion `docker login ghcr.io` dans chaque VM, jeton de `gh` par stdin (jamais affiché). Commande de la doc inchangée : `IMAGE OK : ghcr.io/levy-cmd/hublot-kit:0.1` sur `hk-ubuntu` et sur `hk-fedora`. Ensuite image supprimée et `docker logout ghcr.io` ; `/root/.docker/config.json` des deux VM : `"auths": {}`, pas de configuration Docker côté utilisateur, aucune image `ghcr.io` restante.
+- **État à la fin de l'étape 4** : release `v0.1.0` en brouillon (non publiée), paquet `hublot-kit` `private`, dépôt `PRIVATE`. Le brouillon `v0.1.0-rc.1` est toujours là (étape 9).
