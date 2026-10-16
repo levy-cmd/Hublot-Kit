@@ -3199,7 +3199,7 @@ sleep 10; gh run watch "$(gh run list --workflow release.yml --event workflow_di
 
 Expected: `guard`, `web`, `release` puis `verify` verts ; le journal de `verify` finit par `RELEASE OK : v0.1.0-rc.1`. En cas d'échec : `gh run view --log-failed | tail -n 60`, corriger sur la branche (commit `correctif : …`, relecture), puis ARRÊT pour `v0.1.0-rc.2` (étapes 1 à 3 à nouveau). Si `verify` échoue alors que le paquet GHCR est déjà public (toute release lancée après la tâche 10, étape 7), l'image de la version refusée est tirable par tous : **ARRÊT : accord de l'utilisateur requis — supprimer cette version de GHCR** (suppression définitive ; interface web du paquet, ou `gh api -X DELETE /user/packages/container/hublot-kit/versions/<id>` avec le droit `delete:packages`), puis vérifier que `docker buildx imagetools inspect ghcr.io/levy-cmd/hublot-kit:<V>` échoue. Le brouillon de release, lui, reste privé.
 
-- [ ] **Step 4: Contrôler ce qui a été créé** — le droit `read:packages` manque d'ordinaire au jeton de `gh` : `gh auth refresh -h github.com -s read:packages` (l'utilisateur valide dans son navigateur).
+- [x] **Step 4: Contrôler ce qui a été créé** — le droit `read:packages` manque d'ordinaire au jeton de `gh` : `gh auth refresh -h github.com -s read:packages` (l'utilisateur valide dans son navigateur).
 
 ```bash
 gh release view v0.1.0-rc.1 --json isDraft,isPrerelease,assets --jq '{isDraft, isPrerelease, assets: [.assets[].name]}'
@@ -3209,7 +3209,7 @@ gh api /users/levy-cmd/packages/container/hublot-kit/versions --jq '.[].metadata
 
 Expected: `isDraft: true`, `isPrerelease: true`, 8 fichiers (`checksums.txt`, `checksums.txt.sigstore.json`, et pour amd64 et arm64 : l'archive, son `.sbom.json`, son `.sigstore.json`) ; `private` ; une seule étiquette, `["0.1.0-rc.1"]` (ni `0.1`, ni `latest`) — les versions sans étiquette sont les manifestes de plateforme, d'attestation et de signature.
 
-- [ ] **Step 5: L'image rc, avec la commande de la doc, sur les deux VM** — connexion à GHCR en lecture, retirée à la fin :
+- [x] **Step 5: L'image rc, avec la commande de la doc, sur les deux VM** — connexion à GHCR en lecture, retirée à la fin :
 
 ```bash
 rc=$(mktemp -d)
@@ -3225,7 +3225,7 @@ done
 
 Expected: `IMAGE OK : ghcr.io/levy-cmd/hublot-kit:0.1.0-rc.1` et `SYSTEMD OK : …` sur les deux VM.
 
-- [ ] **Step 6: La signature et le SBOM vérifiés hors de GitHub** — cosign dans `hk-ubuntu` (binaire de la release de sigstore, contrôlé par sa somme) ; la connexion GHCR de l'étape 5 sert encore :
+- [x] **Step 6: La signature et le SBOM vérifiés hors de GitHub** — cosign dans `hk-ubuntu` (binaire de la release de sigstore, contrôlé par sa somme) ; la connexion GHCR de l'étape 5 sert encore :
 
 ```bash
 limactl shell hk-ubuntu -- sh -c 'cd /tmp && curl -fsSLO https://github.com/sigstore/cosign/releases/download/v3.1.3/cosign-linux-arm64 && curl -fsSL https://github.com/sigstore/cosign/releases/download/v3.1.3/cosign_checksums.txt | grep " cosign-linux-arm64$" | sha256sum -c - && sudo install -m 0755 cosign-linux-arm64 /usr/local/bin/cosign && rm cosign-linux-arm64'
@@ -3243,7 +3243,7 @@ rm -rf "$rc"
 
 Expected: `Verification for ghcr.io/levy-cmd/hublot-kit:0.1.0-rc.1 --` suivi de `The cosign claims were validated` et du JSON ; `"linux/amd64"` et `"linux/arm64"` ; `Verified OK` puis `hublot-kit_0.1.0-rc.1_linux_arm64.tar.gz: OK`. Une signature faite avec une autre identité doit échouer : relancer `cosign verify` avec `@refs/tags/v0.1.0-rc.2` → `none of the expected identities matched`.
 
-- [ ] **Step 7: Constats, commit, puis prêt pour la fusion**
+- [x] **Step 7: Constats, commit, puis prêt pour la fusion**
 
 Noter sous « Constats de la tâche 9 » : durée du workflow, fichiers et étiquettes, version de cosign et format des signatures (bundle, référents OCI ou étiquette `sha256-…`), résultat sur chaque VM, tout correctif et toute rc supplémentaire.
 
@@ -3417,12 +3417,12 @@ gh pr create --base main --title "docs : constats du Lancement (v0.1.0)" --body 
 - **Étape 1** : `phase/lancement` à jour (`c763472`), checks de la PR #6 verts (9 jobs). Tag annoté `v0.1.0-rc.1` (objet `ba883f2`) sur `c763472`, poussé.
 - **Étape 2** : garde local conforme (seul le premier cas accepté). Lancements refusés : run 38783319487 (`--ref v0.1.0-rc.1`, confirmation `v0.1.0-rc.9`) → `failure`, `guard` seul en échec (« confirmation « v0.1.0-rc.9 » différente du tag « v0.1.0-rc.1 » »), `web`, `release`, `verify` sautés ; run 38783372584 (`--ref phase/lancement`) → `failure`, `guard` seul (« à lancer sur un tag (--ref vX.Y.Z), pas sur branch phase/lancement »). `VERROU OK` ; `gh release list` vide.
 - **Étape 3** : run 38783489392, 18:11:00 → 18:14:36 UTC (3 min 36 s ; GoReleaser 2.18.3 : 1 min 45 s), image de runner `ubuntu24/20261004.327`. `guard`, `web`, `release`, `verify` verts ; `verify` finit par `RELEASE OK : v0.1.0-rc.1` (trois `Verified OK`, `ok` pour les deux archives, `cosign verify` de l'image, `ok ghcr.io/levy-cmd/hublot-kit:0.1.0-rc.1`). Valeurs réelles sous `workflow_dispatch` (journal de `guard`) : `REF_TYPE: tag`, `ACTOR: levy-cmd`, `TRIGGER: levy-cmd`, `OWNER: levy-cmd` ; l'API du run donne aussi `actor` et `triggering_actor` = `levy-cmd`. Droits du jeton : `guard` Metadata read seul ; `release` Contents write, Packages write (et OIDC, la signature keyless a réussi) ; `verify` Contents write, Packages read. L'artefact `web-dist` est passé à `release` (téléchargé, empreinte vérifiée, `index.html` présent). Image poussée : `ghcr.io/levy-cmd/hublot-kit:0.1.0-rc.1`, index `sha256:b9d209c5db635faf4293a9881a587954f6271da85ee9acc69b0d599e13c8bc5b`.
-- **Étape 4** (partielle) : brouillon `isDraft: true`, `isPrerelease: true`, exactement les 8 fichiers attendus. Le jeton de `gh` n'a pas `read:packages` (`gh auth refresh -s read:packages` exige l'utilisateur dans son navigateur) : visibilité et étiquettes non lues par l'API. Paquet privé prouvé autrement : le manifeste `0.1.0-rc.1` en anonyme → 403, alors que le même accès anonyme à un paquet public (témoin `goreleaser/goreleaser`) → 200. Seule étiquette d'après GoReleaser : `0.1.0-rc.1` (non confirmée par l'API).
-- **Étape 5** (partielle) : l'archive arm64, téléchargée du brouillon par `gh release download`, donne `SYSTEMD OK` sur `hk-ubuntu` et sur `hk-fedora` (SELinux `unconfined_service_t`). `check-image.sh` sur l'image GHCR : **en attente** de `read:packages` (connexion `docker login ghcr.io` avec le jeton de `gh`).
-- **Étape 6** (partielle) : cosign v3.1.3 (somme contrôlée) dans `hk-ubuntu` : `cosign verify-blob` du bundle de `checksums.txt` → `Verified OK`, puis `hublot-kit_0.1.0-rc.1_linux_arm64.tar.gz: OK` ; avec l'identité `@refs/tags/v0.1.0-rc.2` → `no matching CertificateIdentity found`. Format des signatures de fichiers : bundles `application/vnd.dev.sigstore.bundle.v0.3+json` (certificat, entrée `hashedrekord` 0.0.1, horodatage). `cosign verify` de l'image et l'inspection SBOM hors de GitHub : **en attente** de `read:packages` (faits dans `verify` sur GitHub, verts) ; le format de la signature d'image (référents OCI ou étiquette `sha256-…`) reste à lire.
-- **Entrées Rekor** (publiques, permanentes) : `checksums.txt` logIndex 3267280145 (lu sur `rekor.sigstore.dev`), archive arm64 3267279982, archive amd64 3267282183, plus la signature de l'image.
+- **Étape 4** : brouillon `isDraft: true`, `isPrerelease: true`, exactement les 8 fichiers attendus. Le 2026-10-15, le jeton de `gh` n'avait pas `read:packages` ; l'utilisateur l'a ajouté (`gist, read:org, read:packages, repo, workflow`). Paquet `hublot-kit` : `visibility: private` (API) ; en anonyme, le manifeste `0.1.0-rc.1` → 403, contre 200 pour un paquet public témoin. Sept versions ; étiquettes : `0.1.0-rc.1` sur l'index `sha256:b9d209c5…`, et `sha256-b9d209c5…` (repli des référents OCI, voir étape 6) ; **ni `0.1` ni `latest`**. Écart au texte attendu (« une seule étiquette ») : l'étiquette `sha256-…` est celle de la signature, cas prévu à l'étape 7. Les cinq versions sans étiquette sont les manifestes de plateforme, d'attestation SBOM et de signature.
+- **Étape 5** : connexion `docker login ghcr.io` dans chaque VM avec le jeton de `gh` passé par stdin (jamais affiché). `IMAGE OK : ghcr.io/levy-cmd/hublot-kit:0.1.0-rc.1` sur `hk-ubuntu` et sur `hk-fedora`. L'archive arm64, téléchargée du brouillon par `gh release download`, donne `SYSTEMD OK` sur les deux VM (SELinux `unconfined_service_t` sur `hk-fedora`). AppArmor : `0` refus ; SELinux : `<no matches>`. Ensuite `docker logout ghcr.io`, image rc supprimée ; `/root/.docker/config.json` des deux VM : `"auths": {}`.
+- **Étape 6** : cosign v3.1.3 (somme contrôlée) dans `hk-ubuntu`. `cosign verify` de l'image avec l'identité `@refs/tags/v0.1.0-rc.1` → `Verification for ghcr.io/levy-cmd/hublot-kit:0.1.0-rc.1 --`, `The cosign claims were validated`, une signature, sur le condensé `sha256:b9d209c5…` ; avec `@refs/tags/v0.1.0-rc.2` → code 1, `no matching CertificateIdentity found`. Attestations SBOM de BuildKit : `"linux/amd64"` et `"linux/arm64"`, SPDX-2.3, 23 paquets chacune. Fichiers : `cosign verify-blob` du bundle de `checksums.txt` → `Verified OK`, puis `hublot-kit_0.1.0-rc.1_linux_arm64.tar.gz: OK` ; identité `rc.2` → `no matching CertificateIdentity found`. **Format des signatures** : fichiers, bundles `application/vnd.dev.sigstore.bundle.v0.3+json` (certificat, entrée `hashedrekord` 0.0.1, horodatage) ; image, référent OCI 1.1 (manifeste `sha256:9822a851…`, `artifactType` et couche `application/vnd.dev.sigstore.bundle.v0.3+json`, `subject` = l'index), publié par le schéma de repli : GHCR n'a pas l'API `referrers` (404), cosign écrit donc l'étiquette `sha256-<condensé>`, un index qui liste ce référent. Pas d'ancien format `.sig` (404). Le bundle de l'image porte une entrée Rekor `dsse`.
+- **Entrées Rekor** (publiques, permanentes) : `checksums.txt` logIndex 3267280145 (lu sur `rekor.sigstore.dev`), archive arm64 3267279982, archive amd64 3267282183, image 3267286498.
 - **Détail** : le brouillon affiche `targetCommitish: main` ; sans effet, le tag existe déjà et pointe sur `c763472`.
-- Aucun correctif, aucune rc supplémentaire.
+- Aucun correctif, aucune rc supplémentaire. La branche `ci/release-dispatch` a été préparée dans un worktree temporaire (supprimé) ; le dépôt principal est resté sur `phase/lancement`.
 
 #### Constats de la tâche 10
 
