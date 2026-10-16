@@ -2,7 +2,7 @@
 
 - **Date** : 2026-10-07
 - **Statut** : validée le 2026-10-07
-- **Cahier des charges (le quoi)** : https://claude.ai/code/artifact/86c33f3d-d4d1-4b9b-bae5-756b8276c139
+- **Cahier des charges (le quoi)** : document privé de l'auteur, non publié
 - **Ce document (le comment)** : architecture, contrats et règles d'implémentation de la v0.1. En cas d'écart, le cahier des charges fait foi sur le périmètre, cette spec sur la technique.
 
 ## 1. Objectif
