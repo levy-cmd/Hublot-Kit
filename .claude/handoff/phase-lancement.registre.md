@@ -131,3 +131,16 @@ Plan : `docs/superpowers/plans/2026-10-13-lancement.md`. Décisions de l'utilisa
   - Ruling: les 16 versions du paquet sont sans risque. GoReleaser signe une fois par étiquette ; les deux bundles portent le même certificat, l'index intermédiaire n'est pas consulté par cosign, et une signature orpheline ne peut pas tromper la vérification par identité.
   - Ruling: la PR #6 a été fusionnée par l'agent, conformément à l'accord « tout enchaîner » du 2026-10-16.
   - Décisions de l'utilisateur (2026-10-16) pour le passage en public : nettoyer le léger (lien claude.ai retiré de la spec en 569ec4f ; 18 branches de travail supprimées, branches de phase gardées) ; brouillon de la rc à supprimer ; étapes 5 et 6 à reconfirmer.
+- **Task 10, étapes 5 à 10 : v0.1.0 publique (2026-10-16)**
+  - Étape 5 refusée à un agent par le classifieur de permissions (« Create Public Surface »), sans contournement.
+  - L'utilisateur a fait lui-même les étapes 5 et 6 (dépôt public, signalement privé des vulnérabilités activé, release `v0.1.0` publiée en « latest ») et l'étape 7 (paquet GHCR rendu public dans l'interface).
+  - Vérifié par la session : dépôt `PUBLIC`, `private-vulnerability-reporting` à `true`, release `isDraft=false`, paquet `public` ; manifeste `:0.1` lu sans connexion (200).
+  - Étape 8, vérification anonyme :
+    - `IMAGE OK` sur les deux VM, image tirée sans connexion ;
+    - `cosign verify` sur `:0.1.0` et `:0.1` avec l'identité `refs/tags/v0.1.0`, refusé avec `v0.1.1` ;
+    - SBOM SPDX-2.3 pour amd64 et arm64 ;
+    - bloc « Verify the release » : `Verified OK`, et somme de l'archive arm64 OK.
+  - Étape 9 : brouillon `v0.1.0-rc.1` supprimé ; le tag et l'image `0.1.0-rc.1` restent.
+  - Étape 10 : PR de clôture #8 (`docs/lancement-constats` → `main`), CI verte. À fusionner par l'utilisateur après l'étape 11.
+  - Reste à l'utilisateur : retirer `read:packages` du jeton `gh` (`gh auth refresh -h github.com -r read:packages`).
+  - Écart mineur : avec `head -n 3`, le `cosign verify` par motif affiche le JSON avant la ligne « Verification for… », car stdout sort avant stderr. La vérification est verte.
