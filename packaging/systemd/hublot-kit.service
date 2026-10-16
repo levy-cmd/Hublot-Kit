@@ -1,0 +1,33 @@
+# Hublot-Kit agent, run as root outside a container (spec §8, alternative).
+# Install: see docs/en/install.md ("Binary and systemd").
+# Settings: `systemctl edit hublot-kit`, then e.g.
+#   [Service]
+#   Environment=HUBLOT_PUBLIC_ORIGIN=https://hublot.example.com
+# Every flag has a HUBLOT_* equivalent (`hublot --help`).
+#
+# The agent talks to the Docker socket and reads container files through
+# /proc/<pid>/root: it is root on the host in practice. The sandboxing below
+# only limits mistakes; directives that would hide /proc of other processes
+# (ProtectProc, PrivateUsers…) or drop capabilities would break the explorer.
+
+[Unit]
+Description=Hublot-Kit, Docker container explorer
+Documentation=https://github.com/levy-cmd/Hublot-Kit
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/hublot
+Restart=on-failure
+RestartSec=5s
+Environment=HUBLOT_LISTEN=127.0.0.1:7878
+Environment=HUBLOT_DATA_DIR=/var/lib/hublot-kit
+StateDirectory=hublot-kit
+StateDirectoryMode=0700
+NoNewPrivileges=yes
+ProtectSystem=strict
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

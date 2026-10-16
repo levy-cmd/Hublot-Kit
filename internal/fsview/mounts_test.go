@@ -47,7 +47,7 @@ func TestHostBind(t *testing.T) {
 		{vol("sshfs", "/remote", "local"), []string{"sshfs", "type=fuse.sshfs", "/remote"}},
 		{vol("ceph", "/c", "rexray/rbd"), []string{"ceph", "/c", "rexray/rbd"}},
 		{vol("anon", "/a", ""), []string{"anon", "/a"}},
-		{vol("gone", "/g", "local"), []string{"gone", "/g", "options illisibles"}},
+		{vol("gone", "/g", "local"), []string{"gone", "/g", "unreadable options"}},
 		{bind("proc", "/rel"), []string{"bind proc -> /rel"}},                   // not absolute: fail closed
 		{vol("rel-vol", "/r", "local"), []string{"bind proc -> /r", "rel-vol"}}, // idem for a device
 		{vol("fb", "/fb", "local"), []string{"fb", "type=fuseblk.ntfs", "/fb"}},
@@ -122,7 +122,7 @@ func TestPseudoMountUnder(t *testing.T) {
 		t.Fatal("une ligne illisible doit refuser (échec fermé)")
 	}
 	// The options field is "-": the separator is one field too early.
-	if _, typ, found := PseudoMountUnder("700 600 0:70 / /mnt - ext4 /dev/sdb1 rw\n", "/etc"); !found || !strings.Contains(typ, "illisible") {
+	if _, typ, found := PseudoMountUnder("700 600 0:70 / /mnt - ext4 /dev/sdb1 rw\n", "/etc"); !found || !strings.Contains(typ, "unreadable") {
 		t.Fatalf("séparateur à la place des options accepté : %q, %v", typ, found)
 	}
 	if _, _, found := PseudoMountUnder("700 600 0:70 / /mnt rw - fuseblk.ntfs /dev/sdb1 rw\n", "/mnt"); !found {
@@ -158,7 +158,7 @@ func TestPseudoMountUnderEdgeCases(t *testing.T) {
 	}
 	for _, bad := range []string{`/bad\08x`, `/bad\9`, `/end\`, `/short\04`} {
 		line := "700 600 254:1 / " + bad + " rw - ext4 /dev/vda1 rw\n"
-		if _, typ, found := PseudoMountUnder(line, "/etc"); !found || !strings.Contains(typ, "échappement") {
+		if _, typ, found := PseudoMountUnder(line, "/etc"); !found || !strings.Contains(typ, "escape") {
 			t.Errorf("%q : échappement invalide accepté (%q, %v)", bad, typ, found)
 		}
 	}
@@ -198,13 +198,13 @@ func TestCheckVisibleMounts(t *testing.T) {
 	}
 	// Destination missing (moved root, or under a symlink).
 	err := CheckVisibleMounts(sampleMountinfo, []dockerx.Mount{m("/link/m")})
-	if !errors.Is(err, ErrForbiddenPath) || !strings.Contains(err.Error(), "ne montre pas la destination /link/m") {
+	if !errors.Is(err, ErrForbiddenPath) || !strings.Contains(err.Error(), "does not show the destination /link/m") {
 		t.Fatalf("destination absente : %v", err)
 	}
 	// No "/" line: the process root was moved to a jail.
 	const jail = "700 600 254:1 / /jail/x rw - ext4 /dev/vda1 rw\n"
 	err = CheckVisibleMounts(jail, nil)
-	if !errors.Is(err, ErrForbiddenPath) || !strings.Contains(err.Error(), `pas de racine "/"`) {
+	if !errors.Is(err, ErrForbiddenPath) || !strings.Contains(err.Error(), `has no "/" root`) {
 		t.Fatalf("pas de racine : %v", err)
 	}
 	if err := CheckVisibleMounts("garbage\n", nil); !errors.Is(err, ErrForbiddenPath) {

@@ -66,7 +66,7 @@ describe('logs (F6)', () => {
 	// Q37: how each end of a stream is handled; none reconnects.
 	it('decides what an end of stream does', () => {
 		expect(streamEnd('end')).toEqual({ status: 'ended' });
-		expect(streamEnd('failure', '{"error":"unauthorized","detail":"session terminée"}')).toEqual({ status: 'error', code: 'unauthorized', login: true });
+		expect(streamEnd('failure', '{"error":"unauthorized","detail":"session ended"}')).toEqual({ status: 'error', code: 'unauthorized', login: true });
 		expect(streamEnd('failure', '{"error":"logs_unavailable"}')).toEqual({ status: 'error', code: 'logs_unavailable' });
 		expect(streamEnd('failure', 'garbage')).toEqual({ status: 'error', code: 'unknown' });
 		expect(streamEnd('evicted', '{"error":"internal"}')).toEqual({ status: 'error', code: 'evicted' });

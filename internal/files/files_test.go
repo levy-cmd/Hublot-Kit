@@ -390,7 +390,7 @@ func TestPutFailureIsAudited(t *testing.T) {
 	if s := r.j.Steps(); !slices.Equal(s, []string{"audit:intent", "put:/etc", "forget:" + cid, "audit:error"}) {
 		t.Fatalf("ordre : %v, attendu audit → écriture (échouée) → oubli de l'index → audit", s)
 	}
-	if e := r.j.events[1]; !strings.Contains(e.Error, "refusé") {
+	if e := r.j.events[1]; !strings.Contains(e.Error, "refused") {
 		t.Errorf("résultat : %+v", e)
 	}
 	if !slices.Equal(r.forgot, []string{cid}) {

@@ -40,7 +40,7 @@ func (s *server) fsFile(w http.ResponseWriter, r *http.Request) {
 			return nil, err
 		}
 		if len(b) > previewMax {
-			return nil, fmt.Errorf("%w : aperçu limité à %d octets", fsview.ErrTooLarge, previewMax)
+			return nil, fmt.Errorf("%w: preview limited to %d bytes", fsview.ErrTooLarge, previewMax)
 		}
 		return b, nil
 	}, nil)

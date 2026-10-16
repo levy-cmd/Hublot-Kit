@@ -12,5 +12,5 @@ import (
 // container (scripts/dev-agent.sh); the tests that need Linux run through
 // scripts/test-linux.sh.
 func openProcFS(dockerx.Client, dockerx.ContainerInfo, func(int) ([]byte, error)) (FS, error) {
-	return nil, errors.New("explorateur : Linux uniquement (sur macOS, lancez l'agent dans un conteneur)")
+	return nil, errors.New("explorer: Linux only (on macOS, run the agent in a container)")
 }

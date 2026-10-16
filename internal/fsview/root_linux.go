@@ -46,10 +46,10 @@ var pidfdExited = func(pidfd int) (bool, error) {
 func alive(pidfd, pid int) error {
 	exited, err := pidfdExited(pidfd)
 	if err != nil {
-		return fmt.Errorf("poll du pidfd du process %d : %w", pid, err)
+		return fmt.Errorf("poll of the pidfd of process %d: %w", pid, err)
 	}
 	if exited {
-		return changed("le process %d s'est terminé", pid)
+		return changed("process %d has exited", pid)
 	}
 	return nil
 }
@@ -63,7 +63,7 @@ func openRoot(pid int, containerID string, read func(int) ([]byte, error)) (*os.
 	}
 	pidfd, err := unix.PidfdOpen(pid, 0)
 	if err != nil {
-		return nil, -1, changed("pidfd_open(%d) : %v", pid, err)
+		return nil, -1, changed("pidfd_open(%d): %v", pid, err)
 	}
 	fail := func(err error) (*os.File, int, error) {
 		unix.Close(pidfd)
@@ -71,21 +71,21 @@ func openRoot(pid int, containerID string, read func(int) ([]byte, error)) (*os.
 	}
 	cg, err := read(pid)
 	if err != nil {
-		return fail(changed("lecture du cgroup du pid %d : %v", pid, err))
+		return fail(changed("reading the cgroup of pid %d: %v", pid, err))
 	}
 	if !CgroupHasID(string(cg), containerID) {
-		return fail(changed("le pid %d n'est pas dans le cgroup du conteneur %.12s", pid, containerID))
+		return fail(changed("pid %d is not in the cgroup of container %.12s", pid, containerID))
 	}
 	fd, err := unix.Open(fmt.Sprintf("/proc/%d/root", pid), unix.O_PATH|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
 	switch {
 	case errors.Is(err, unix.ENOENT), errors.Is(err, unix.ESRCH):
-		return fail(changed("ouverture de /proc/%d/root : %v", pid, err))
+		return fail(changed("opening /proc/%d/root: %v", pid, err))
 	case errors.Is(err, unix.EACCES):
-		return fail(fmt.Errorf("ouverture de /proc/%d/root : %w ; causes mesurées (spec §8) : "+
-			"--cap-add SYS_PTRACE absent, ou cible non confinée (--privileged, apparmor=unconfined) "+
-			"sans --security-opt apparmor=unconfined sur l'agent", pid, err))
+		return fail(fmt.Errorf("opening /proc/%d/root: %w; measured causes (spec §8): "+
+			"--cap-add SYS_PTRACE missing, or unconfined target (--privileged, apparmor=unconfined) "+
+			"without --security-opt apparmor=unconfined on the agent", pid, err))
 	case err != nil:
-		return fail(fmt.Errorf("ouverture de /proc/%d/root : %w", pid, err))
+		return fail(fmt.Errorf("opening /proc/%d/root: %w", pid, err))
 	}
 	afterRootOpen()
 	// Still alive: the PID was not reused between pidfd_open and the open above,

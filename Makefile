@@ -14,6 +14,7 @@ build: web
 	CGO_ENABLED=0 go build -ldflags "-X main.version=$$(git describe --tags --always --dirty 2>/dev/null || echo dev)" -o bin/hublot ./cmd/hublot
 
 test: web-deps
+	scripts/test-release-lib.sh
 	go vet ./cmd/... ./internal/...
 	go test -race ./cmd/... ./internal/...
 	cd web && npm run check && npm run lint && npx vitest run

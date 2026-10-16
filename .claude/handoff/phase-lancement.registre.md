@@ -1,0 +1,122 @@
+# Registre de la phase Lancement
+
+Plan : `docs/superpowers/plans/2026-10-13-lancement.md`. Décisions de l'utilisateur : section « Décisions » du plan.
+
+## Revue du plan
+- Deux tours (Opus + Codex), puis une validation : 24fad02 → eae7277 → ee58f7c.
+- Ruling: les 4 `detail` serveur affichés tels quels par l'interface restent en anglais. Ils sont dynamiques ; les traduire coûterait environ une journée et toucherait l'API §6.
+- Ruling: un environnement GitHub avec relecteur obligatoire est impossible sur un dépôt privé avec une offre Free. `release.yml` part donc par `workflow_dispatch` seulement, derrière le job `guard`. `levy-cmd` est un compte `User` : la comparaison `actor == repository_owner` est juste.
+- Minor reporté : « Re-run failed jobs » ne relance pas `guard`. Le risque est faible, le dépôt n'a qu'un propriétaire.
+
+## Tâches
+- Task 1 (`--version`) : d96d12f, 00fd972. Validée par Opus et Codex.
+- Task 2 (messages en anglais) : 7ca7e92, b062bc9, a7835c7. Validée par Opus et Codex.
+  - La preuve AST montre que seules des chaînes ont changé, sauf `main.go:129` (`Fprintln` → `Fprintf`, prévu par le plan).
+  - Minor accepté : la garde, qui repose sur une liste de mots, laisse passer « acces refuse », « session terminee », « hote manquant ».
+- Task 3 (unité systemd) : 63f5059, de66621, 8e38631. Validée par Opus et Codex.
+  - Vérifiée sur hk-ubuntu et hk-fedora, en lecture et en écriture, sans AVC ni refus AppArmor.
+  - `systemd-analyze security` : 8.9 EXPOSED. Le durcissement est limité par Q41.
+  - Ruling: les drapeaux « créé par le script » de `check-systemd.sh` sont posés juste avant chaque création. La course avec un autre processus entre la garde et l'installation est acceptée : elle ne touche que la VM de vérification. Poser le drapeau après la création laisserait un fichier partiel si l'installation échouait (Important de Codex, écarté).
+- Task 4 (image `scratch` et `check-image.sh`) : d249a89, 546c5c7. Validée par Opus et Codex.
+  - Image de 3,8 Mo. Docker Desktop, hk-ubuntu et hk-fedora : lecture et écriture OK, sans AVC ni refus AppArmor.
+  - La commande de §8 passe par un tableau d'arguments, plus par `sh -c`. `hk_spec_args` vérifie qu'elle fait 8 lignes, que la dernière est la référence d'image, et que ses caractères sont dans une liste blanche.
+  - `scripts/test-release-lib.sh` joue 11 mutations et fait partie de `make test`. `hk_redact` masque le jeton, en supposant le format de 43 caractères en base64url.
+  - Étiquettes OCI reportées à la tâche 6 (`dockers_v2`).
+  - En attente de l'utilisateur : la mutation « retirer `--cgroupns=host` » n'a pas été jouée. Le classifieur de permissions a refusé la modification ; personne ne l'a contourné.
+
+## Orchestration (2026-10-15, passage aux tranches verticales)
+- Règles ajoutées à `CLAUDE.md` (section « Orchestration ») ; sous-agents de projet `implementeur` et `relecteur` dans `.claude/agents/`.
+- État au moment du passage : la session précédente s'est arrêtée avec trois agents interrompus.
+  - **T5 (docs)** : terminée sur `phase/lancement-t5` (2deb213), NON relue. Les deux revues ont été interrompues ; le worktree du relecteur est resté verrouillé.
+  - **T6 (GoReleaser)** : un commit local NON poussé (f05b69f) ; la fin de la tâche n'est pas vérifiée (`goreleaser check`, snapshot, job CI).
+- Propriété des fichiers (aucun recouvrement constaté) :
+  - T5 possède `README*`, `docs/`, `scripts/check-docs.sh` ;
+  - T6 possède `.goreleaser.yaml`, `.github/workflows/ci.yml`, `scripts/check-dist.sh`, `.gitignore`.
+- Contrat T5/T6 : le job CI `docs` (`bash scripts/check-docs.sh` sur ubuntu-latest) s'ajoute à `ci.yml` APRÈS la fusion de T5. C'est l'écrivain de `ci.yml` qui l'ajoute. Les noms d'archives et l'image citée dans la doc doivent égaler ceux de `.goreleaser.yaml` ; `check-docs.sh` est à étendre si besoin.
+- 2026-10-15, première application des règles :
+  - **Task 5 (docs)** : 2deb213, 9ae591c (cinq limites de §13 ajoutées, IP seulement pour `login.fail`, sortie JSON de `cosign verify`, niveaux de titre contrôlés). Validée par le relecteur et par Codex ; fusionnée (9d872c7). `make test` et `check-docs.sh` sont verts.
+    - Ruling: les captures filtrent `/api/containers` pour ne garder que les conteneurs de démonstration. Accepté : c'est la vraie interface, aucune donnée personnelle. À refaire depuis hk-ubuntu, sans filtrage, si l'occasion se présente.
+  - **Task 6 (GoReleaser)** : f05b69f, poussé. `goreleaser check` et `actionlint` sont verts, ainsi qu'un snapshot local avec `README.fr.md`. Le job CI `release-snapshot` était rouge faute de `README.fr.md`, que l'archive exige : c'est une dépendance T6 → T5 ABSENTE du contrat. Leçon : le contrat liste aussi les fichiers qu'une tâche LIT chez une autre.
+    - L'agent a ouvert une PR brouillon #6 sans consigne : écart à signaler, sans effet (dépôt privé).
+    - Instabilité : `TestViewsUnseenIndexesExpire` (`internal/fsview`, délai de grâce de 300 ms sous `-race`) a échoué une fois en CI. À analyser à part.
+  - **Garde cgroup de `check-image.sh`** : la mutation bloquée par les permissions est remplacée par un test unitaire (faux journal) dans la tranche A. L'utilisateur en est informé.
+  - **Révision du plan en tranches A, B, C** : validée par Codex et par le relecteur après un correctif (ordre commit → CI → VM dans A et B, fichiers lus listés par tranche).
+- 2026-10-15, CI de 33e2d2c (run 38759795800) :
+  - `release-snapshot`, `binary` et `e2e` sont verts : l'objectif CI de T6 est atteint, T6 part en revue.
+  - `integration (overlay2)` est rouge sur `TestLogsRealDocker` (`internal/dockerx/integration_test.go:303`). Le test exige un ordre global entre stdout et stderr, que Docker ne garantit pas : c'est la cause trouvée en T6 d'Observation.
+  - **Correctif « tests instables », en parallèle de la revue de T6**, hors tranches, en worktree sur la branche `phase/lancement-flaky` :
+    - fichiers possédés : `internal/dockerx/integration_test.go` et les `_test.go` de `internal/fsview` ;
+    - fichiers lus : le code de `dockerx` et de `fsview`, qu'il ne modifie PAS ;
+    - critère : `TestLogsRealDocker` exige l'ordre au sein de chaque flux, sans rien perdre de ce qu'il couvre ; `TestViewsUnseenIndexesExpire` ne dépend plus du temps réel sous `-race` ;
+    - preuve : `-count=20` sous Linux.
+- CLAUDE.md, section Orchestration complétée : contenu d'une délégation, déléguer seulement si c'est utile, adaptation en cours de route, rapport de fin sur preuves.
+- **Task 6 (GoReleaser, `release-snapshot`)** : f05b69f, e3a8f8c. Validée par le relecteur et par Codex ; run 38762439283 entièrement vert.
+  - Correctifs : `LC_ALL=C sort` dans `check-dist.sh` ; `CHECK_DIST_EXEC` exécute `--version` sur amd64 ; `permissions` déclarées par job ; `persist-credentials: false` sur les jobs npm ; pas d'annulation sur `main` ; syft v1.54.1.
+  - Ruling: l'épinglage par empreinte de `checkout`, `setup-go` et `setup-node` est écarté (Q40 : actions de GitHub en version majeure). Codex est d'accord.
+  - Non couvert : en CI, la version arm64 n'est vérifiée que par recherche dans le binaire. Son exécution est faite sur les VM (tranches A et B).
+  - Minor accepté : GitHub remplace un run en attente, donc trois pushes rapides sur `main` annulent celui du milieu.
+- **Tranche A (Docker)**, lancée en parallèle du correctif « tests instables » :
+  - fichiers possédés : ceux listés par le plan pour A, dont `ci.yml` (job `docs`), `.goreleaser.yaml`, `scripts/release-lib.sh`, `scripts/check-image.sh`, `scripts/test-release-lib.sh`, `scripts/check-docs.sh`, `Dockerfile`, les README et les sections Docker de la doc ;
+  - aucun `_test.go` (ils sont au correctif « tests instables »), ce qui fait zéro recouvrement.
+- **Tranche A (Docker)** : b46ce01, 4136e96. Validée par le relecteur et par Codex ; run 38766476986 vert (8 jobs).
+  - VM, image arm64 de l'artefact du run 38764213596 :
+    - hk-ubuntu : noyau 7.0.0-38, Docker 29.8.2, API 1.56, AppArmor sans refus ;
+    - hk-fedora : noyau 6.19.10-300.fc44, Docker 29.8.2, SELinux Enforcing, aucun AVC ;
+    - sur les deux : `--version` exécuté, et `check-image.sh` vert (lecture, édition, envoi, mise à jour, rotation du jeton).
+  - Le relecteur a rejoué lui-même `check-image.sh` sur les deux VM.
+  - Ajouts au plan :
+    - vérification de la rotation du jeton (`docker exec … reset-token` puis `restart`) ;
+    - contrôle que `check-image.sh` appelle la garde ;
+    - `latest` refusé deux fois : dans le bloc `tags:` (gabarit compris) et dans les étiquettes produites par le snapshot ;
+    - référence d'image comparée en respectant la casse.
+  - Ruling: la garde cgroup ne lit que le journal du premier démarrage, et cela suffit : l'avertissement y figure toujours, et le détail procfs fait déjà échouer `hk_check_targets`. Le commit unique est conforme à l'étape 6 du plan : ce n'est pas une tâche d'évasion.
+- **Tests instables** : 94d29e6, 65e59c7. Validés (relecteur, et Codex sur les tests) ; fusionnés (8fcd8cf) ; `make test` vert.
+  - Causes : dans fsview, une construction finie avant `finished(b)` donnait un index servi, donc évinçable ; dans dockerx, Docker n'ordonne pas stdout et stderr entre eux.
+  - Établi en chemin : le `Since` de Docker s'arrête à la première entrée retenue puis envoie la suite ; `ReadLogs` ne rend une ligne longue qu'avec sa dernière partie.
+- **DÉFAUT PRODUIT TROUVÉ (Important, hérité de la T6 d'Observation)**, reproduit sur Docker réel par le relecteur :
+  - scénario : une ligne longue de stdout (plus de 16 Kio, donc en plusieurs parties) reçoit une ligne de stderr entre ses parties, et la connexion tombe juste après la ligne de stderr (coupure `t2/stderr/0`) ;
+  - à la reprise avec `since=t2`, Docker saute la 1re partie et renvoie la ligne de stderr puis la fin seule de la ligne longue ;
+  - `api/logs.go:376` émet alors cette fin avec `truncated=false` : 16 Kio sont perdus en silence.
+  - Le critère « ni doublon ni trou » n'est pas tenu dans ce cas. Décision demandée à l'utilisateur.
+- **Tranche B (systemd)** : bb34bfd, cf62663. Validée par le relecteur et par Codex ; run 38770184602 vert.
+  - VM, archive arm64 de la CI, sommes contrôlées : hk-ubuntu et hk-fedora (systemd 259, Enforcing, `unconfined_service_t`) donnent `SYSTEMD OK`, la version exécutée, les cinq cibles, l'édition et l'envoi sous durcissement, et la rotation du jeton. Aucun refus AppArmor, aucun AVC.
+  - Commandes LITTÉRALES de la doc rejouées : installation, drop-in, désinstallation complète.
+  - Défaut trouvé en revue puis corrigé : un drop-in qui déplace `HUBLOT_DATA_DIR` doit ajouter `ReadWritePaths=DIR`, avec un dossier créé au préalable en root 0700 ; sans cela, `ProtectSystem=strict` empêche le démarrage.
+  - `check-docs.sh` compare les commandes de la doc à `ExecStart`, au `name_template` et à l'unité. `check-systemd.sh` exige la version.
+  - Note : la CI d'une PR construit le commit de fusion (ex. 7b98876 = bb34bfd fusionné dans 253056a, arbre identique). La rc et la release partent d'un tag, donc de l'empreinte du commit tagué.
+  - Minor reporté à la T8 : `check-docs.sh` ne vérifie pas que le drop-in contient `ReadWritePaths`.
+  - Plan à corriger : il écrit encore `check-systemd.sh … [VERSION]`, alors que la version est obligatoire.
+- **Reprise des logs, perte signalée** : e045daf (tests rouges), 964080e, 0d4710e. Validée par le relecteur ; Codex arbitré. Fusionnée (40b0a28) ; `make test` et `check-docs` sont verts.
+  - Décision de l'utilisateur (2026-10-15) : le critère devient « ni doublon, ni perte silencieuse ».
+  - Règle : la reprise demande `since = cut.ts - maxStreamSkew` ; toute ligne horodatée avant ce `since` est marquée `truncated`. Une ligne longue récente revient entière.
+  - La spec (§6, §9, §13), les limites EN/FR et l'infobulle (« ligne incomplète ») sont mises à jour. La limite `tail=N` (départ ordinaire au milieu d'une ligne longue, indétectable) est documentée.
+  - Ruling: les constats de Codex qui supposent un écart entre stdout et stderr de plus d'une seconde (faux « tronquée », doublon ou perte, écart négatif à `logs.go:373`) sont écartés. Ils sortent de l'hypothèse `maxStreamSkew` arbitrée en T6 d'Observation (2,6 ms mesurées), documentée en §13 ; pendant le saut, une ligne qui précède la coupure dans le journal est déjà reçue.
+- **Tranche C (vérifier une release)** : 0167f45, ad6dea0, fc046cd. Validée par le relecteur et par Codex ; run 38775906129 vert (9 jobs).
+  - Garde rejoué en local : chaque contrôle est prouvé par un cas qui ne diffère que d'un champ. De plus, la PREMIÈRE étape de chaque job à droits (`release`, `verify`) exige `GITHUB_TRIGGERING_ACTOR` égal au propriétaire et `GITHUB_REF_TYPE` égal à `tag`. Raison : « Re-run failed jobs » ne relance pas `guard` (défaut Important trouvé par le relecteur, corrigé).
+  - `verify-release.sh` exige la liste exacte des 8 fichiers. Banc versionné (`scripts/test/verify-release/`, 24 cas) et job CI `verify-release-bench`. 7 mutations, gardées hors du dépôt, sont toutes attrapées.
+  - `replace_existing_draft: true`. La doc et l'en-tête disent que l'interface construite par npm (`package-lock.json`) est embarquée dans le binaire signé : la séparation des jobs protège les jetons, pas le contenu.
+  - Ruling: les points de Codex sont écartés. Les actions de GitHub restent en version majeure (Q40). `verify` garde `contents: write`, car lire un brouillon l'exige (commenté). Le bundle propre à chaque archive est facultatif dans la doc, car la signature de `checksums.txt` plus la somme suffisent.
+  - Mutation refusée par le classifieur de permissions (« Security Weaken », identité en `refs/heads/` dans le vrai script) : non contournée, prouvée sur une copie.
+  - NON VÉRIFIÉ, à prouver à la rc (T9) : la vraie signature keyless (`signs`, `docker_signs`) et le format des bundles ; `cosign verify` sur GHCR ; `gh release download` d'un brouillon ; le passage de l'artefact `web` au job `release` ; les valeurs réelles de `actor`, `triggering_actor` et `ref_type` sous `workflow_dispatch` ; les droits de `verify` ; l'attestation SBOM de BuildKit au vrai push ; la liste réelle des 8 fichiers.
+  - Plan T9 : si `verify` échoue alors que le paquet GHCR est public, supprimer la version (ARRÊT). À ajouter au tableau « Étapes extérieures » en T8.
+- **Task 8 (spec, audit)** : 23dd6a0, 2dc8390, 04af14d.
+  - La spec décrit ce qui est livré : §1 à §4, §6 à §8, §10, §12, §13.
+  - gitleaks v8.30.1 sur tout l'historique (238 commits) : 0 constat.
+  - `check-docs.sh` exige `ReadWritePaths` dans le drop-in.
+  - Ce qui deviendra visible en public (décision avant la T10) : auteur « Livaille An-nour » (noreply GitHub) ; `CLAUDE.md`, `.claude/agents` et `.claude/handoff`, y compris 3 passations supprimées mais restées dans l'historique ; le lien `claude.ai` en spec ligne 5 ; des détails de la machine de dev (Homebrew, socket Docker, disque, VM) ; le type de compte GitHub ; toutes les branches et PR, dont `phase/observation-t7-wip` et le brouillon #6.
+- **Revue finale de branche** (253056a..0cb5b1b) : « branche prête pour la rc », selon le relecteur et selon Codex. Run 38780793049 vert (9 jobs).
+  - Défaut Important trouvé, puis corrigé (0cb5b1b) : sans `GORELEASER_CURRENT_TAG`, un lancement sur `v0.1.0` posé sur le commit de la rc construisait `0.1.0-rc.1`. Il repoussait l'image de la rc avec une signature `refs/tags/v0.1.0` et réécrivait son brouillon. Prouvé puis corrigé avec GoReleaser 2.18.3.
+  - Minors corrigés : `check-docs.sh` exige `HUBLOT_LISTEN=127.0.0.1:7878` dans l'unité ; §12 précise que les VM ont testé des artefacts de snapshot.
+  - Ruling: le job `integration` exécute le code d'une PR sous `sudo` sur `pull_request`. Écarté : ce n'est pas `pull_request_target`, il n'y a aucun secret, le jeton est en lecture, le runner est éphémère, et le job existe depuis le Socle. Codex est d'accord.
+  - POUR LA T9 : `ubuntu-latest` passe à Ubuntu 26 le 2026-10-19. Si la rc part après cette date, relancer d'abord la CI sur la nouvelle image.
+- **Task 9 (rc v0.1.0-rc.1)** : validée par le relecteur, qui a recoupé les journaux, et par Codex. Constats dans le plan (dadd61e, caf6d93).
+  - Étapes : PR #7 (`release.yml` seul) fusionnée dans `main` (c27d493) ; tag `v0.1.0-rc.1` sur c763472 ; deux faux lancements refusés, avec `guard` seul exécuté (runs 38783319487 et 38783372584) ; release (run 38783489392) verte, terminée par `RELEASE OK : v0.1.0-rc.1`.
+  - VM : l'archive passe `SYSTEMD OK` et l'image GHCR `IMAGE OK`, sur les deux VM, sans refus. Les identifiants GHCR des VM sont retirés.
+  - `cosign verify` hors de GitHub est vert avec l'identité rc.1 et refusé avec rc.2 ; SBOM SPDX pour amd64 et arm64.
+  - Les 9 points « NON VÉRIFIÉ » de la tranche C sont prouvés.
+  - Format de la signature d'image : référent OCI 1.1. GHCR n'ayant pas l'API `referrers`, cosign ajoute l'étiquette de repli `sha256-<index>`.
+  - Ruling: la PR #7 a été fusionnée par l'agent et non par l'utilisateur, conformément à l'accord « tout enchaîner » du 2026-10-15, qui couvrait cette fusion.
+  - Ruling: `targetCommitish: main` sur le brouillon est sans effet, car le tag existe déjà.
+  - Leçons intégrées à la T10 (0239044) : quatre jeux d'étiquettes attendus, dont les `sha256-…` ; recontrôle cosign et SBOM sans connexion après publication.
+  - Incident d'orchestration : le dépôt principal a été retrouvé sur `ci/release-dispatch`, et la session l'a remis sur `phase/lancement`. Règle : vérifier la branche du dépôt principal après tout agent qui crée des branches.
+  - Accès : l'utilisateur a ajouté `read:packages` au jeton `gh`. cosign v3.1.3 reste installé dans hk-ubuntu.

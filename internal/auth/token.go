@@ -168,7 +168,7 @@ type Verifier struct{ digest []byte }
 func LoadVerifier(dataDir string) (*Verifier, error) {
 	f, err := os.OpenFile(filepath.Join(dataDir, tokenFile), os.O_RDONLY|syscall.O_NOFOLLOW, 0)
 	if errors.Is(err, syscall.ELOOP) {
-		return nil, fmt.Errorf("%s est un lien symbolique : refusé ; supprimez-le puis relancez `hublot reset-token`", tokenFile)
+		return nil, fmt.Errorf("%s is a symbolic link: refused; remove it, then run `hublot reset-token` again", tokenFile)
 	}
 	if err != nil {
 		return nil, err
@@ -180,7 +180,7 @@ func LoadVerifier(dataDir string) (*Verifier, error) {
 	}
 	d, err := hex.DecodeString(strings.TrimSpace(string(raw)))
 	if err != nil || len(d) != sha256.Size {
-		return nil, fmt.Errorf("%s corrompu : relancez `hublot reset-token`", tokenFile)
+		return nil, fmt.Errorf("%s is corrupt: run `hublot reset-token` again", tokenFile)
 	}
 	return &Verifier{digest: d}, nil
 }

@@ -267,7 +267,7 @@ func (v *Views) buildFor(ctx context.Context, b *build, info dockerx.ContainerIn
 	rc, err := v.docker.GetArchive(ctx, info.ID, "/")
 	if err != nil {
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
-			return nil, fmt.Errorf("%w : index au-delà de %s (%w)", ErrTooLarge, v.opt.Limits.MaxDuration, errTooSlow)
+			return nil, fmt.Errorf("%w: index beyond %s (%w)", ErrTooLarge, v.opt.Limits.MaxDuration, errTooSlow)
 		}
 		return nil, err
 	}
@@ -283,7 +283,7 @@ func (v *Views) buildFor(ctx context.Context, b *build, info dockerx.ContainerIn
 		return nil, err
 	}
 	if (now.Running && now.Pid != 0) || now.FinishedAt != info.FinishedAt {
-		return nil, changed("le conteneur %.12s a démarré pendant l'indexation", info.ID)
+		return nil, changed("container %.12s started during indexing", info.ID)
 	}
 	return idx, nil
 }

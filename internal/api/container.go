@@ -106,7 +106,7 @@ func (s *server) container(w http.ResponseWriter, r *http.Request) {
 }
 
 // errNoVariable: the body names no variable of the container.
-var errNoVariable = fmt.Errorf("%w : variable inconnue", dockerx.ErrNotFound)
+var errNoVariable = fmt.Errorf("%w: unknown variable", dockerx.ErrNotFound)
 
 // revealEnv is POST /api/containers/{id}/env/reveal (spec §6, §7): {name} →
 // {name, value}. The reveal is journaled (env.reveal, the name in path,
@@ -119,7 +119,7 @@ func (s *server) revealEnv(w http.ResponseWriter, r *http.Request) {
 	dec := json.NewDecoder(io.LimitReader(r.Body, 4096))
 	err := dec.Decode(&body)
 	if err == nil && dec.Decode(&struct{}{}) != io.EOF {
-		err = errors.New("données après l'objet JSON")
+		err = errors.New("data after the JSON object")
 	}
 	if err != nil {
 		writeFSError(w, fmt.Errorf("%w (%v)", errNoVariable, err))
@@ -137,7 +137,7 @@ func (s *server) revealEnv(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := s.d.Audit.Write(audit.Event{Action: "env.reveal", Container: info.ID, Path: body.Name, Result: "ok"}); err != nil {
 		slog.Error("audit write", "err", err, "action", "env.reveal")
-		writeError(w, http.StatusInternalServerError, "internal", "journal d'audit : rien n'est révélé")
+		writeError(w, http.StatusInternalServerError, "internal", "audit log: nothing revealed")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"name": body.Name, "value": value})

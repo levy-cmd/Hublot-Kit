@@ -72,7 +72,7 @@ func (m *MemFS) List(_ context.Context, dir string) ([]Entry, bool, error) {
 		return nil, false, err
 	}
 	if d.Type != TypeDir {
-		return nil, false, fmt.Errorf("%w : %s", ErrNotDir, dir)
+		return nil, false, fmt.Errorf("%w: %s", ErrNotDir, dir)
 	}
 	dir = CleanPath(dir)
 	out := []Entry{}
@@ -93,7 +93,7 @@ func (m *MemFS) Open(_ context.Context, p string) (io.ReadCloser, error) {
 		return nil, err
 	}
 	if e.Type != TypeFile {
-		return nil, fmt.Errorf("%w : %s", ErrNotRegular, p)
+		return nil, fmt.Errorf("%w: %s", ErrNotRegular, p)
 	}
 	if m.OpenFile != nil {
 		return m.OpenFile(CleanPath(p))
@@ -105,7 +105,7 @@ func (m *MemFS) StatNoLinks(_ context.Context, p string) (Entry, error) {
 	p = CleanPath(p)
 	for cur := p; cur != "/"; cur = path.Dir(cur) {
 		if e, err := m.get(cur); err == nil && e.Type == TypeSymlink {
-			return Entry{}, fmt.Errorf("%w : %s", ErrLinkInPath, p)
+			return Entry{}, fmt.Errorf("%w: %s", ErrLinkInPath, p)
 		}
 	}
 	return m.get(p)

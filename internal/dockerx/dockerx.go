@@ -121,10 +121,10 @@ type Mount struct {
 // point is not a directory": the path changed after the agent's checks.
 // ErrUnavailable: any other failure of the daemon or of the connection to it.
 var (
-	ErrNotFound    = errors.New("introuvable dans Docker")
-	ErrRefused     = errors.New("refusé par Docker")
-	ErrPutInvalid  = errors.New("extraction refusée par Docker")
-	ErrUnavailable = errors.New("Docker indisponible")
+	ErrNotFound    = errors.New("not found in Docker")
+	ErrRefused     = errors.New("refused by Docker")
+	ErrPutInvalid  = errors.New("extraction refused by Docker")
+	ErrUnavailable = errors.New("Docker unavailable")
 )
 
 type Client interface {
@@ -412,7 +412,7 @@ func fromChanges(cs []container.FilesystemChange) ([]Change, error) {
 		case container.ChangeDelete:
 			kind = "deleted"
 		default:
-			return nil, fmt.Errorf("%w : type de changement inconnu %d pour %s", ErrUnavailable, c.Kind, c.Path)
+			return nil, fmt.Errorf("%w: unknown change kind %d for %s", ErrUnavailable, c.Kind, c.Path)
 		}
 		out = append(out, Change{Path: c.Path, Kind: kind})
 	}
@@ -434,9 +434,9 @@ func (e *engine) PutArchive(ctx context.Context, id, dir string, content io.Read
 func wrapPut(err error) error {
 	if cerrdefs.IsInvalidArgument(err) {
 		if strings.Contains(err.Error(), "marked read-only") {
-			return fmt.Errorf("%w : %v", ErrRefused, err)
+			return fmt.Errorf("%w: %v", ErrRefused, err)
 		}
-		return fmt.Errorf("%w : %v", ErrPutInvalid, err)
+		return fmt.Errorf("%w: %v", ErrPutInvalid, err)
 	}
 	return wrap(err)
 }
@@ -444,7 +444,7 @@ func wrapPut(err error) error {
 // wrap classifies a daemon error for the API (not_found / docker_unavailable).
 func wrap(err error) error {
 	if cerrdefs.IsNotFound(err) {
-		return fmt.Errorf("%w : %v", ErrNotFound, err)
+		return fmt.Errorf("%w: %v", ErrNotFound, err)
 	}
-	return fmt.Errorf("%w : %v", ErrUnavailable, err)
+	return fmt.Errorf("%w: %v", ErrUnavailable, err)
 }

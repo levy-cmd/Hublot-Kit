@@ -10,7 +10,8 @@ permissions:
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # Jamais d'annulation sur main : chaque commit fusionné garde son run complet.
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   go:
@@ -25,11 +26,15 @@ jobs:
 
   web:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     defaults:
       run:
         working-directory: web
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v7
         with:
           node-version: 24
@@ -71,9 +76,13 @@ jobs:
   # Spec §10: the single Playwright journey, real agent and real Docker.
   e2e:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     needs: [go, web]
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
@@ -90,9 +99,13 @@ jobs:
 
   binary:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     needs: [go, web]
     steps:
       - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
       - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
@@ -104,7 +117,7 @@ jobs:
       - run: make build
       - run: |
           out=$(./bin/hublot reset-token --data-dir "$RUNNER_TEMP/hk")
-          echo "$out" | grep -q "jeton"
+          echo "$out" | grep -q "New access token"
       - name: Smoke test (embedded UI and CSP)
         shell: bash # bash --noprofile --norc -eo pipefail
         run: |
@@ -141,3 +154,146 @@ jobs:
               exit 1
             fi
           done <<< "$hashes"
+
+  # Plan Lancement : toute la chaîne de release, sans rien publier. Interface
+  # construite avant GoReleaser (comme dans release.yml), GoReleaser en
+  # snapshot (sans signature : pas de jeton OIDC ici), contrôle de dist/, image
+  # multi-arch poussée dans un registre local éphémère (jamais GHCR) pour vérifier
+  # plateformes et SBOM, puis l'image amd64 lancée avec la commande exacte de la
+  # spec §8. L'image arm64 et les archives partent en artefact pour les VM.
+  release-snapshot:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    needs: [go, web]
+    services:
+      registry:
+        image: registry:3
+        ports: ["5000:5000"]
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+        with:
+          driver-opts: network=host
+      - uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+        with:
+          syft-version: v1.54.1 # plan Lancement, Q40 (sans cela, la version par défaut de l'action)
+      - run: make web
+      - uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
+        with:
+          distribution: goreleaser
+          version: "~> v2.18"
+          args: check
+      - uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
+        with:
+          distribution: goreleaser
+          version: "~> v2.18"
+          args: release --snapshot --clean --skip=sign
+      # amd64 exécuté (--version) : preuve que la version est injectée. arm64
+      # n'est pas exécutable ici (pas d'émulation) : même entrée `builds`,
+      # mêmes ldflags ; la tâche 8 le lance sur les VM.
+      - run: scripts/check-dist.sh dist
+        env:
+          CHECK_DIST_EXEC: amd64
+      # dockers_v2 en snapshot : une image par plateforme, chargée dans le Docker
+      # du runner, étiquette suffixée par l'architecture (<V>-amd64, <V>-arm64).
+      # C'est la référence que reçoivent check-image.sh et la tâche 8.
+      - name: Étiquettes des images du snapshot
+        run: |
+          v=$(jq -r .version dist/metadata.json)
+          docker images --format '{{.Repository}}:{{.Tag}}' ghcr.io/levy-cmd/hublot-kit | sort
+          for arch in amd64 arm64; do
+            got=$(docker image inspect -f '{{.Os}}/{{.Architecture}}' "ghcr.io/levy-cmd/hublot-kit:$v-$arch")
+            test "$got" = "linux/$arch"
+            # Étiquettes OCI (dockers_v2 labels) : version et commit du snapshot.
+            labels=$(docker image inspect -f '{{json .Config.Labels}}' "ghcr.io/levy-cmd/hublot-kit:$v-$arch")
+            jq -e --arg v "$v" --arg c "$GITHUB_SHA" '
+              .["org.opencontainers.image.version"] == $v
+              and .["org.opencontainers.image.revision"] == $c
+              and .["org.opencontainers.image.source"] == "https://github.com/levy-cmd/Hublot-Kit"
+              and .["org.opencontainers.image.licenses"] == "MIT"' <<<"$labels" >/dev/null
+          done
+      # Q43 : aucune étiquette latest réellement PRODUITE, même par un gabarit
+      # que l'analyse du YAML (check-docs.sh) ne verrait pas : étiquettes des
+      # images chargées (les deux attendues doivent y être), et toute chaîne de
+      # dist/artifacts.json.
+      - name: Aucune étiquette latest produite
+        run: |
+          v=$(jq -r .version dist/metadata.json)
+          tags=$(docker images --format '{{.Tag}}' ghcr.io/levy-cmd/hublot-kit)
+          grep -qx -- "$v-amd64" <<<"$tags"
+          grep -qx -- "$v-arm64" <<<"$tags"
+          if { echo "$tags"; jq -r '.. | strings' dist/artifacts.json; } | grep -i latest; then
+            echo "étiquette latest produite (Q43)"
+            exit 1
+          fi
+      - name: Image multi-arch, SBOM (registre local, rien sur GHCR)
+        run: |
+          ctx="$RUNNER_TEMP/ctx"
+          for arch in amd64 arm64; do
+            mkdir -p "$ctx/linux/$arch"
+            bin=$(jq -r --arg a "$arch" '.[] | select(.type == "Binary" and .goarch == $a) | .path' dist/artifacts.json)
+            cp "$bin" "$ctx/linux/$arch/hublot"
+          done
+          docker buildx build --platform linux/amd64,linux/arm64 --sbom=true \
+            -f Dockerfile -t localhost:5000/hublot-kit:ci --push "$ctx"
+          raw=$(docker buildx imagetools inspect --raw localhost:5000/hublot-kit:ci)
+          echo "$raw" | grep -q '"architecture": *"amd64"'
+          echo "$raw" | grep -q '"architecture": *"arm64"'
+          sbom=$(docker buildx imagetools inspect localhost:5000/hublot-kit:ci --format '{{ json .SBOM }}')
+          for p in linux/amd64 linux/arm64; do
+            jq -e --arg p "$p" '.[$p].SPDX | (.spdxVersion | startswith("SPDX-")) and (.packages | length > 0)
+              and any(.packages[]; .name == "github.com/levy-cmd/hublot-kit")' <<<"$sbom" >/dev/null
+          done
+      - name: Image amd64, commande exacte de la spec §8
+        run: |
+          v=$(jq -r .version dist/metadata.json)
+          scripts/check-image.sh "ghcr.io/levy-cmd/hublot-kit:$v-amd64" "$v"
+      - name: Image arm64 et archives pour les VM
+        run: |
+          v=$(jq -r .version dist/metadata.json)
+          mkdir -p "$RUNNER_TEMP/vm"
+          docker save "ghcr.io/levy-cmd/hublot-kit:$v-arm64" -o "$RUNNER_TEMP/vm/hublot-kit-arm64.tar"
+          cp dist/*.tar.gz dist/checksums.txt dist/metadata.json "$RUNNER_TEMP/vm/"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-snapshot
+          path: ${{ runner.temp }}/vm/
+          retention-days: 3
+
+  # Plan Lancement : documentation publique (commande de §8, FR et EN alignés,
+  # liens, et ce que la doc cite de .goreleaser.yaml), gardes des scripts.
+  docs:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - run: bash scripts/check-docs.sh
+      - run: bash scripts/test-release-lib.sh
+
+  # Plan Lancement, tranche C : scripts/verify-release.sh éprouvé sur de faux
+  # jeux d'artefacts (faux gh, cosign, docker). Ni réseau, ni secret, ni Node :
+  # bash, jq et coreutils du runner.
+  verify-release-bench:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - run: bash scripts/test/verify-release/run.sh

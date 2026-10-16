@@ -73,7 +73,7 @@ func (f *Fake) Inspect(_ context.Context, id string) (ContainerInfo, error) {
 	if info, ok := f.Infos[id]; ok {
 		return info, nil
 	}
-	return ContainerInfo{}, fmt.Errorf("%w : %s", ErrNotFound, id)
+	return ContainerInfo{}, fmt.Errorf("%w: %s", ErrNotFound, id)
 }
 
 func (f *Fake) GetArchive(ctx context.Context, id, path string) (io.ReadCloser, error) {
@@ -92,7 +92,7 @@ func (f *Fake) GetArchive(ctx context.Context, id, path string) (io.ReadCloser, 
 	}
 	b, ok := f.Archives[id+":"+path]
 	if !ok {
-		return nil, fmt.Errorf("%w : %s:%s", ErrNotFound, id, path)
+		return nil, fmt.Errorf("%w: %s:%s", ErrNotFound, id, path)
 	}
 	return &countingCloser{Reader: bytes.NewReader(b), n: &f.ArchiveCloses}, nil
 }
@@ -111,7 +111,7 @@ func (f *Fake) VolumeOptions(_ context.Context, name string) (map[string]string,
 	if opts, ok := f.Volumes[name]; ok {
 		return opts, nil
 	}
-	return nil, fmt.Errorf("%w : volume %s", ErrNotFound, name)
+	return nil, fmt.Errorf("%w: volume %s", ErrNotFound, name)
 }
 
 func (f *Fake) PutArchive(_ context.Context, id, dir string, content io.Reader) error {
@@ -140,7 +140,7 @@ func (f *Fake) Logs(ctx context.Context, id string, opt LogsOptions) (io.ReadClo
 	}
 	b, ok := f.LogStreams[id]
 	if !ok {
-		return nil, fmt.Errorf("%w : %s", ErrNotFound, id)
+		return nil, fmt.Errorf("%w: %s", ErrNotFound, id)
 	}
 	return &logsStream{Reader: bytes.NewReader(b), ctx: ctx, gate: f.LogsGate, closes: &f.LogsCloses}, nil
 }
@@ -203,7 +203,7 @@ func (f *Fake) Changes(_ context.Context, id string) ([]Change, error) {
 	}
 	cs, ok := f.Diffs[id]
 	if !ok {
-		return nil, fmt.Errorf("%w : %s", ErrNotFound, id)
+		return nil, fmt.Errorf("%w: %s", ErrNotFound, id)
 	}
 	if cs == nil {
 		return []Change{}, nil

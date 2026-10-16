@@ -32,19 +32,20 @@ var version = "dev" // set by -ldflags "-X main.version=…"
 // tests replace it. Outside Linux the read fails and the check is skipped.
 var selfCgroup = func() ([]byte, error) { return os.ReadFile("/proc/self/cgroup") }
 
-const usage = `Usage : hublot [options]
-        hublot reset-token [--data-dir DIR]
+const usage = `Usage: hublot [options]
+       hublot reset-token [--data-dir DIR]
+       hublot --version
 
-Options (chacune a un équivalent HUBLOT_*) :
-  --listen ADDR          adresse d'écoute (défaut 127.0.0.1:7878)
-  --data-dir DIR         dossier de données (défaut /var/lib/hublot-kit)
-  --read-only            désactive toute écriture
-  --tls-cert FILE        certificat TLS (avec --tls-key)
-  --tls-key FILE         clé TLS (avec --tls-cert)
-  --public-origin URL    origine publique derrière un reverse proxy
+Options (each has a HUBLOT_* equivalent):
+  --listen ADDR          listen address (default 127.0.0.1:7878)
+  --data-dir DIR         data directory (default /var/lib/hublot-kit)
+  --read-only            disable every write
+  --tls-cert FILE        TLS certificate (with --tls-key)
+  --tls-key FILE         TLS key (with --tls-cert)
+  --public-origin URL    public origin behind a reverse proxy
 
-Sous-commande :
-  reset-token            génère un nouveau jeton d'accès et invalide l'ancien
+Subcommand:
+  reset-token            create a new access token and invalidate the old one
 `
 
 func main() {
@@ -55,6 +56,11 @@ func main() {
 }
 
 func run(ctx context.Context, args []string, getenv func(string) string, stdout, stderr io.Writer) int {
+	// Before the configuration: --version never reads HUBLOT_* nor touches the data directory.
+	if len(args) == 1 && (args[0] == "--version" || args[0] == "-version") {
+		fmt.Fprintf(stdout, "hublot %s\n", version)
+		return 0
+	}
 	resetToken := len(args) > 0 && args[0] == "reset-token"
 	if resetToken {
 		args = args[1:]
@@ -65,21 +71,21 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 		return 0
 	}
 	if err != nil {
-		fmt.Fprintln(stderr, "configuration :", err)
+		fmt.Fprintln(stderr, "configuration:", err)
 		return 2
 	}
 	if err := prepareDataDir(cfg.DataDir); err != nil {
-		fmt.Fprintf(stderr, "dossier de données %s : %v\n", cfg.DataDir, err)
+		fmt.Fprintf(stderr, "data directory %s: %v\n", cfg.DataDir, err)
 		return 1
 	}
 
 	if resetToken {
 		tok, err := auth.ResetToken(cfg.DataDir)
 		if err != nil {
-			fmt.Fprintln(stderr, "reset-token :", err)
+			fmt.Fprintln(stderr, "reset-token:", err)
 			return 1
 		}
-		fmt.Fprintf(stdout, "Nouveau jeton d'accès (affiché une seule fois) : %s\n", tok)
+		fmt.Fprintf(stdout, "New access token (shown only once): %s\n", tok)
 		return 0
 	}
 
@@ -93,54 +99,54 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 	if cfg.TLS() {
 		cert, err := tls.LoadX509KeyPair(cfg.TLSCert, cfg.TLSKey)
 		if err != nil {
-			fmt.Fprintln(stderr, "certificat TLS :", err)
+			fmt.Fprintln(stderr, "TLS certificate:", err)
 			return 1
 		}
 		srv.TLSConfig = &tls.Config{Certificates: []tls.Certificate{cert}}
 	}
 
 	if !isLoopback(cfg.Listen) && !cfg.TLS() {
-		fmt.Fprintf(stderr, "ATTENTION : écoute sur %s sans TLS. À réserver à un conteneur publié sur 127.0.0.1 ou à un reverse proxy HTTPS.\n", cfg.Listen)
+		fmt.Fprintf(stderr, "WARNING: listening on %s without TLS. Only for a container published on 127.0.0.1 or behind an HTTPS reverse proxy.\n", cfg.Listen)
 	}
 
 	// Listen before creating the token, so a port conflict never burns it.
 	ln, err := net.Listen("tcp", cfg.Listen)
 	if err != nil {
-		fmt.Fprintln(stderr, "écoute :", err)
+		fmt.Fprintln(stderr, "listen:", err)
 		return 1
 	}
 	defer ln.Close()
 
 	tok, created, err := auth.EnsureToken(cfg.DataDir)
 	if err != nil {
-		fmt.Fprintln(stderr, "jeton :", err)
+		fmt.Fprintln(stderr, "token:", err)
 		return 1
 	}
 	if created {
-		fmt.Fprintf(stdout, "Jeton d'accès (affiché une seule fois) : %s\n", tok)
+		fmt.Fprintf(stdout, "Access token (shown only once): %s\n", tok)
 	}
 	fail := func(what string, err error) int {
-		fmt.Fprintln(stderr, what, ":", err)
+		fmt.Fprintf(stderr, "%s: %v\n", what, err)
 		if created {
-			fmt.Fprintln(stderr, "Le jeton affiché plus haut reste valide ; en cas de doute, lancez `hublot reset-token`.")
+			fmt.Fprintln(stderr, "The token printed above stays valid; if in doubt, run `hublot reset-token`.")
 		}
 		return 1
 	}
 	verifier, err := auth.LoadVerifier(cfg.DataDir)
 	if err != nil {
-		return fail("jeton", err)
+		return fail("token", err)
 	}
 	auditLog, err := audit.Open(filepath.Join(cfg.DataDir, "audit.log"))
 	if err != nil {
-		return fail("journal d'audit", err)
+		return fail("audit log", err)
 	}
 	defer auditLog.Close()
 	docker, err := dockerx.New()
 	if err != nil {
-		return fail("client Docker", err)
+		return fail("Docker client", err)
 	}
 	if b, err := selfCgroup(); err == nil && fsview.NoteCgroupNamespace(string(b)) {
-		fmt.Fprintln(stderr, "ATTENTION : espace de noms cgroup privé (/proc/self/cgroup = 0::/) : l'explorateur répondra container_changed. Lancez l'agent avec --cgroupns=host.")
+		fmt.Fprintln(stderr, "WARNING: private cgroup namespace (/proc/self/cgroup = 0::/): the explorer will answer container_changed. Start the agent with --cgroupns=host.")
 	}
 
 	srv.Handler = api.New(api.Deps{
@@ -158,19 +164,19 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 			errc <- srv.Serve(ln)
 		}
 	}()
-	fmt.Fprintf(stdout, "Hublot-Kit %s écoute sur %s\n", version, ln.Addr())
+	fmt.Fprintf(stdout, "Hublot-Kit %s listening on %s\n", version, ln.Addr())
 
 	select {
 	case err := <-errc:
 		if !errors.Is(err, http.ErrServerClosed) {
-			fmt.Fprintln(stderr, "serveur :", err)
+			fmt.Fprintln(stderr, "server:", err)
 			return 1
 		}
 	case <-ctx.Done():
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		if err := srv.Shutdown(shutdownCtx); err != nil {
-			fmt.Fprintln(stderr, "arrêt :", err)
+			fmt.Fprintln(stderr, "shutdown:", err)
 			srv.Close()
 			return 1
 		}
@@ -202,9 +208,9 @@ func prepareDataDir(dir string) error {
 		// The open already refused; Lstat only picks the message (Linux
 		// answers ELOOP for a link, macOS ENOTDIR).
 		if li, lerr := os.Lstat(dir); lerr == nil && li.Mode()&fs.ModeSymlink != 0 {
-			return errors.New("c'est un lien symbolique : refusé ; indiquez directement un dossier dédié, par exemple /var/lib/hublot-kit")
+			return errors.New("it is a symbolic link: refused; use a dedicated directory instead, for example /var/lib/hublot-kit")
 		}
-		return errors.New("ce n'est pas un dossier")
+		return errors.New("not a directory")
 	}
 	if err != nil {
 		return err
@@ -216,16 +222,16 @@ func prepareDataDir(dir string) error {
 	}
 	st, ok := fi.Sys().(*syscall.Stat_t)
 	if !fi.IsDir() || !ok {
-		return errors.New("ce n'est pas un dossier")
+		return errors.New("not a directory")
 	}
 	if euid := os.Geteuid(); int(st.Uid) != euid {
-		return fmt.Errorf("appartient à l'uid %d, pas à l'utilisateur courant (uid %d) ; utilisez un dossier dédié, par exemple /var/lib/hublot-kit", st.Uid, euid)
+		return fmt.Errorf("owned by uid %d, not by the current user (uid %d); use a dedicated directory, for example /var/lib/hublot-kit", st.Uid, euid)
 	}
 	if created {
 		return d.Chmod(0o700) // the umask may have removed owner bits
 	}
 	if fi.Mode().Perm()&0o022 != 0 {
-		return fmt.Errorf("accessible en écriture au groupe ou à tous (%v) ; utilisez un dossier dédié, par exemple /var/lib/hublot-kit", fi.Mode().Perm())
+		return fmt.Errorf("writable by group or others (%v); use a dedicated directory, for example /var/lib/hublot-kit", fi.Mode().Perm())
 	}
 	return nil
 }

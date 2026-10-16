@@ -15,8 +15,8 @@ import (
 // the goroutine of a given-up operation keeps it until it returns, and a
 // download keeps it until its copy returns.
 var (
-	errBusy    = errors.New("trop d'opérations de fichiers en cours sur ce conteneur (montage FUSE bloqué ?)")
-	errTimeout = errors.New("délai dépassé (montage FUSE bloqué ?)")
+	errBusy    = errors.New("too many file operations in progress on this container (stuck FUSE mount?)")
+	errTimeout = errors.New("timed out (stuck FUSE mount?)")
 )
 
 type fsGuard struct {

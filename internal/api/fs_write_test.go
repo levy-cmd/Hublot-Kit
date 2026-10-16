@@ -347,7 +347,7 @@ func TestWriteTimeoutDetail(t *testing.T) {
 	r.Header.Set("If-Match", files.ETag([]byte("port=80\n")))
 	rec := httptest.NewRecorder()
 	s.fsEdit(rec, r)
-	if rec.Code != http.StatusGatewayTimeout || !strings.Contains(rec.Body.String(), "peut encore aboutir") {
+	if rec.Code != http.StatusGatewayTimeout || !strings.Contains(rec.Body.String(), "may still complete") {
 		t.Fatalf("délai de la garde : %d %s", rec.Code, rec.Body)
 	}
 }

@@ -72,7 +72,7 @@ func (p *procFS) List(_ context.Context, dir string) ([]Entry, bool, error) {
 	}
 	defer h.Close()
 	if st.Mode&unix.S_IFMT != unix.S_IFDIR {
-		return nil, false, fmt.Errorf("%w : %s", ErrNotDir, dir)
+		return nil, false, fmt.Errorf("%w: %s", ErrNotDir, dir)
 	}
 	d, err := pathrs.Reopen(h, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC)
 	if err != nil {
@@ -127,7 +127,7 @@ func (p *procFS) Open(_ context.Context, name string) (io.ReadCloser, error) {
 	// Regular files only, checked before Reopen: a device node created by
 	// mknod in the container would read the host device (spec §5.1 step 6).
 	if st.Mode&unix.S_IFMT != unix.S_IFREG {
-		return nil, fmt.Errorf("%w : %s", ErrNotRegular, name)
+		return nil, fmt.Errorf("%w: %s", ErrNotRegular, name)
 	}
 	// O_NONBLOCK: defence in depth; Reopen reopens the very inode checked above, so it is a regular file.
 	f, err := pathrs.Reopen(h, unix.O_RDONLY|unix.O_NONBLOCK|unix.O_CLOEXEC)
@@ -145,7 +145,7 @@ func (p *procFS) openNoLinks(clean string) (int, error) {
 		Resolve: unix.RESOLVE_IN_ROOT | unix.RESOLVE_NO_SYMLINKS | unix.RESOLVE_NO_MAGICLINKS,
 	})
 	if errors.Is(err, unix.ELOOP) {
-		return -1, fmt.Errorf("%w : %s", ErrLinkInPath, clean)
+		return -1, fmt.Errorf("%w: %s", ErrLinkInPath, clean)
 	}
 	if err != nil {
 		return -1, &fs.PathError{Op: "openat2", Path: clean, Err: err}
