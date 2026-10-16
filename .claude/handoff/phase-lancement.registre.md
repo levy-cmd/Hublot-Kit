@@ -109,3 +109,14 @@ Plan : `docs/superpowers/plans/2026-10-13-lancement.md`. Décisions de l'utilisa
   - Minors corrigés : `check-docs.sh` exige `HUBLOT_LISTEN=127.0.0.1:7878` dans l'unité ; §12 précise que les VM ont testé des artefacts de snapshot.
   - Ruling: le job `integration` exécute le code d'une PR sous `sudo` sur `pull_request`. Écarté : ce n'est pas `pull_request_target`, il n'y a aucun secret, le jeton est en lecture, le runner est éphémère, et le job existe depuis le Socle. Codex est d'accord.
   - POUR LA T9 : `ubuntu-latest` passe à Ubuntu 26 le 2026-10-19. Si la rc part après cette date, relancer d'abord la CI sur la nouvelle image.
+- **Task 9 (rc v0.1.0-rc.1)** : validée par le relecteur, qui a recoupé les journaux, et par Codex. Constats dans le plan (dadd61e, caf6d93).
+  - Étapes : PR #7 (`release.yml` seul) fusionnée dans `main` (c27d493) ; tag `v0.1.0-rc.1` sur c763472 ; deux faux lancements refusés, avec `guard` seul exécuté (runs 38783319487 et 38783372584) ; release (run 38783489392) verte, terminée par `RELEASE OK : v0.1.0-rc.1`.
+  - VM : l'archive passe `SYSTEMD OK` et l'image GHCR `IMAGE OK`, sur les deux VM, sans refus. Les identifiants GHCR des VM sont retirés.
+  - `cosign verify` hors de GitHub est vert avec l'identité rc.1 et refusé avec rc.2 ; SBOM SPDX pour amd64 et arm64.
+  - Les 9 points « NON VÉRIFIÉ » de la tranche C sont prouvés.
+  - Format de la signature d'image : référent OCI 1.1. GHCR n'ayant pas l'API `referrers`, cosign ajoute l'étiquette de repli `sha256-<index>`.
+  - Ruling: la PR #7 a été fusionnée par l'agent et non par l'utilisateur, conformément à l'accord « tout enchaîner » du 2026-10-15, qui couvrait cette fusion.
+  - Ruling: `targetCommitish: main` sur le brouillon est sans effet, car le tag existe déjà.
+  - Leçons intégrées à la T10 (0239044) : quatre jeux d'étiquettes attendus, dont les `sha256-…` ; recontrôle cosign et SBOM sans connexion après publication.
+  - Incident d'orchestration : le dépôt principal a été retrouvé sur `ci/release-dispatch`, et la session l'a remis sur `phase/lancement`. Règle : vérifier la branche du dépôt principal après tout agent qui crée des branches.
+  - Accès : l'utilisateur a ajouté `read:packages` au jeton `gh`. cosign v3.1.3 reste installé dans hk-ubuntu.
