@@ -103,6 +103,7 @@ Une ligne par question ; les tâches indiquées appliquent la réponse.
   - Ordre : fusion de la tâche 5 (faite : `9d872c7`) → fin de la tâche 6 → A → B (les deux touchent `.goreleaser.yaml`, donc en séquence) → C → 8 → 9 → 10.
   - Contrat (leçon consignée au registre) : chaque tranche liste ses fichiers possédés **et** les fichiers qu'elle lit chez une autre (l'archive de la tranche B lit `README.fr.md`, par exemple) ; un changement d'un fichier lu passe par son écrivain.
   - Renvois : dans les sections écrites avant la révision (Décisions, tâches 1 à 5), « tâche 7 » désigne la tranche C, et « tâche 8 » les tranches A et B (vérification VM) ou la tâche 8 (spec, audit).
+- **Révision 2026-10-16 — tâche 10, leçons de la rc.1** (avant toute publication). Raison : constats de la tâche 9 (GHCR sans API `referrers`, étiquette de signature `sha256-…`). Étape 3 : quatre versions étiquetées attendues, dont les deux `sha256-…`. Étape 8 : recontrôles anonymes ajoutés (`cosign verify` de `:0.1.0` et `:0.1` avec l'identité `v0.1.0`, refus d'une autre identité, SBOM SPDX amd64 et arm64). Critères d'acceptation inchangés.
 
 ## Critères d'acceptation des anciennes tâches 6 à 8 (révision 2026-10-15)
 
@@ -3290,10 +3291,12 @@ Expected: `guard`, `web`, `release` et `verify` verts, `RELEASE OK : v0.1.0`.
 
 ```bash
 gh api /users/levy-cmd/packages/container/hublot-kit/versions --jq '.[] | select(.metadata.container.tags | length > 0) | .metadata.container.tags'
+d=$(gh api /users/levy-cmd/packages/container/hublot-kit/versions --jq '.[] | select(.metadata.container.tags | index("0.1.0")) | .name'); echo "$d"
+gh api /users/levy-cmd/packages/container/hublot-kit/versions --jq '.[].metadata.container.tags[]' | grep -cx "${d/:/-}"
 gh release view v0.1.0 --json isDraft,isPrerelease --jq '{isDraft, isPrerelease}'
 ```
 
-Expected: `["0.1.0","0.1"]` sur une même version (même empreinte), `["0.1.0-rc.1"]` sur une autre ; `isDraft: true`, `isPrerelease: false`. Le job `verify` a relu les deux étiquettes : `gh run view "$(gh run list --workflow release.yml --limit 1 --json databaseId --jq '.[0].databaseId')" --log | grep -E 'ok ghcr.io'` → `ok ghcr.io/levy-cmd/hublot-kit:0.1.0` et `ok ghcr.io/levy-cmd/hublot-kit:0.1`.
+Expected: exactement **quatre** versions étiquetées, dans un ordre quelconque : `["0.1.0","0.1"]` sur une même version (même empreinte, l'index 0.1.0) ; `["sha256-<condensé de l'index 0.1.0>"]` ; `["0.1.0-rc.1"]` ; `["sha256-b9d209c5…"]` (index de la rc). Les deux étiquettes `sha256-…` ne sont **pas** un écart : GHCR n'a pas l'API `referrers`, cosign signe donc chaque index en ajoutant cette étiquette de repli (constats de la tâche 9, étapes 4 et 6). Ensuite le condensé de l'index 0.1.0 (`sha256:…`), puis `1` : son étiquette de signature existe. Ni `latest` ni autre étiquette ; `isDraft: true`, `isPrerelease: false`. Le job `verify` a relu les deux étiquettes : `gh run view "$(gh run list --workflow release.yml --limit 1 --json databaseId --jq '.[0].databaseId')" --log | grep -E 'ok ghcr.io'` → `ok ghcr.io/levy-cmd/hublot-kit:0.1.0` et `ok ghcr.io/levy-cmd/hublot-kit:0.1`.
 
 - [ ] **Step 4: La commande de la doc, inchangée, sur les deux VM** (connexion GHCR en lecture, comme à la tâche 9 ; `check-image.sh` sans remplacement : `:0.1` est la référence de la spec)
 
@@ -3343,12 +3346,23 @@ limactl shell hk-ubuntu -- cosign verify \
   --certificate-identity-regexp '^https://github\.com/levy-cmd/Hublot-Kit/\.github/workflows/release\.yml@refs/tags/v0\.1\.[0-9]+$' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
   ghcr.io/levy-cmd/hublot-kit:0.1 2>&1 | head -n 3
+for t in 0.1.0 0.1; do
+  limactl shell hk-ubuntu -- cosign verify \
+    --certificate-identity https://github.com/levy-cmd/Hublot-Kit/.github/workflows/release.yml@refs/tags/v0.1.0 \
+    --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+    "ghcr.io/levy-cmd/hublot-kit:$t" 2>&1 | tail -n 4
+done
+limactl shell hk-ubuntu -- cosign verify \
+  --certificate-identity https://github.com/levy-cmd/Hublot-Kit/.github/workflows/release.yml@refs/tags/v0.1.1 \
+  --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+  ghcr.io/levy-cmd/hublot-kit:0.1.0 2>&1 | grep -o 'no matching CertificateIdentity found'
+limactl shell hk-ubuntu -- sudo docker buildx imagetools inspect ghcr.io/levy-cmd/hublot-kit:0.1.0 --format '{{ json .SBOM }}' | grep -oE '"linux/[a-z0-9]+"|"spdxVersion":"SPDX-[0-9.]+"' | sort -u
 limactl shell hk-ubuntu -- sh -c 'd=$(mktemp -d) && cd "$d" && V=0.1.0 && ARCH=arm64 && BASE="https://github.com/levy-cmd/Hublot-Kit/releases/download/v$V" && curl -fLO "$BASE/hublot-kit_${V}_linux_${ARCH}.tar.gz" && curl -fLO "$BASE/checksums.txt" && curl -fLO "$BASE/checksums.txt.sigstore.json" && cosign verify-blob --bundle checksums.txt.sigstore.json --certificate-identity "https://github.com/levy-cmd/Hublot-Kit/.github/workflows/release.yml@refs/tags/v$V" --certificate-oidc-issuer https://token.actions.githubusercontent.com checksums.txt && sha256sum --ignore-missing -c checksums.txt; cd / && rm -rf "$d"'
 limactl shell hk-ubuntu -- sh -c 'sudo docker rmi -f ghcr.io/levy-cmd/hublot-kit:0.1 >/dev/null; sudo rm -f /usr/local/bin/cosign'
 limactl shell hk-fedora -- sudo docker rmi -f ghcr.io/levy-cmd/hublot-kit:0.1 >/dev/null
 ```
 
-Expected: `HTTP/2 302` ; `IMAGE OK : ghcr.io/levy-cmd/hublot-kit:0.1` sur les deux VM (tirage anonyme) ; `Verification for ghcr.io/levy-cmd/hublot-kit:0.1 --` ; `Verified OK` puis `hublot-kit_0.1.0_linux_arm64.tar.gz: OK`. Le dernier bloc reprend les commandes de « Verify the release » avec `ARCH=arm64`.
+Expected: `HTTP/2 302` ; `IMAGE OK : ghcr.io/levy-cmd/hublot-kit:0.1` sur les deux VM (tirage anonyme) ; `Verification for ghcr.io/levy-cmd/hublot-kit:0.1 --` ; recontrôles hors de GitHub, sans connexion (paquet public ; `cosign` sans `sudo`, le root de la VM est déconnecté), au format éprouvé à la tâche 9, étape 6 : pour `:0.1.0` puis `:0.1`, `Verification for ghcr.io/levy-cmd/hublot-kit:<étiquette> --`, `The cosign claims were validated` et le JSON, avec l'identité exacte `@refs/tags/v0.1.0` ; l'identité `@refs/tags/v0.1.1` → `no matching CertificateIdentity found` (refus) ; attestations SBOM `"linux/amd64"`, `"linux/arm64"` et `"spdxVersion":"SPDX-2.3"` ; `Verified OK` puis `hublot-kit_0.1.0_linux_arm64.tar.gz: OK`. Le dernier bloc reprend les commandes de « Verify the release » avec `ARCH=arm64`.
 
 - [ ] **Step 9: ARRÊT : accord de l'utilisateur requis — supprimer le brouillon de la rc** (facultatif, Q46 ; le tag et l'image `0.1.0-rc.1` restent). Après le « oui » explicite : `gh release delete v0.1.0-rc.1 --yes` (sans `--cleanup-tag`). Retirer le droit ajouté au jeton : `gh auth refresh -h github.com -r read:packages`.
 
