@@ -1,6 +1,6 @@
 ---
 branche: phase/lancement
-base: 559ab12
+base: e037b01
 de: Livaille An-nour (avec Claude)
 le: 2026-10-16
 repris_par:
@@ -11,10 +11,9 @@ verif: export PATH=/opt/homebrew/bin:$PATH DOCKER_HOST=unix://$HOME/.docker/run/
 Publier la v0.1 de Hublot-Kit : plan `docs/superpowers/plans/2026-10-13-lancement.md`, tâche 10, étapes 5 à 11.
 
 ## Fait
-- Tâches 1 à 9, et étapes 1 à 4 de la tâche 10, faites et validées (relecteur + Codex) — journal complet dans `.claude/handoff/phase-lancement.registre.md`.
-- `main` = b8e11da (PR #6 fusionnée). Tag `v0.1.0` sur b8e11da ; run 38910819137 vert, terminé par `RELEASE OK : v0.1.0`.
-- Image `ghcr.io/levy-cmd/hublot-kit` : étiquettes `0.1.0` et `0.1`, plus les `sha256-…` de signature, sans `latest` ; vérifiée sur hk-ubuntu et hk-fedora.
-- **Tout est encore privé** : release `v0.1.0` en brouillon, paquet GHCR privé, dépôt privé. L'utilisateur a répondu « pas encore » au passage en public.
+- Phase terminée : la v0.1.0 est PUBLIQUE depuis le 2026-10-16. Dépôt public, release https://github.com/levy-cmd/Hublot-Kit/releases/tag/v0.1.0, image `ghcr.io/levy-cmd/hublot-kit:0.1` publique.
+- Vérification anonyme verte : image, cosign (identité `refs/tags/v0.1.0`), SBOM, sommes. Brouillon de la rc supprimé.
+- Journal complet dans `.claude/handoff/phase-lancement.registre.md`.
 
 ## Décisions
 - La publication se lance seulement par `workflow_dispatch`, derrière `guard`. Les jobs à droits revérifient le propriétaire et le tag, parce que « Re-run failed jobs » ne repasse pas par `guard`.
@@ -29,12 +28,7 @@ Publier la v0.1 de Hublot-Kit : plan `docs/superpowers/plans/2026-10-13-lancemen
 - Épingler par empreinte les actions de GitHub (`checkout`, `setup-*`) : écarté par Q40. Codex le redemande à chaque revue ; c'est déjà arbitré.
 
 ## Prochain geste
-Plan, tâche 10, étape 5 : demander l'accord explicite de l'utilisateur pour rendre le dépôt public et activer le signalement privé des vulnérabilités. Ensuite :
-- étape 6 : publier la release (ARRÊT) ;
-- étape 7 : l'utilisateur rend le paquet GHCR public dans l'interface, faute d'API ;
-- étape 8 : vérification anonyme ;
-- étape 9 : supprimer le brouillon de la rc ;
-- étapes 10 et 11 : PR de constats sur `main`, relue.
+Étape 11 du plan (T10) : relecture de la PR de clôture #8 par le relecteur et par Codex, puis fusion par l'utilisateur. Ensuite, l'utilisateur retire `read:packages` du jeton `gh`.
 
 ## Pièges
 - Toujours vérifier la branche du dépôt principal après un agent qui crée des branches : on l'a retrouvé une fois sur `ci/release-dispatch`.
