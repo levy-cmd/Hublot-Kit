@@ -14,13 +14,20 @@ import (
 
 // Views opens the file view of a container (spec §4): procfs while it runs,
 // tarindex otherwise. One Views per agent: it keeps the indexes of stopped
-// containers (spec §5.2 steps 1, 2, 4).
+// containers (spec §5.2 steps 1, 2, 4) and of images (spec v0.2 §5.5), in
+// the same slots, and runs the extractions of image files.
 type Views struct {
 	docker dockerx.Client
 	opt    Options
 	mu     sync.Mutex
-	builds map[string]*build // key: full ID + "\x00" + State.FinishedAt
-	order  []string          // keys, least recently used first
+	// key: full ID + "\x00" + State.FinishedAt for a container,
+	// imageKey(ID) for an image.
+	builds map[string]*build
+	order  []string // keys, least recently used first
+	// Extractions of image files (imageindex.go), under mu.
+	extracts map[string]*extraction // key: image ID + "\x00" + resolved path
+	running  map[string]bool        // image ID → one extraction in progress
+	slots    chan struct{}          // ExtractLimits.PerAgent
 }
 
 // Options of NewViews; DefaultOptions are the agent's.
@@ -34,6 +41,10 @@ type Options struct {
 	// ReadCgroup replaces the reading of /proc/<pid>/cgroup (spec §5.1 step 3).
 	// nil in production; tests give one to a process of their own.
 	ReadCgroup func(pid int) ([]byte, error)
+	// Image caps the index of an image, Extract the reading of one of its
+	// files (spec v0.2 §5.5); zero fields: their defaults.
+	Image   ImageLimits
+	Extract ExtractLimits
 }
 
 // DefaultOptions and NewViews: see Interfaces. NewViews replaces every zero
@@ -43,7 +54,8 @@ type Options struct {
 
 func DefaultOptions() Options {
 	return Options{Limits: DefaultIndexLimits, MaxCached: 3, FirstWait: time.Second,
-		IdleTTL: 10 * time.Minute, Grace: 30 * time.Second, SlowRetry: 5 * time.Minute}
+		IdleTTL: 10 * time.Minute, Grace: 30 * time.Second, SlowRetry: 5 * time.Minute,
+		Image: DefaultImageLimits, Extract: DefaultExtractLimits}
 }
 
 func NewViews(docker dockerx.Client, opt Options) *Views {
@@ -69,7 +81,9 @@ func NewViews(docker dockerx.Client, opt Options) *Views {
 	if opt.SlowRetry <= 0 {
 		opt.SlowRetry = 5 * time.Minute
 	}
-	return &Views{docker: docker, opt: opt, builds: map[string]*build{}}
+	opt.Image, opt.Extract = opt.Image.withDefaults(), opt.Extract.withDefaults()
+	return &Views{docker: docker, opt: opt, builds: map[string]*build{},
+		extracts: map[string]*extraction{}, running: map[string]bool{}, slots: make(chan struct{}, opt.Extract.PerAgent)}
 }
 
 // sizeWait bounds the read of SizeRootFs before an export (0.02 s measured
@@ -79,11 +93,12 @@ const sizeWait = 2 * time.Second
 type build struct {
 	id      string
 	name    string        // without the leading "/": Pending matches it
-	done    chan struct{} // closed once idx, err and doneAt are set
+	done    chan struct{} // closed once idx (or img), err and doneAt are set
 	cancel  context.CancelFunc
 	read    atomic.Int64
-	total   atomic.Int64 // SizeRootFs; 0 while unknown
+	total   atomic.Int64 // SizeRootFs, or the size of an image; 0 while unknown
 	idx     *index
+	img     *imageIndex // an image's build: idx is nil
 	err     error
 	doneAt  time.Time
 	served  bool        // under v.mu: its result reached a request at least once
@@ -206,6 +221,30 @@ func (v *Views) drop(key string, b *build) {
 }
 
 func (v *Views) index(ctx context.Context, key string, info dockerx.ContainerInfo) (*index, error) {
+	b, err := v.await(ctx, key, containerSticky, func() *build {
+		for k, old := range v.builds {
+			if old.id == info.ID {
+				v.removeLocked(k) // restarted since: stale
+			}
+		}
+		return v.startLocked(key, &build{id: info.ID, name: info.Name}, v.opt.Limits.MaxDuration,
+			func(ctx context.Context, b *build) { v.run(ctx, key, b, info) })
+	})
+	if err != nil {
+		return nil, err
+	}
+	return b.idx, nil
+}
+
+// containerSticky: the errors of a container's build kept until its
+// FinishedAt changes (Q11, R21); any other is delivered once.
+func containerSticky(err error) bool { return errors.Is(err, ErrTooLarge) }
+
+// await returns the finished build of key, started by start (under v.mu)
+// when there is none, or *IndexingError while it runs. sticky tells the
+// errors kept with the build; any other is delivered once, then the next
+// access builds again.
+func (v *Views) await(ctx context.Context, key string, sticky func(error) bool, start func() *build) (*build, error) {
 	v.mu.Lock()
 	b, ok := v.builds[key]
 	if ok && finished(b) && errors.Is(b.err, errTooSlow) && time.Since(b.doneAt) > v.opt.SlowRetry {
@@ -213,12 +252,7 @@ func (v *Views) index(ctx context.Context, key string, info dockerx.ContainerInf
 		ok = false
 	}
 	if !ok {
-		for k, old := range v.builds {
-			if old.id == info.ID {
-				v.removeLocked(k) // restarted since: stale
-			}
-		}
-		if b = v.startLocked(key, info); b == nil {
+		if b = start(); b == nil {
 			v.mu.Unlock()
 			return nil, &IndexingError{} // every slot holds a build in progress (review I1)
 		}
@@ -239,14 +273,14 @@ func (v *Views) index(ctx context.Context, key string, info dockerx.ContainerInf
 	}
 	v.mu.Lock()
 	b.served = true
-	if b.err != nil && !errors.Is(b.err, ErrTooLarge) && v.builds[key] == b {
+	if b.err != nil && !sticky(b.err) && v.builds[key] == b {
 		v.removeLocked(key) // delivered once: the next access builds again
 	}
 	v.mu.Unlock()
 	if b.err != nil {
 		return nil, b.err
 	}
-	return b.idx, nil
+	return b, nil
 }
 
 // startLocked starts the build of key, or returns nil when no slot can be
@@ -254,7 +288,7 @@ func (v *Views) index(ctx context.Context, key string, info dockerx.ContainerInf
 // index no request has seen yet; otherwise four containers polled at once
 // would evict each other forever. R20: past Grace, an unseen index (its
 // request went away) is evictable too. The victim is the least recently used.
-func (v *Views) startLocked(key string, info dockerx.ContainerInfo) *build {
+func (v *Views) startLocked(key string, b *build, maxDuration time.Duration, run func(context.Context, *build)) *build {
 	for len(v.builds) >= v.opt.MaxCached {
 		i := slices.IndexFunc(v.order, func(k string) bool {
 			b := v.builds[k]
@@ -265,11 +299,11 @@ func (v *Views) startLocked(key string, info dockerx.ContainerInfo) *build {
 		}
 		v.removeLocked(v.order[i])
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), v.opt.Limits.MaxDuration)
-	b := &build{id: info.ID, name: info.Name, done: make(chan struct{}), cancel: cancel}
+	ctx, cancel := context.WithTimeout(context.Background(), maxDuration)
+	b.done, b.cancel = make(chan struct{}), cancel
 	v.builds[key] = b
 	v.order = append(v.order, key)
-	go v.run(ctx, key, b, info)
+	go run(ctx, b)
 	return b
 }
 
@@ -317,16 +351,18 @@ func (v *Views) run(ctx context.Context, key string, b *build, info dockerx.Cont
 	}
 	b.idx, b.err, b.doneAt = idx, err, time.Now()
 	close(b.done)
+	v.settle(key, b)
+}
+
+// settle arms the idle timer of a finished build. An error is kept: until
+// one request has received it (see await), so that a poll never rebuilds
+// before seeing it, or for good when sticky (a too_large holds no index:
+// until FinishedAt changes, Q11, R21).
+func (v *Views) settle(key string, b *build) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
-	if v.builds[key] != b {
+	if v.builds[key] != b || b.err != nil {
 		return
-	}
-	if err != nil && !errors.Is(err, ErrTooLarge) {
-		return // kept until one request has received it (see index), so that a poll never rebuilds before seeing the error
-	}
-	if err != nil {
-		return // a too_large holds no index: sticky until FinishedAt changes (Q11, R21)
 	}
 	// Review I5: spec §5.2 step 4 counts memory at rest; an index unused for
 	// IdleTTL goes away.

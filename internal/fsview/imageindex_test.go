@@ -114,10 +114,7 @@ func outerTar(t testing.TB, files ...outerFile) ([]byte, []span) {
 		if err := tw.WriteHeader(h); err != nil {
 			t.Fatal(err)
 		}
-		if err := tw.Flush(); err != nil {
-			t.Fatal(err)
-		}
-		start := int64(buf.Len())
+		start := int64(buf.Len()) // the header block is written
 		if h.Typeflag == tar.TypeReg {
 			if _, err := tw.Write(f.body); err != nil {
 				t.Fatal(err)
@@ -331,6 +328,12 @@ func TestImageIndexSymlinkEscape(t *testing.T) {
 	}
 	if _, err := statImage(x, "/z"); !errors.Is(err, fs.ErrNotExist) {
 		t.Errorf("/z hors de l'index : %v, attendu not_found", err)
+	}
+	// Open resolves the same way: the content of /etc/passwd of the image.
+	archive := saveArchive(t, layerOf(t, tdir("etc/"), tfile("etc/passwd", "root:x:0:0:image"), tlink("x", "../../../../etc/passwd")))
+	fsys := readyImage(t, NewViews(imageDocker(archive), Options{}), imgID)
+	if got, err := readImage(t, fsys, "/x"); err != nil || got != "root:x:0:0:image" {
+		t.Errorf("Open(/x) = %q, %v", got, err)
 	}
 }
 
@@ -816,12 +819,18 @@ func TestImageIndexOuterSparseRefused(t *testing.T) {
 	sparse := rawEntry("blobs/sha256/"+strings.Repeat("5", 64), tar.TypeReg, "hello",
 		paxRecord("GNU.sparse.map", "0,5"), paxRecord("GNU.sparse.numblocks", "1"),
 		paxRecord("GNU.sparse.size", strconv.FormatInt(1<<40, 10)))
-	start := time.Now()
-	if _, err := buildArchive(endOfTar(append(archive, sparse...)), DefaultImageLimits); !isUnsupported(err) {
-		t.Errorf("blob creux : %v", err)
-	}
-	if d := time.Since(start); d > time.Second {
-		t.Errorf("refusé en %v", d)
+	done := make(chan error, 1)
+	go func() {
+		_, err := buildArchive(endOfTar(append(archive, sparse...)), DefaultImageLimits)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if !isUnsupported(err) {
+			t.Errorf("blob creux : %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("blob creux jamais refusé en 1 s : ses trous sont hachés")
 	}
 }
 
@@ -1106,9 +1115,15 @@ func TestImageExtractLimits(t *testing.T) {
 		})
 		fsys := readyImage(t, NewViews(h, Options{}), imgID)
 		fsys.Open(tctx, "/a")
+		for deadline := time.Now().Add(2 * time.Second); h.callsOf(imgID) < 2; time.Sleep(time.Millisecond) {
+			if time.Now().After(deadline) {
+				t.Fatal("extraction de /a jamais lancée")
+			}
+		}
 		if _, err := fsys.Open(tctx, "/b"); !errors.Is(err, ErrIndexing) {
 			t.Errorf("seconde extraction de l'image : %v", err)
 		}
+		time.Sleep(20 * time.Millisecond)
 		if n := h.callsOf(imgID); n != 2 {
 			t.Errorf("%d exports, attendu 2 (l'index, puis /a seul)", n)
 		}
@@ -1268,6 +1283,24 @@ func TestImageSearch(t *testing.T) {
 	}
 	if n := f.ImageSaveCalls.Load(); n != 0 {
 		t.Fatalf("la recherche a lancé %d export(s)", n)
+	}
+	// Built, but never served to the explorer (its request went away).
+	if _, err := v.ForImage(tctx, imgID); !errors.Is(err, ErrIndexing) {
+		t.Fatalf("ForImage : %v", err)
+	}
+	for deadline := time.Now().Add(2 * time.Second); ; time.Sleep(time.Millisecond) {
+		v.mu.Lock()
+		b := v.builds[imageKey(imgID)]
+		v.mu.Unlock()
+		if finished(b) {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("index jamais construit")
+		}
+	}
+	if _, _, indexed := v.SearchImage(tctx, imgID, "nginx", 10); indexed {
+		t.Error("index jamais servi : indexed")
 	}
 	readyImage(t, v, imgID)
 	hits, _, indexed := v.SearchImage(tctx, imgID, "nginx.c", 10)

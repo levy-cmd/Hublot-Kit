@@ -66,7 +66,26 @@ type Fake struct {
 	// id as given (absent: ErrNotFound).
 	ImageSummaries []ImageSummary
 	Histories      map[string][]ImageLayer
-	Err            error
+	// ImageSaves answers ImageSave, by id as given (absent: ErrNotFound);
+	// ImageSaveCalls counts the calls.
+	ImageSaves     map[string][]byte
+	ImageSaveCalls atomic.Int32
+	// NoWrites makes PutArchive, the one write of the Client, panic: a test
+	// of a read-only feature fails if anything writes to Docker.
+	NoWrites bool
+	Err      error
+}
+
+func (f *Fake) ImageSave(_ context.Context, id string) (io.ReadCloser, error) {
+	f.ImageSaveCalls.Add(1)
+	if f.Err != nil {
+		return nil, f.Err
+	}
+	b, ok := f.ImageSaves[id]
+	if !ok {
+		return nil, fmt.Errorf("%w: image %s", ErrNotFound, id)
+	}
+	return io.NopCloser(bytes.NewReader(b)), nil
 }
 
 // SizePair is what ContainerSize answers.
@@ -201,6 +220,9 @@ func (f *Fake) VolumeOptions(_ context.Context, name string) (map[string]string,
 }
 
 func (f *Fake) PutArchive(_ context.Context, id, dir string, content io.Reader) error {
+	if f.NoWrites {
+		panic("dockerx.Fake: PutArchive with NoWrites")
+	}
 	b, err := io.ReadAll(content)
 	if err != nil {
 		return err

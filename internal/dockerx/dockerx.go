@@ -223,6 +223,10 @@ type Client interface {
 	ImageList(ctx context.Context) ([]ImageSummary, error)
 	// ImageHistory is GET /images/{id}/history: never nil.
 	ImageHistory(ctx context.Context, id string) ([]ImageLayer, error)
+	// ImageSave streams the export of `docker save` of the image id, given
+	// by its full ID (GET /images/get?names=<id>): a read, never a container
+	// created (spec v0.2 §5.5). The caller closes it; it also ends with ctx.
+	ImageSave(ctx context.Context, id string) (io.ReadCloser, error)
 }
 
 // DaemonInfo is the Docker part of /api/meta. Host is raw: the API masks it.
@@ -577,6 +581,14 @@ func fromHistory(items []image.HistoryResponseItem) []ImageLayer {
 		out = append(out, l)
 	}
 	return out
+}
+
+func (e *engine) ImageSave(ctx context.Context, id string) (io.ReadCloser, error) {
+	rc, err := e.c.ImageSave(ctx, []string{id})
+	if err != nil {
+		return nil, wrap(err)
+	}
+	return rc, nil
 }
 
 func (e *engine) Changes(ctx context.Context, id string) ([]Change, error) {

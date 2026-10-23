@@ -39,6 +39,22 @@ func (v *Views) SearchCached(ctx context.Context, info dockerx.ContainerInfo, q 
 	return hits, truncated, true
 }
 
+// SearchImage looks for q in the index of image id (full ID) already served
+// to the explorer, as SearchCached does for a container: never an export,
+// never a request to Docker, not a visit. indexed is false when there is no
+// such index (never built, in progress or failed).
+func (v *Views) SearchImage(ctx context.Context, id string, q string, limit int) (hits []SearchHit, truncated, indexed bool) {
+	v.mu.Lock()
+	b, ok := v.builds[imageKey(id)]
+	if !ok || !finished(b) || b.err != nil || b.img == nil || !b.served {
+		v.mu.Unlock()
+		return nil, false, false
+	}
+	v.mu.Unlock()
+	hits, truncated = b.img.idx.search(ctx, q, max(limit, 1))
+	return hits, truncated, true
+}
+
 // Indexing reports whether a build of ref (full ID or name, as Pending
 // matches them: never a prefix) is in progress, without asking Docker and
 // without making a visit of it: unlike Pending, neither its last use (Grace,
