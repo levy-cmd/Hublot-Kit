@@ -2,8 +2,8 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import type { Radiography } from './api';
 import {
-	addReveal, askFor, commandLine, envValue, forgetReveals, isStopped, mountLabel, noReveals, portLabel, removeReveal, restartLabel,
-	revealedFor, shortId
+	addReveal, askFor, commandLine, envValue, forgetReveals, isStopped, labelChip, lastExit, mountLabel, noReveals, portLabel,
+	removeReveal, restartLabel, revealedFor, shortId
 } from './xray';
 
 describe('xray (F7)', () => {
@@ -90,6 +90,33 @@ describe('xray (F7)', () => {
 		expect(revealedFor(addReveal(hid, askFor(a, 'a'), 'a', 'DB_PASSWORD', 's3cr3t'), 'a')).toEqual({ DB_PASSWORD: 's3cr3t' });
 	});
 
+	it('shows a label value only when the agent sent it in clear (spec v0.2 §5.2)', () => {
+		expect(labelChip({ key: 'com.docker.compose.project', value: 'shop', masked: false }, 'masqué')).toEqual({
+			key: 'com.docker.compose.project', value: 'shop', masked: false
+		});
+		expect(labelChip({ key: 'traefik.http.middlewares.auth.basicauth.users', value: null, masked: true }, 'masqué')).toEqual({
+			key: 'traefik.http.middlewares.auth.basicauth.users', value: 'masqué', masked: true
+		});
+		// Masked wins over a value, should one ever come with it.
+		expect(labelChip({ key: 'backup.dsn', value: 's3cr3t', masked: true }, 'masqué').value).toBe('masqué');
+		// An empty value in clear stays empty, not masked.
+		expect(labelChip({ key: 'com.docker.compose.depends_on', value: '', masked: false }, 'masqué')).toEqual({
+			key: 'com.docker.compose.depends_on', value: '', masked: false
+		});
+	});
+
+	it('reads the last exit, "never" for Docker\'s zero date (spec v0.2 §5.3)', () => {
+		const s = (finishedAt: string | undefined, running: boolean, exitCode: number) => ({
+			status: running ? 'running' : 'exited', running, exitCode, oomKilled: false, finishedAt
+		});
+		expect(lastExit(s(undefined, true, 0))).toBeNull();
+		expect(lastExit(s('0001-01-01T00:00:00Z', false, 0))).toBeNull();
+		expect(lastExit(s('2026-10-20T08:00:00Z', false, 137))).toEqual({ at: '2026-10-20T08:00:00Z', code: 137 });
+		expect(lastExit(s('2026-10-20T08:00:00Z', false, 0))).toEqual({ at: '2026-10-20T08:00:00Z', code: 0 });
+		// Restarted since: the exit is known, its code is not (reset at start).
+		expect(lastExit(s('2026-10-20T08:00:00Z', true, 0))).toEqual({ at: '2026-10-20T08:00:00Z', code: null });
+	});
+
 	it('treats a restarting container as stopped, like the agent (Running && Pid != 0)', () => {
 		const s = (status: string, running: boolean) => ({ status, running, exitCode: 0, oomKilled: false });
 		expect(isStopped(s('running', true))).toBe(false);
@@ -106,6 +133,7 @@ describe('xray (F7)', () => {
 		const r = JSON.parse(raw) as Radiography;
 		expect(r.state.finishedAt).toBe('2026-10-20T08:00:00.123456789Z');
 		expect(r.state.exitCode).toBe(137);
+		expect(lastExit(r.state)).toEqual({ at: '2026-10-20T08:00:00.123456789Z', code: 137 });
 		expect(isStopped(r.state)).toBe(true);
 		// Spec v0.2 §5.2: the label rule applied by the agent.
 		expect(r.labels).toEqual([

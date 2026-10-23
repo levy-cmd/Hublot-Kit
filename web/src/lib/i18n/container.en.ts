@@ -30,5 +30,22 @@ export default {
 	'panels.files': 'File system',
 	'panels.diff': 'Diff with the image',
 	'panels.content': 'File content',
-	'panels.logs': 'Live logs'
+	'panels.logs': 'Live logs',
+	'container.lastExit': 'Last exit',
+	'container.never': 'never',
+	'container.figures': 'Key figures',
+	'container.figure.files': 'Files',
+	'container.figure.imageSize': 'Image size',
+	'container.figure.size': 'Container size',
+	'container.figure.total': 'total {size}',
+	'container.figure.filesAt': 'Counted in the index built on {at}',
+	'container.figure.filesNone': 'Known once the files of the stopped container have been indexed (Explore the files)',
+	'container.figure.sizeHint': 'Writable layer: what the container wrote since its creation. Total: with the image.',
+	'container.figure.unknown': 'Not available',
+	'container.labels': 'Labels',
+	'container.noLabels': 'No labels',
+	'container.labelsAll': 'Show all {n} labels',
+	'container.labelMasked': 'masked',
+	'container.labelMaskedHint':
+		'Value masked: only com.docker.compose.* and org.opencontainers.image.* labels are shown (guide, "Labels"). Read it on the host with docker inspect.'
 };

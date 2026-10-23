@@ -25,5 +25,10 @@ export default {
 	'containers.empty': 'No containers on this server.',
 	'containers.noMatch': 'No container matches these filters.',
 	'containers.loading': 'Loading…',
-	'containers.pick': 'Choose a container in the list to open this panel.'
+	'containers.pick': 'Choose a container in the list to open this panel.',
+	'containers.col.project': 'Project',
+	'containers.project': 'Compose project',
+	'containers.project.any': 'Any project',
+	'containers.project.none': 'No project',
+	'containers.project.title': 'Compose project {project}, service {service}'
 };

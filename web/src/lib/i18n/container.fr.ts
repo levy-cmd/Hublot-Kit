@@ -30,5 +30,22 @@ export default {
 	'panels.files': 'Système de fichiers',
 	'panels.diff': "Diff avec l'image",
 	'panels.content': 'Contenu du fichier',
-	'panels.logs': 'Logs en direct'
+	'panels.logs': 'Logs en direct',
+	'container.lastExit': 'Dernière sortie',
+	'container.never': 'jamais',
+	'container.figures': 'Chiffres clés',
+	'container.figure.files': 'Fichiers',
+	'container.figure.imageSize': "Taille de l'image",
+	'container.figure.size': 'Taille du conteneur',
+	'container.figure.total': 'total {size}',
+	'container.figure.filesAt': "Comptés dans l'index construit le {at}",
+	'container.figure.filesNone': 'Connu une fois les fichiers du conteneur arrêté indexés (Explorer les fichiers)',
+	'container.figure.sizeHint': "Couche inscriptible : ce que le conteneur a écrit depuis sa création. Total : avec l'image.",
+	'container.figure.unknown': 'Non disponible',
+	'container.labels': 'Labels',
+	'container.noLabels': 'Aucun label',
+	'container.labelsAll': 'Afficher les {n} labels',
+	'container.labelMasked': 'masqué',
+	'container.labelMaskedHint':
+		"Valeur masquée : seuls les labels com.docker.compose.* et org.opencontainers.image.* sont montrés (guide, « Labels »). Lisez-la sur l'hôte avec docker inspect."
 };

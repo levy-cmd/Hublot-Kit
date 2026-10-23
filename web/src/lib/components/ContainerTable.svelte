@@ -58,6 +58,7 @@
 			<tr>
 				<th scope="col" class="c-name">{t('containers.col.name')}</th>
 				<th scope="col" class="c-image">{t('containers.col.image')}</th>
+				<th scope="col" class="c-project">{t('containers.col.project')}</th>
 				<th scope="col" class="c-state">{t('containers.col.status')}</th>
 				<th scope="col" class="c-ports">{t('containers.col.ports')}</th>
 				<th scope="col" class="c-uptime">{t('containers.col.uptime')}</th>
@@ -83,6 +84,13 @@
 						</div>
 					</td>
 					<td class="c-image"><span class="cut mono" title={c.image}>{c.image}</span></td>
+					<td class="c-project">
+						{#if c.project}
+							<span class="cut" title={tf('containers.project.title', { project: c.project, service: c.service ?? '—' })}
+								>{c.project}</span
+							>
+						{:else}<span class="muted" aria-label={t('containers.project.none')}>—</span>{/if}
+					</td>
 					<td class="c-state">
 						<span class="state tone-{tone}"><span class="dot {tone}"></span>{stateLabel(c.state)}</span>
 					</td>
@@ -140,16 +148,19 @@
 		border-top-right-radius: var(--rayon);
 	}
 	th.c-name {
-		width: 32.5%;
+		width: 26%;
 	}
 	th.c-image {
 		width: 10.5%;
+	}
+	th.c-project {
+		width: 11%;
 	}
 	th.c-state {
 		width: 6.5rem;
 	}
 	th.c-ports {
-		width: 14%;
+		width: 12.5%;
 	}
 	th.c-uptime {
 		width: 15.5%;
@@ -217,9 +228,13 @@
 		text-overflow: ellipsis;
 	}
 	.c-image,
+	.c-project,
 	.c-ports,
 	.c-uptime {
 		color: var(--texte-doux);
+	}
+	.c-project {
+		font-size: var(--t-s);
 	}
 	.state {
 		display: inline-flex;
@@ -254,7 +269,8 @@
 		white-space: normal;
 	}
 	@media (max-width: 48rem) {
-		.c-ports {
+		.c-ports,
+		.c-project {
 			display: none;
 		}
 	}

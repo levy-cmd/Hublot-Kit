@@ -4,11 +4,12 @@
 
 <script lang="ts">
 	import { goto } from '$app/navigation';
-	import { ApiError, getContainer, type Radiography } from '#lib/api.ts';
+	import { ApiError, getContainer, getFigures, type Figures, type Radiography } from '#lib/api.ts';
 	import { stateLabel, stateTone } from '#lib/containers.ts';
+	import { formatSize } from '#lib/files.ts';
 	import { errorMessage, lang, t, tf } from '#lib/i18n/index.ts';
 	import Icon from '#lib/icons/Icon.svelte';
-	import { commandLine, isStopped, portLabel } from '#lib/xray.ts';
+	import { commandLine, isStopped, labelChip, lastExit, portLabel } from '#lib/xray.ts';
 	import ChangesList from './ChangesList.svelte';
 	import CopyButton from './CopyButton.svelte';
 	import FileBrowser from './FileBrowser.svelte';
@@ -67,6 +68,26 @@
 		};
 	});
 
+	// Spec v0.2 §5.3: the key figures come apart, and never hold the detail
+	// back ("—" while they load, or if they fail: up to 30 s while dockerd
+	// exports the container).
+	let figures = $state<Figures | null>(null);
+	$effect(() => {
+		const wanted = id;
+		void reloads;
+		let current = true;
+		figures = null;
+		getFigures(wanted)
+			.then((f) => {
+				if (current) figures = f;
+			})
+			.catch(() => {}); // "—": the figures are a bonus, the detail tells the errors
+		return () => {
+			current = false;
+		};
+	});
+	const size = (n: number | null | undefined) => (n == null ? '—' : formatSize(n));
+
 	const TABS: DetailTab[] = ['overview', 'logs', 'diff', 'files', 'secrets'];
 	let tabs = $derived(mode === 'page' ? TABS : (['overview', 'secrets'] as DetailTab[]));
 	let shownTab = $derived(tabs.includes(tab) ? tab : 'overview');
@@ -74,6 +95,12 @@
 	// The command as the radiography shows it: masked by the agent. Copying
 	// copies this form, never a revealed value.
 	let command = $derived(radio ? commandLine([...radio.entrypoint, ...radio.cmd]) : '');
+	let exit = $derived(radio ? lastExit(radio.state) : null);
+	let labels = $derived(radio ? radio.labels.map((l) => labelChip(l, t('container.labelMasked'))) : []);
+	// An image may bring forty labels: ten first, the rest on demand.
+	const LABELS_SHOWN = 10;
+	let labelsOpen = $state(false);
+	let shownLabels = $derived(labelsOpen ? labels : labels.slice(0, LABELS_SHOWN));
 	// Three lines at most, "Show all" when it is longer (the mock-up's block).
 	let cmdEl = $state<HTMLElement>();
 	let cmdOpen = $state(false);
@@ -130,6 +157,34 @@
 			</dd>
 			<dt>{t('container.created')}</dt>
 			<dd>{when(radio.created)}</dd>
+			<dt>{t('container.lastExit')}</dt>
+			<dd>
+				{#if exit}{when(exit.at)}{#if exit.code}{tf('container.exitCode', { n: exit.code })}{/if}{:else}{t('container.never')}{/if}
+			</dd>
+		</dl>
+
+		<dl class="figures" aria-label={t('container.figures')}>
+			<div class="figure">
+				<dt>{t('container.figure.files')}</dt>
+				<dd
+					title={figures?.files
+						? tf('container.figure.filesAt', { at: when(figures.files.at) })
+						: t('container.figure.filesNone')}
+				>
+					{figures?.files ? figures.files.count.toLocaleString(lang) : '—'}
+				</dd>
+			</div>
+			<div class="figure">
+				<dt>{t('container.figure.imageSize')}</dt>
+				<dd>{size(figures?.imageSize)}</dd>
+			</div>
+			<div class="figure">
+				<dt>{t('container.figure.size')}</dt>
+				<dd title={t('container.figure.sizeHint')}>
+					{size(figures?.sizeRw)}
+					{#if figures?.sizeRootFs != null}<span class="sub">{tf('container.figure.total', { size: size(figures.sizeRootFs) })}</span>{/if}
+				</dd>
+			</div>
 		</dl>
 
 		<nav class="tabs" aria-label={t('container.tabs')}>
@@ -172,6 +227,38 @@
 									<li class="mono">{portLabel(p, t('xray.portAuto'))}{#if !p.ip && !p.public}&nbsp;<span class="muted">({t('xray.exposedOnly')})</span>{/if}</li>
 								{/each}
 							</ul>
+						{/if}
+					</div>
+				</div>
+				<div class="block">
+					<span class="block-icon"><Icon name="info" /></span>
+					<div class="block-main">
+						<h3>{t('container.labels')}</h3>
+						{#if labels.length === 0}
+							<p class="muted">{t('container.noLabels')}</p>
+						{:else}
+							<ul class="chips" id="detail-labels">
+								{#each shownLabels as l (l.key)}
+									<li class="chip">
+										<span class="k mono">{l.key}</span>
+										{#if l.masked}
+											<span class="v masked" title={t('container.labelMaskedHint')}>{l.value}</span>
+										{:else if l.value}
+											<span class="v mono">{l.value}</span>
+										{/if}
+									</li>
+								{/each}
+							</ul>
+							{#if labels.length > LABELS_SHOWN}
+								<button
+									type="button"
+									class="more"
+									aria-expanded={labelsOpen}
+									aria-controls="detail-labels"
+									onclick={() => (labelsOpen = !labelsOpen)}
+									>{labelsOpen ? t('container.showLess') : tf('container.labelsAll', { n: labels.length })}</button
+								>
+							{/if}
 						{/if}
 					</div>
 				</div>
@@ -263,6 +350,74 @@
 	}
 	.image .mono {
 		overflow-wrap: anywhere;
+	}
+	.figures {
+		display: grid;
+		grid-template-columns: repeat(3, minmax(0, 1fr));
+		gap: 0.5rem;
+		margin: 0;
+	}
+	.figure {
+		display: grid;
+		align-content: start;
+		gap: 0.2rem;
+		padding: 0.6rem 0.7rem;
+		background: var(--releve);
+		border-radius: var(--rayon);
+		min-width: 0;
+	}
+	.figure dt {
+		font-size: var(--t-xs);
+		color: var(--texte-doux);
+	}
+	.figure dd {
+		margin: 0;
+		font-size: var(--t-l);
+		font-weight: 600;
+		font-variant-numeric: tabular-nums;
+		overflow-wrap: anywhere;
+	}
+	.figure .sub {
+		display: block;
+		font-size: var(--t-xs);
+		font-weight: 400;
+		color: var(--texte-doux);
+	}
+	.chips {
+		list-style: none;
+		margin: 0;
+		padding: 0;
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.35rem;
+		font-size: var(--t-xs);
+	}
+	.chip {
+		display: inline-flex;
+		flex-wrap: wrap;
+		max-width: 100%;
+		border: 1px solid var(--trait);
+		border-radius: var(--rayon);
+		background: var(--surface);
+		overflow: hidden;
+	}
+	.chip .k,
+	.chip .v {
+		padding: 0.15rem 0.4rem;
+		overflow-wrap: anywhere;
+		min-width: 0;
+	}
+	.chip .k {
+		color: var(--texte-doux);
+	}
+	.chip .v {
+		border-left: 1px solid var(--trait);
+		color: var(--texte);
+	}
+	.chip .v.masked {
+		font-style: italic;
+		color: var(--texte-doux);
+		cursor: help;
 	}
 	.tab-body {
 		display: grid;

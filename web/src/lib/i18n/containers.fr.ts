@@ -25,5 +25,10 @@ export default {
 	'containers.empty': 'Aucun conteneur sur ce serveur.',
 	'containers.noMatch': 'Aucun conteneur ne correspond à ces filtres.',
 	'containers.loading': 'Chargement…',
-	'containers.pick': 'Choisissez un conteneur dans la liste pour ouvrir ce panneau.'
+	'containers.pick': 'Choisissez un conteneur dans la liste pour ouvrir ce panneau.',
+	'containers.col.project': 'Projet',
+	'containers.project': 'Projet Compose',
+	'containers.project.any': 'Tous les projets',
+	'containers.project.none': 'Sans projet',
+	'containers.project.title': 'Projet Compose {project}, service {service}'
 };

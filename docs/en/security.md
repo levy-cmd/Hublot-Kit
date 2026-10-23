@@ -63,6 +63,9 @@ Treat the access token like the root password of the server.
   `CREDENTIAL`, `PRIVATE` or `DSN`, when its value holds a URL with credentials, or a password in a known form
   (connection strings, `--requirepass …`, `Authorization: Bearer …`). The command and the error message are masked
   part by part.
+- Labels follow an allow list: only the values of `com.docker.compose.*` and `org.opencontainers.image.*` labels
+  are shown, if the masking above finds nothing in them. Other labels show their name, never their value, and cannot
+  be revealed: a Traefik `basicauth.users` label holds a password hash the rules above do not recognise.
 - A masked value is revealed one at a time, and each reveal is written to the audit log (the name, never the value)
   before the value is sent.
 - This is a heuristic: [some forms are not recognised](limitations.md#secret-masking). Logs are never masked.

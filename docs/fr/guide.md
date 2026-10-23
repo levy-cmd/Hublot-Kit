@@ -25,19 +25,32 @@ Sous 80 rem de large, la barre se réduit à ses icônes ; sous 48 rem, elle dev
 ## La page Conteneurs
 
 - Les onglets Tous, En cours et Arrêtés filtrent la liste ; un conteneur en pause ou qui redémarre compte parmi « En cours ». La liste « Statut » choisit un état précis de Docker.
-- Le champ de filtre cherche dans le nom et l'image. Il n'est pas gardé dans l'adresse de la page, car un nom peut être sensible ; l'onglet et le statut le sont.
+- Le champ de filtre cherche dans le nom et l'image. Il n'est pas gardé dans l'adresse de la page, car un nom peut être sensible ; l'onglet, le statut et le projet le sont.
+- La colonne Projet et la liste « Projet » viennent des labels de Compose (`com.docker.compose.project` et `.service`). La liste propose les projets présents, plus « Sans projet ». Un nom de projet que le masquage des secrets refuserait n'est pas envoyé : le conteneur compte alors comme « sans projet ».
 - La colonne Uptime traduit le statut de Docker : `Up 3 hours (healthy)` devient « depuis 3 heures, sain », `Exited (137) 2 days ago` devient « arrêté il y a 2 jours, code 137 ». Un texte que l'interface ne reconnaît pas est montré tel quel.
 - La couleur double toujours un texte : émeraude pour un conteneur en marche, ambre pour une alerte (pause, redémarrage, sortie avec un code non nul), gris pour un arrêt propre.
 - Au clavier : `/` place le curseur dans le filtre, les flèches, Début et Fin parcourent les lignes, Entrée choisit le conteneur.
 
 ## Le panneau de détail
 
-Choisir un conteneur ouvre à droite son détail : l'image (avec un bouton de copie), la date de création, puis deux onglets.
+Choisir un conteneur ouvre à droite son détail : l'image (avec un bouton de copie), la date de création, la dernière sortie (« jamais » pour un conteneur jamais arrêté), trois chiffres clés, puis deux onglets.
 
-- **Aperçu** : la commande, sous la forme masquée par l'agent (le bouton de copie copie cette forme, jamais une valeur révélée), les ports, puis, sous « Détails », l'identité, l'état, les réseaux et les montages.
+- **Aperçu** : la commande, sous la forme masquée par l'agent (le bouton de copie copie cette forme, jamais une valeur révélée), les ports, les labels, puis, sous « Détails », l'identité, l'état, les réseaux et les montages.
 - **Secrets** : les variables d'environnement. Une valeur secrète est masquée ; « Révéler » la demande à l'agent, qui journalise la révélation. Une valeur révélée est oubliée quand on quitte l'onglet ou le conteneur.
 
 Les boutons « Explorer les fichiers », « Comparer avec l'image » et « Voir les logs » ouvrent les panneaux du bas.
+
+### Chiffres clés
+
+Ils arrivent après le reste du détail, sans le retenir ; « — » veut dire en cours de chargement, inconnu ou indisponible.
+
+- **Fichiers** : le nombre d'entrées de l'index d'un conteneur arrêté, s'il est déjà construit (en ouvrant ses fichiers). L'agent ne lance jamais une construction pour ce chiffre : sans index, et pour un conteneur en marche, il reste « — ».
+- **Taille de l'image** : la taille que Docker donne pour l'image du conteneur, gardée en mémoire par image (une image ne change pas).
+- **Taille du conteneur** : la couche inscriptible (ce que le conteneur a écrit depuis sa création), puis le total avec l'image. Pour la calculer, Docker parcourt la couche inscriptible : l'agent ne la demande qu'à l'ouverture du détail, jamais pour la liste, et la garde une minute. Pendant l'export d'un conteneur arrêté, Docker le verrouille : le chiffre attend, 30 s au plus.
+
+### Labels
+
+Les labels portent souvent des secrets que le masquage ne reconnaît pas, par exemple `traefik.http.middlewares.auth.basicauth.users=admin:$apr1$…`. Seules les valeurs des labels `com.docker.compose.*` et `org.opencontainers.image.*` sont montrées, et seulement si le masquage n'y trouve rien. Les autres labels montrent leur nom avec la valeur « masqué », sans révélation possible : leur valeur se lit sur l'hôte avec `docker inspect`.
 
 ## Les panneaux du bas
 

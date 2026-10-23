@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import type { Container } from './api.ts';
-import { countGroups, filterContainers, formatPorts, rowStep, stateLabel, stateTone } from './containers.ts';
+import {
+	countGroups, filterContainers, formatPorts, NO_PROJECT, projectsOf, rowStep, stateLabel, stateTone
+} from './containers.ts';
 import { t } from './i18n/index.ts';
 
 const c = (name: string, image: string, state: string): Container => ({
@@ -67,6 +69,29 @@ describe('filterContainers', () => {
 	});
 	it('counts the tabs', () => {
 		expect(countGroups(list)).toEqual({ all: 4, running: 2, stopped: 2 });
+	});
+});
+
+// Spec v0.2 §5.1: the Project list offers the projects present, plus "No
+// project"; the filter is done here, on what the agent sent.
+describe('projects', () => {
+	const p = (name: string, project?: string, state = 'running'): Container => ({ ...c(name, 'alpine', state), project });
+	const list = [p('shop-web-1', 'shop'), p('shop-db-1', 'shop', 'exited'), p('blog-web-1', 'blog'), p('lone')];
+	const names = (l: Container[]) => l.map((x) => x.name);
+	it('lists the projects present, sorted, each once', () => {
+		expect(projectsOf(list)).toEqual(['blog', 'shop']);
+		expect(projectsOf([p('lone')])).toEqual([]);
+	});
+	it('filters on one project, or on no project', () => {
+		expect(names(filterContainers(list, '', '', 'shop'))).toEqual(['shop-web-1', 'shop-db-1']);
+		expect(names(filterContainers(list, '', '', NO_PROJECT))).toEqual(['lone']);
+		expect(filterContainers(list, '', '', '')).toHaveLength(4);
+		expect(names(filterContainers(list, '', 'stopped', 'shop'))).toEqual(['shop-db-1']);
+		expect(filterContainers(list, '', '', 'gone')).toEqual([]);
+	});
+	it('marks "no project" with what no Compose project name can be', () => {
+		// Compose names start with a lowercase letter or a digit.
+		expect(NO_PROJECT).toMatch(/^[^a-z0-9]/);
 	});
 });
 

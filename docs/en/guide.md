@@ -25,19 +25,32 @@ Under 80 rem wide, the bar shrinks to its icons; under 48 rem, it becomes a draw
 ## The Containers page
 
 - The All, Running and Stopped tabs filter the list; a paused or restarting container counts as "Running". The "Status" list picks one exact Docker state.
-- The filter field searches the name and the image. It is not kept in the page's address, since a name can be sensitive; the tab and the status are.
+- The filter field searches the name and the image. It is not kept in the page's address, since a name can be sensitive; the tab, the status and the project are.
+- The Project column and the "Project" list come from the Compose labels (`com.docker.compose.project` and `.service`). The list offers the projects present, plus "No project". A project name the secret masking would refuse is not sent: the container then counts as "no project".
 - The Uptime column translates Docker's status: `Up 3 hours (healthy)` becomes "up 3 hours, healthy", `Exited (137) 2 days ago` becomes "exited 2 days ago, code 137". A text the interface does not recognise is shown as is.
 - Colour always doubles a text: emerald for a running container, amber for an alert (pause, restart, exit with a non-zero code), grey for a clean stop.
 - With the keyboard: `/` moves to the filter, the arrows, Home and End move between rows, Enter chooses the container.
 
 ## The detail panel
 
-Choosing a container opens its detail on the right: the image (with a copy button), the creation date, then two tabs.
+Choosing a container opens its detail on the right: the image (with a copy button), the creation date, the last exit ("never" for a container never stopped), three key figures, then two tabs.
 
-- **Overview**: the command, in the form the agent masked (the copy button copies this form, never a revealed value), the ports, then, under "Details", the identity, the state, the networks and the mounts.
+- **Overview**: the command, in the form the agent masked (the copy button copies this form, never a revealed value), the ports, the labels, then, under "Details", the identity, the state, the networks and the mounts.
 - **Secrets**: the environment variables. A secret value is masked; "Reveal" asks the agent for it, and the agent journals the reveal. A revealed value is forgotten when you leave the tab or the container.
 
 The "Explore the files", "Compare with the image" and "See the logs" buttons open the bottom panels.
+
+### Key figures
+
+They come after the rest of the detail, without holding it back; "—" means loading, unknown or not available.
+
+- **Files**: the number of entries in the index of a stopped container, if it is already built (by opening its files). The agent never starts a build for this figure: without an index, and for a running container, it stays "—".
+- **Image size**: the size Docker gives for the container's image, kept in memory per image (an image does not change).
+- **Container size**: the writable layer (what the container wrote since its creation), then the total with the image. To compute it, Docker walks the writable layer: the agent asks for it only when the detail opens, never for the list, and keeps it one minute. While a stopped container is being exported, Docker locks it: the figure waits, 30 s at most.
+
+### Labels
+
+Labels often hold secrets the masking does not recognise, for example `traefik.http.middlewares.auth.basicauth.users=admin:$apr1$…`. Only the values of `com.docker.compose.*` and `org.opencontainers.image.*` labels are shown, and only if the masking finds nothing in them. Other labels show their name with the value "masked", and cannot be revealed: read their value on the host with `docker inspect`.
 
 ## The bottom panels
 

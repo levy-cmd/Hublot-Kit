@@ -67,6 +67,10 @@ Traitez le jeton d'accès comme le mot de passe root du serveur.
   `CREDENTIAL`, `PRIVATE` ou `DSN`, quand sa valeur contient une URL avec identifiants, ou un mot de passe sous une
   forme connue (chaînes de connexion, `--requirepass …`, `Authorization: Bearer …`). La commande et le message
   d'erreur sont masqués partie par partie.
+- Les labels suivent une liste blanche : seules les valeurs des labels `com.docker.compose.*` et
+  `org.opencontainers.image.*` sont montrées, si le masquage ci-dessus n'y trouve rien. Les autres montrent leur nom,
+  jamais leur valeur, et ne se révèlent pas : un label `basicauth.users` de Traefik porte une empreinte de mot de passe
+  que les règles ci-dessus ne reconnaissent pas.
 - Une valeur masquée se révèle une à une, et chaque révélation est écrite dans le journal d'audit (le nom, jamais la
   valeur) avant l'envoi de la valeur.
 - C'est une heuristique : [certaines formes ne sont pas reconnues](limites.md#masquage-des-secrets). Les logs ne sont

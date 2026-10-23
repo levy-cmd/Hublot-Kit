@@ -15,14 +15,26 @@ const RUNNING = ['running', 'paused', 'restarting'];
 export const groupOf = (state: string): Group => (RUNNING.includes(state) ? 'running' : 'stopped');
 
 /**
- * The containers of a tab ("running", "stopped") or of one Docker state
- * ("paused"…), "" for all, whose name or image contains the query.
+ * The "No project" choice of the Project list (spec v0.2 §5.1), in the URL
+ * as ?project=-: a Compose project name starts with a letter or a digit.
  */
-export function filterContainers(list: Container[], query: string, state: string): Container[] {
+export const NO_PROJECT = '-';
+
+/** The Compose projects present in the list, sorted. */
+export const projectsOf = (list: Container[]): string[] =>
+	[...new Set(list.flatMap((c) => (c.project ? [c.project] : [])))].sort((a, b) => a.localeCompare(b));
+
+/**
+ * The containers of a tab ("running", "stopped") or of one Docker state
+ * ("paused"…), "" for all, of one Compose project (NO_PROJECT: none, "":
+ * any), whose name or image contains the query.
+ */
+export function filterContainers(list: Container[], query: string, state: string, project = ''): Container[] {
 	const q = query.trim().toLowerCase();
 	return list.filter(
 		(c) =>
 			(state === '' || (state === 'running' || state === 'stopped' ? groupOf(c.state) === state : c.state === state)) &&
+			(project === '' || (project === NO_PROJECT ? !c.project : c.project === project)) &&
 			(q === '' || c.name.toLowerCase().includes(q) || c.image.toLowerCase().includes(q))
 	);
 }

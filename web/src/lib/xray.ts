@@ -1,4 +1,23 @@
-import type { ContainerState, EnvVar, Mount, Port, Radiography } from './api.ts';
+import type { ContainerState, EnvVar, Label, Mount, Port, Radiography } from './api.ts';
+
+/**
+ * A label as a chip (spec v0.2 §5.2): "key=value", or "key=" + the masked
+ * text when the agent masked it. No label is ever revealed.
+ */
+export function labelChip(l: Label, masked: string): { key: string; value: string; masked: boolean } {
+	const hidden = l.masked || l.value === null;
+	return { key: l.key, value: hidden ? masked : (l.value as string), masked: hidden };
+}
+
+/**
+ * The last exit (spec v0.2 §5.3): State.FinishedAt, null for "never" (the
+ * agent omits Docker's zero date; "0001-01-01…" is read as never too). The
+ * exit code only for a stopped container: Docker resets it at start.
+ */
+export function lastExit(s: ContainerState): { at: string; code: number | null } | null {
+	if (!s.finishedAt || s.finishedAt.startsWith('0001-01-01')) return null;
+	return { at: s.finishedAt, code: s.running ? null : s.exitCode };
+}
 
 /** An argument as a POSIX shell reads it: quoted when it has to be. */
 function quote(arg: string): string {

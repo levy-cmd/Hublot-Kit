@@ -4,7 +4,7 @@
 	import { getContext } from 'svelte';
 	import type { Container } from '#lib/api.ts';
 	import { containerList } from '#lib/containerList.svelte.ts';
-	import { countGroups, filterContainers, groupOf, STATES, stateLabel } from '#lib/containers.ts';
+	import { countGroups, filterContainers, groupOf, NO_PROJECT, projectsOf, STATES, stateLabel } from '#lib/containers.ts';
 	import { errorMessage, t, tf } from '#lib/i18n/index.ts';
 	import Icon from '#lib/icons/Icon.svelte';
 	import { withParams } from '#lib/url.ts';
@@ -15,7 +15,8 @@
 
 	const readOnly = getContext<() => boolean>('readOnly');
 
-	// State in the URL (spec v0.2 §3): ?state= (tab or Docker state), ?c= (the
+	// State in the URL (spec v0.2 §3): ?state= (tab or Docker state),
+	// ?project= (Compose project, NO_PROJECT for none), ?c= (the
 	// chosen container), ?panel=, ?tab= (of the detail), ?path=&file= (files).
 	// The search is not in the URL: a name can be sensitive.
 	let query = $state('');
@@ -27,7 +28,14 @@
 	let detailTab = $derived<DetailTab>(params.get('tab') === 'secrets' ? 'secrets' : 'overview');
 
 	let all = $derived(containerList.items ?? []);
-	let shown = $derived(filterContainers(all, query, stateFilter));
+	// ?project= (spec v0.2 §5.1): a project no longer present filters nothing,
+	// rather than hiding every row behind a choice the list cannot show.
+	let projects = $derived(projectsOf(all));
+	let projectFilter = $derived.by(() => {
+		const p = params.get('project') ?? '';
+		return p === NO_PROJECT || projects.includes(p) ? p : '';
+	});
+	let shown = $derived(filterContainers(all, query, stateFilter, projectFilter));
 	let counts = $derived(countGroups(all));
 	let chosen = $derived(chosenId ? (all.find((c) => c.id === chosenId) ?? null) : null);
 	let presentStates = $derived(STATES.filter((s) => all.some((c) => c.state === s)));
@@ -63,6 +71,10 @@
 
 	function pickState(e: Event & { currentTarget: HTMLSelectElement }) {
 		goto(stateHref(e.currentTarget.value), { reset: false }).catch(() => {});
+	}
+
+	function pickProject(e: Event & { currentTarget: HTMLSelectElement }) {
+		goto(withParams(params, { project: e.currentTarget.value || null }), { reset: false }).catch(() => {});
 	}
 
 	// "/" moves to the search, unless one is typing.
@@ -126,6 +138,16 @@
 						{#each presentStates as s (s)}
 							<option value={s}>{stateLabel(s)}</option>
 						{/each}
+					</select>
+				</label>
+				<label class="status">
+					<span class="sr-only">{t('containers.project')}</span>
+					<select value={projectFilter} onchange={pickProject}>
+						<option value="">{t('containers.project.any')}</option>
+						{#each projects as p (p)}
+							<option value={p}>{p}</option>
+						{/each}
+						<option value={NO_PROJECT}>{t('containers.project.none')}</option>
 					</select>
 				</label>
 			</div>
