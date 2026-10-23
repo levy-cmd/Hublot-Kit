@@ -1,7 +1,7 @@
 # Hublot-Kit v0.2 — Complément de spec
 
 - **Date** : 2026-10-23
-- **Statut** : décisions de l'utilisateur du 2026-10-23 appliquées (v0.2 §0.1) ; Q57 reste ouverte (v0.2 §0.2). Correctif de revue du 2026-10-23 intégré (registre)
+- **Statut** : toutes les décisions de l'utilisateur du 2026-10-23 sont appliquées (v0.2 §0.1), et aucune question ne reste ouverte. Correctifs de revue du 2026-10-23 intégrés (registre)
 - **Référence** : la spec v0.1 (`2026-10-07-hublot-kit-v0.1-design.md`) reste la référence pour tout ce que ce document ne change pas. Ses numéros de section (§5.1, §7…) sont cités tels quels ; les sections de ce document sont notées « v0.2 §N ».
 - **Plan** : `docs/superpowers/plans/2026-10-23-v0.2.md` ; registre : `.claude/handoff/phase-v0.2.registre.md`.
 
@@ -9,12 +9,13 @@
 
 ### 0.1 Décisions de l'utilisateur (2026-10-23)
 
-Q55, Q56, Q59 et Q60 sont tranchées par l'utilisateur ; pour Q58 et Q61 à Q68, il a adopté la recommandation. Le texte de la spec les applique ; chaque renvoi « (Qnn) » désigne la décision ci-dessous. La numérotation suit celle des plans précédents (Q54 était la dernière).
+Q55, Q56, Q57, Q59 et Q60 sont tranchées par l'utilisateur ; pour Q58 et Q61 à Q68, il a adopté la recommandation. Le texte de la spec les applique ; chaque renvoi « (Qnn) » désigne la décision ci-dessous. La numérotation suit celle des plans précédents (Q54 était la dernière).
 
 | # | Sujet | Décision |
 |---|---|---|
 | Q55 | F8 (process et ressources), F9 (démarrer, arrêter, redémarrer), F10 (terminal web), promises pour la v0.2 par la spec v0.1 | reportées après la v0.2 |
 | Q56 | encart « lecture seule » de la maquette (« sécurisé par défaut ») | l'interface affiche l'état réel ; la lecture seule n'est **pas** le défaut (`--read-only=false`, §8, inchangé). Encart : « Lecture seule : aucune écriture dans les conteneurs » quand l'option est active, « Écriture permise, toujours confirmée » sinon ; jamais « l'hôte » |
+| Q57 | prendre ou supprimer une photo quand l'agent tourne en `--read-only`, sachant son coût sur la production (photo d'un conteneur actif non atomique, jusqu'à 1 Gio lu, environ 150 Mo de mémoire au pire ; export d'un conteneur arrêté qui lit aussi ses volumes et le verrouille jusqu'à 5 min, v0.2 §5.7) | **permis**, y compris en lecture seule, après une boîte de confirmation qui affiche ce coût. La photo des métadonnées tirée d'un index déjà construit est proposée en premier quand elle est possible |
 | Q58 | volumes et binds dans un snapshot | exclus : le snapshot couvre le système de fichiers propre au conteneur ; chaque point de montage est noté sans être parcouru |
 | Q59 | contenu des snapshots | aucun contenu conservé ; pas de diff ligne à ligne entre deux photos. Contre le conteneur actuel : le contenu actuel, et un diff unifié seulement quand l'ancienne empreinte égale celle de la version de l'image (v0.2 §5.7) |
 | Q60 | labels | liste blanche `com.docker.compose.*` et `org.opencontainers.image.*` (en clair s'ils passent aussi §7) ; les autres montrent leur nom avec une valeur masquée, sans révélation |
@@ -27,21 +28,9 @@ Q55, Q56, Q59 et Q60 sont tranchées par l'utilisateur ; pour Q58 et Q61 à Q68,
 | Q67 | publication | `v0.2.0-rc.1` privée, puis `v0.2.0`, chaque étape sur ARRÊT |
 | Q68 | polices | Archivo et JetBrains Mono, déjà auto-hébergées |
 
-### 0.2 Question ouverte
+### 0.2 Questions ouvertes
 
-**Q57 — Prendre une photo a un coût sur la production. Faut-il la permettre quand l'agent tourne en `--read-only` ?**
-
-La lecture seule protège les conteneurs de toute écriture ; un snapshot n'écrit que dans le dossier de l'agent, mais il pèse sur le serveur (v0.2 §5.7, « Coût et plafonds ») :
-- **conteneur actif** : la photo n'est **pas atomique** (les fichiers peuvent changer pendant le parcours) ; elle lit jusqu'à **1 Gio** de fichiers (plafond proposé, au-delà les fichiers sont notés sans empreinte), un fichier après l'autre, ce qui entre en concurrence avec l'application sur le disque ; la photo s'écrit au fil du parcours, mais une comparaison « contre l'actuel » la garde en mémoire : au pire environ 150 Mo (500 000 entrées, environ 300 octets chacune, à mesurer) ;
-- **conteneur arrêté** : un export complet de `/`, qui lit **aussi ses volumes** (jusqu'au plafond de 4 Gio lus) et **verrouille le conteneur** côté dockerd pendant toute sa durée, **jusqu'à 5 min** (plafond proposé) : pendant ce temps, `docker start`, `docker inspect`, ses logs et sa radiographie attendent. Les entrées sont triées en mémoire avant l'écriture : même pic d'environ 150 Mo. Exception sans coût : une **photo des métadonnées** tirée de l'index déjà construit, sans export ni empreintes (v0.2 §5.7).
-
-| Choix | Coût |
-|---|---|
-| (a) Permise en lecture seule, après une boîte de confirmation qui dit le coût ci-dessus (**recommandé** : la lecture seule est le mode conseillé en production, où une photo avant une intervention sert le plus) | la charge ci-dessus, déclenchée par toute personne qui a le jeton |
-| (b) Refusée en lecture seule (`read_only`, 403) | aucune charge en lecture seule ; la page Snapshots n'y sert plus qu'à consulter et comparer les photos déjà prises |
-| (c) En lecture seule, seulement la photo des métadonnées d'un conteneur arrêté dont l'index est déjà construit | aucune charge ; sans empreintes, la comparaison ne voit que tailles, dates, droits et ajouts ou suppressions |
-
-La suppression d'une photo suit le même choix. Tant que Q57 n'est pas tranchée, la tranche 8 implémente (a) derrière une seule condition, testée dans les deux sens, pour pouvoir basculer sans reprise.
+Aucune. Q57, reformulée après la revue, a été tranchée par l'utilisateur (2026-10-23), et figure au tableau ci-dessus.
 
 ## 1. Objet et périmètre
 
@@ -273,6 +262,7 @@ La réponse de `figures` : `{"sizeRw": 1234, "sizeRootFs": 56789, "imageSize": 5
    - une couche est lue par `archive/tar` **en n'appelant que `Next()`** : le contenu des entrées n'est jamais lu par l'agent. `Next()` saute le reste physique de l'entrée en cours, c'est-à-dire les octets réellement présents dans le flux. À l'inverse, `io.Copy(io.Discard, tr)` sur une entrée creuse (sparse, PAX ou GNU) de taille logique 2⁶⁰ rendrait des zéros sans rien lire du flux, et aucun plafond d'octets ne l'arrêterait. Les octets décompressés comptent sous le `gzip.Reader`, donc sur ce que `Next()` lit réellement ;
    - de chaque en-tête, on ne garde qu'une forme compacte : `{nom, cible, type, taille, mode, uid, gid, mtime, rang}`, où `rang` est la position de l'entrée dans sa couche. `PAXRecords`, `Xattrs`, `Uname` et `Gname` sont jetés. Un nom ou une cible de lien de plus de **4 Kio** → `unsupported_image` (échec fermé : la mémoire par entrée reste bornée) ;
    - une couche garde sa liste d'en-têtes compacts jusqu'à l'arrivée du manifeste (les blobs arrivent avant lui).
+   - **En-têtes spéciaux (PAX, noms longs GNU) : plafonnés avant leur lecture complète.** `archive/tar` de Go 1.27 les lit par `readSpecialFile`, soit `io.ReadAll(io.LimitReader(r, maxSpecialFileSize+1))` avec `maxSpecialFileSize = 1 << 20` (`format.go:149`, `reader.go:870`). Un en-tête de plus d'1 Mio est donc refusé (`ErrFieldTooLong` → `unsupported_image`) après au plus 1 Mio + 1 octet lus en mémoire, et chaque encodage creux est borné de même (`format.go:153`). Ce plafond borne la **mémoire** par en-tête. Il ne borne pas une **chaîne** d'en-têtes spéciaux : `Next()` les enchaîne dans une seule boucle interne (`reader.go:80` à `140`), chacun sous 1 Mio, sans rendre la main. C'est le lecteur compteur, placé **sous** `archive/tar` (et sous `gzip`), qui l'arrête : il teste le contexte et les plafonds d'octets (lus et décompressés) à chaque `Read`, donc aussi au milieu d'un seul `Next()`. Le compteur par couche n'est pas nécessaire : la mémoire est bornée par en-tête, et les octets par les plafonds globaux.
    
    Tout autre nom de fichier dans l'archive externe (hors `index.json`, `oci-layout`, `manifest.json`, `repositories`) est sauté par `Next()`.
 3. `manifest.json` (64 Kio au plus) : exactement une entrée, et chaque couche de la forme `blobs/sha256/<64 hex>` et présente parmi les blobs lus, sinon `unsupported_image`. Une image multi-plateforme dont plusieurs plateformes sont présentes localement donne plusieurs entrées : elle est refusée en v0.2 (cas rare ; limite de §13).
@@ -356,7 +346,7 @@ Pas de diff si l'un des deux côtés est binaire (octet nul dans les 8 premiers 
 
 Les noms de fichiers du conteneur sont écrits dans les manifestes. Un nom peut être sensible ; il est déjà visible dans l'explorateur, et le dossier est réservé à root. La doc le dit.
 
-**Prise** — `POST /api/containers/{id}/snapshots` (Origin exigé, §7 ; permission en lecture seule : Q57, ouverte). Une prise à la fois pour tout l'agent ; une seconde demande → `409 conflict`. L'interface demande d'abord une confirmation qui dit le coût (ci-dessous). Journal : `snapshot.create` (intention, puis `ok` ou `error`), `container` = l'ID du conteneur, `path` = l'ID du snapshot.
+**Prise** — `POST /api/containers/{id}/snapshots` (Origin exigé, §7 ; permise en lecture seule, Q57). Une prise à la fois pour tout l'agent ; une seconde demande → `409 conflict`. L'interface demande d'abord une confirmation qui dit le coût (ci-dessous). Journal : `snapshot.create` (intention, puis `ok` ou `error`), `container` = l'ID du conteneur, `path` = l'ID du snapshot.
 - La réponse a la forme de `indexing` : `202 {"error": "indexing", "detail": "snapshot in progress", "progress": 0, "snapshot": "<uuid>"}`. L'avancement se suit dans `GET /api/snapshots`.
 - **Conteneur actif** (`Views.For` → `procfs`) : un parcours dans `fsview`, sur la racine épinglée par §5.1 étapes 1 à 5. Aucune re-résolution par `OpenatInRoot`, qui suivrait un lien posé pendant le parcours. Chaque chemin visité (dossier ou fichier) s'ouvre par `openNoLinks` (`openat2` avec `RESOLVE_IN_ROOT | RESOLVE_NO_SYMLINKS | RESOLVE_NO_MAGICLINKS`, en `O_PATH`, comme les écritures de §5.3 étape 2). Un lien apparu dans la chaîne depuis le listing → `ErrLinkInPath` : l'entrée est notée `macSkipped: "unreadable"`, sans rien suivre. Puis, sur ce descripteur :
   - `fstatfs` d'abord (§5.1 étape 9) : un pseudo-système → entrée `inaccessible`, non lue ;
@@ -391,7 +381,7 @@ Les noms de fichiers du conteneur sont écrits dans les manifestes. Un nom peut 
 
 **Rétention** (Q66) : 20 snapshots par conteneur, 1 Gio au total ; au-delà, la prise est refusée (`413 too_large`, avec un détail qui le dit). Aucune suppression automatique. Les snapshots d'un conteneur supprimé sont gardés et marqués « conteneur supprimé ».
 
-**Suppression** — `DELETE /api/snapshots/{sid}` (Origin exigé), journalisée (`snapshot.delete`, intention puis résultat). Le fichier est supprimé par `unlinkat` sur le descripteur du dossier `snapshots`. Permise en lecture seule ou non selon la réponse à Q57, comme la prise.
+**Suppression** — `DELETE /api/snapshots/{sid}` (Origin exigé), journalisée (`snapshot.delete`, intention puis résultat). Le fichier est supprimé par `unlinkat` sur le descripteur du dossier `snapshots`. Permise en lecture seule, comme la prise (Q57).
 
 **Liste** — `GET /api/snapshots` : les en-têtes, sans `mac` ni `keyId`, plus la prise en cours et sa progression.
 
@@ -458,7 +448,7 @@ Pour une session seulement, comme toutes les routes (§6).
 | GET | `/api/images/{id}/fs?path=` | v0.2 §5.5 ; `202 indexing`, `too_large`, `unsupported_image` |
 | GET | `/api/images/{id}/fs/file?path=` | v0.2 §5.5 ; `202 indexing` (extraction), `not_regular`, `too_large` (plus de 2 Mio) |
 | GET | `/api/images/{id}/fs/search?q=` | v0.2 §5.8 |
-| POST | `/api/containers/{id}/snapshots` | v0.2 §5.7 ; Origin ; `202` à la forme de `indexing` (plus `snapshot`), `409 conflict`, `413 too_large`, `forbidden_path` ; en lecture seule : selon Q57 |
+| POST | `/api/containers/{id}/snapshots` | v0.2 §5.7 ; Origin ; `202` à la forme de `indexing` (plus `snapshot`), `409 conflict`, `413 too_large`, `forbidden_path` ; permise en lecture seule (Q57) |
 | GET | `/api/snapshots` | v0.2 §5.7 |
 | DELETE | `/api/snapshots/{sid}` | v0.2 §5.7 ; Origin ; `204`, `404 not_found` |
 | GET | `/api/snapshots/{sid}/compare?with=` | v0.2 §5.7 ; `202 indexing` pour `current` |
@@ -475,15 +465,15 @@ Le sens de `indexing` (202) s'élargit : un travail en cours (index, extraction,
 
 - **Journal d'audit** : nouvelles actions `snapshot.create` et `snapshot.delete`. L'intention est écrite avant, le résultat après ; si l'intention ne s'écrit pas, rien n'est fait.
 - **Dossier de données** : il contient en plus `snapshot.key` (0600, exactement 32 octets, écrit par `linkat` ou `renameat`) et `snapshots/` (0700, ouvert sans suivre de lien). Les mêmes contrôles qu'au démarrage s'appliquent (§8 : ni lien, ni autre propriétaire, ni droits pour le groupe ou les autres). Nouvelle sous-commande `hublot rotate-snapshot-key` (v0.2 §5.7).
-- **Lecture seule** : `--read-only` reste appliqué dans `files` pour les écritures dans les conteneurs. Les snapshots écrivent dans le dossier de l'agent, pas dans Docker ; leur permission en lecture seule dépend de Q57 (ouverte), par une seule condition dans `internal/api/snapshots.go`.
+- **Lecture seule** : `--read-only` reste appliqué dans `files` pour les écritures dans les conteneurs. Les snapshots écrivent dans le dossier de l'agent, pas dans Docker ; ils sont permis en lecture seule, après une confirmation qui affiche leur coût (Q57).
 - **Données non fiables** : les couches d'image viennent de registres tiers. Elles ne sont jamais écrites sur le disque, ni extraites, ni exécutées. Le contenu des entrées n'est jamais lu pour l'index (`Next()` seul : une entrée creuse ne peut pas faire tourner l'agent sans fin), les en-têtes sont réduits à une forme compacte (noms et cibles de 4 Kio au plus, PAX et attributs étendus jetés), tout est plafonné (v0.2 §5.5), et chaque blob est vérifié par son empreinte, à l'index comme à l'extraction.
-- **Secrets** : `secrets.Labels` (v0.2 §5.2) ; l'historique et la configuration d'une image passent par `secrets.Line`, `secrets.Args` et `secrets.Env` ; la palette et l'inventaire ne voient que des noms.
+- **Secrets** : `secrets.Labels` (v0.2 §5.2) ; l'historique d'une image passe par `secrets.History` (v0.2 §5.4), sa configuration par `secrets.Args` et `secrets.Env` ; la palette et l'inventaire ne voient que des noms.
 - **CSP** : inchangée. L'unique script en ligne reste celui du thème.
 
 ## 8. Tests (ajouts à §10)
 
 - **Sécurité d'abord** (tests rouges commités seuls, avant le code), pour chaque tranche qui touche §5 ou les secrets :
-  - `imageindex` : blanchiment de fichier et de dossier opaque, blanchiments `.wh.`, `.wh..`, `.wh...` sans effet, dossier remplacé par un fichier ou un lien (descendants disparus), nom `../`, nom absolu, doublon d'un chemin dans une couche (le dernier rang gagne, à l'index comme à l'extraction), lien physique vers une couche inférieure, lien symbolique vers `/etc/passwd` ou `../../..` résolu dans l'index seulement, entrée creuse de taille logique 2⁶⁰ (`TestImageIndexSparseBomb` : l'index se termine sans la lire, sous le plafond de durée), nom ou cible de plus de 4 Kio, couche non compressée (ustar à l'octet 257), couche zstd → `unsupported_image`, bombe gzip → `too_large`, empreinte de blob fausse (à l'index et à l'extraction), manifeste à deux entrées, couche manquante, FIFO ou périphérique → `not_regular`, plafond d'entrées ; extraction : plafonds, deux au plus pour l'agent, annulée quand le client est parti ;
+  - `imageindex` : blanchiment de fichier et de dossier opaque, blanchiments `.wh.`, `.wh..`, `.wh...` sans effet, dossier remplacé par un fichier ou un lien (descendants disparus), nom `../`, nom absolu, doublon d'un chemin dans une couche (le dernier rang gagne, à l'index comme à l'extraction), lien physique vers une couche inférieure, lien symbolique vers `/etc/passwd` ou `../../..` résolu dans l'index seulement, entrée creuse de taille logique 2⁶⁰ (`TestImageIndexSparseBomb` : l'index se termine sans la lire, sous le plafond de durée), en-tête PAX de 4 Mio refusé sans pic de mémoire (`TestImageIndexHugePAXHeader`), chaîne de mille en-têtes PAX de 900 Kio arrêtée par le plafond d'octets décompressés et par le contexte au milieu d'un seul `Next()` (`TestImageIndexPAXChain`), nom ou cible de plus de 4 Kio, couche non compressée (ustar à l'octet 257), couche zstd → `unsupported_image`, bombe gzip → `too_large`, empreinte de blob fausse (à l'index et à l'extraction), manifeste à deux entrées, couche manquante, FIFO ou périphérique → `not_regular`, plafond d'entrées ; extraction : plafonds, deux au plus pour l'agent, annulée quand le client est parti ;
   - parcours du snapshot sur une racine temporaire : liens piégés jamais suivis, lien posé dans la chaîne entre le listing et l'ouverture (`openNoLinks` → `unreadable`, rien de suivi), FIFO jamais ouverte (le test ne doit pas bloquer), périphérique jamais ouvert, dossier sur un pseudo-système non lu, point de montage non parcouru, aucune lecture hors de la racine, `O_NOATIME` (l'heure d'accès d'un fichier lu ne change pas) ; archive : entrée creuse non hachée, taille annoncée au-delà du plafond non lue ;
   - HMAC : un `mac` n'égale jamais le SHA-256 nu ; clé créée en 0600 par `linkat`, refusée si c'est un lien, si elle est ouverte au groupe, ou si elle ne fait pas exactement 32 octets ; deux créations concurrentes donnent la même clé ; rotation : `keyId` change, et les comparaisons de contenu avec les anciens snapshots tombent à `contentCompared: false` ; `snapshots/` remplacé par un lien → refus ;
   - aucune réponse d'API ne contient de `mac` ;
@@ -508,7 +498,7 @@ Le sens de `indexing` (202) s'élargit : un travail en cours (index, extraction,
 | Snapshot : noms de fichiers et HMAC sur le disque de l'hôte | dossier root 0700, HMAC à clé, empreintes jamais servies ; limite dite dans la doc |
 | Clé de snapshot perdue ou supprimée | les comparaisons de contenu deviennent impossibles (`contentCompared: false`), les métadonnées restent comparables |
 | Labels de tiers porteurs de secrets non reconnus par §7 | liste blanche (v0.2 §5.2) ; sans révélation |
-| Historique d'image porteur de secrets de construction | `secrets.Line` sur chaque `createdBy` ; les formes non reconnues de §13 restent non masquées, comme pour la commande |
+| Historique d'image porteur de secrets de construction | `secrets.History` sur chaque `createdBy` (valeurs après `|N` toutes masquées, puis `secrets.Line`) ; les formes non reconnues de §13 restent non masquées, comme pour la commande |
 | Nom de fichier sensible dans la recherche | un seul index à la fois, déjà construit, rien de mémorisé ; la requête peut paraître dans les journaux d'un reverse proxy, ce que la doc dit |
 | Statut de Docker non reconnu par l'analyseur (autre langue, autre version) | affiché tel quel |
 | Niveau de log déduit à tort | marqué comme heuristique ; le flux `stdout` ou `stderr` reste visible |

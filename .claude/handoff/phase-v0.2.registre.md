@@ -37,7 +37,7 @@
 - Q59 : snapshots sans contenu ; pas de diff ligne à ligne entre deux photos.
 - Q60 : liste blanche des labels ; les autres affichent leur nom avec une valeur masquée, sans révélation.
 - Q58, Q61 à Q68 : recommandation adoptée.
-- Q57 reste ouverte, reformulée (spec v0.2 §0.2) : le coordinateur la repose à l'utilisateur.
+- Q57 (reformulée après la revue, puis reposée) : choix (a). Prise et suppression d'une photo permises, y compris en `--read-only`, après une confirmation qui affiche leur coût. Plus aucune question ouverte.
 
 ## Revue du plan (2026-10-23)
 - Codex : « plan prêt ». Le relecteur demande un correctif avant les tranches 6 et 8. Il est intégré dans la spec et dans le plan, tests compris.
@@ -67,6 +67,15 @@
   - ustar à l'octet 257, avec test de couche non compressée ;
   - tests rouges des tranches 3 et 9 commités seuls.
 
+## Dernière retouche (2026-10-23)
+- Le relecteur conclut « plan prêt ». Codex garde un point, traité : les en-têtes PAX. `archive/tar` de Go 1.27 plafonne chaque en-tête spécial à `maxSpecialFileSize = 1 << 20` (`readSpecialFile`, `io.LimitReader`), ce qui borne la mémoire. Une chaîne d'en-têtes dans un seul `Next()` est arrêtée par le lecteur compteur placé sous `archive/tar` (contexte et plafonds testés à chaque `Read`). Tests ajoutés : `TestImageIndexHugePAXHeader` et `TestImageIndexPAXChain`.
+- Minor du relecteur traités :
+  - `secrets.History` remplace `secrets.Line` dans la spec §7, §9 et dans les Global Constraints du plan ;
+  - la tranche 9 consomme `Store.Reader` ;
+  - contrat 8/6 ci-dessus ;
+  - `TestWalkNoAtime` vieillit l'atime avant la lecture ;
+  - l'interface relance une extraction toutes les 2 s (tranche 6).
+
 ## Points à faire trancher ou relire
 - Q59 corrige une hypothèse de la demande : sans contenu conservé, même « contre le conteneur actuel », il n'y a pas de diff ligne à ligne. L'exception est le cas où l'ancienne empreinte égale celle de la version de l'image.
 - Q56 : la maquette dit « sécurisé par défaut », or `--read-only` vaut `false` par défaut. L'encart affichera l'état réel.
@@ -76,7 +85,12 @@
   - le coût d'un snapshot d'un conteneur actif, et la taille réelle d'un manifeste (VM, tranche 8).
 
 ## Contrat de parallélisme
-Néant pour l'instant : les tranches sont séquentielles. Avant tout parallèle (4 avec 3, 8 avec 5 et 6), écrire ici les fichiers possédés de chaque côté, en s'appuyant sur le découpage de l'i18n par module et sur `nav.ts` (plan, « Ordre, branches et parallélisme »).
+- Tranches 8 et 6 (si elles partent en parallèle) :
+  - `internal/fsview/views.go` appartient à la tranche 6 ;
+  - la tranche 8 le lit sans l'écrire : elle appelle `(*Views).Cached(id) (FS, bool)`, livrée par la tranche 2, pour la photo des métadonnées ;
+  - si la tranche 6 change `Cached` (signature ou comportement, avec le cache partagé avec les images), elle l'écrit ici avant la fusion, et la tranche 8 se rebase ;
+  - `internal/fsview/fsview.go` appartient à la tranche 8.
+- Autres paires : séquentielles par défaut. Avant tout parallèle (4 avec 3, 8 avec 5 et 6), écrire ici les fichiers possédés de chaque côté, en s'appuyant sur le découpage de l'i18n par module et sur `nav.ts` (plan, « Ordre, branches et parallélisme »).
 
 ## Tranches
 (à remplir : commits, vérifications, revues, arbitrages)
