@@ -1,5 +1,5 @@
 import type { Chunk } from '@codemirror/merge';
-import type { Text } from '@codemirror/state';
+import type { EditorState, Text } from '@codemirror/state';
 import { ApiError, type Change, type Preview } from './api.ts';
 import { t } from './i18n/index.ts';
 import { withParams } from './url.ts';
@@ -140,10 +140,28 @@ const chrome = (EditorView: View, dark: boolean) =>
 		{ dark }
 	);
 
-/** Draws d in parent; the returned function removes it. */
-export async function mountDiff(parent: HTMLElement, d: DiffInput, label: string): Promise<() => void> {
+// The diff of the view, bounded: the scan limit unifiedMergeView uses by
+// default, and a time limit (a less precise diff past it). Without them,
+// two different files of 224 KiB held the tab for 54 s.
+export const DIFF_CONFIG = { scanLimit: 500, timeout: 2000 } as const;
+
+type MergeMod = typeof import('@codemirror/merge');
+
+const numbered = new WeakMap<readonly Chunk[], LineChunk[]>();
+
+/** The chunks the view shows, in lines: the numbers of the gutters come from them only. */
+export function numbering(mg: MergeMod, state: EditorState): LineChunk[] {
+	const c = mg.getChunks(state);
+	if (!c) return [];
+	let lc = numbered.get(c.chunks);
+	if (!lc) numbered.set(c.chunks, (lc = lineChunks(c.chunks, mg.getOriginalDoc(state), state.doc)));
+	return lc;
+}
+
+/** The read-only state that shows d (dark: the page's theme). */
+export async function diffState(d: DiffInput, label: string, dark: boolean): Promise<EditorState> {
 	const [cm, st, mg] = await Promise.all([import('@codemirror/view'), import('@codemirror/state'), import('@codemirror/merge')]);
-	const { EditorView, GutterMarker, gutter, lineNumbers } = cm;
+	const { EditorView, GutterMarker, gutter, highlightSpecialChars, lineNumbers } = cm;
 	type Editor = InstanceType<View>;
 	// A number, or a column of them for a block of removed lines (one per
 	// line of the block, at the editor's line height).
@@ -166,52 +184,61 @@ export async function mountDiff(parent: HTMLElement, d: DiffInput, label: string
 			return box;
 		}
 	}
-	const dark = document.documentElement.dataset.theme !== 'light';
 	const common = [
 		st.EditorState.readOnly.of(true),
+		// Control and bidi characters (U+202E…) shown as such, as in the editor.
+		highlightSpecialChars(),
 		EditorView.contentAttributes.of({ 'aria-label': label, 'aria-readonly': 'true' }),
 		chrome(EditorView, dark)
 	];
-	let state;
-	if (d.kind !== 'modified') {
-		state = st.EditorState.create({
+	if (d.kind !== 'modified')
+		return st.EditorState.create({
 			doc: d.text,
 			extensions: [...common, lineNumbers(), EditorView.editorAttributes.of({ class: `hk-${d.kind}` })]
 		});
-	} else {
-		const doc = st.Text.of(d.modified.split(/\r\n?|\n/));
-		const original = st.Text.of(d.original.split(/\r\n?|\n/));
-		const lc = lineChunks(mg.Chunk.build(original, doc), original, doc);
-		const lineAt = (v: Editor, pos: number) => v.state.doc.lineAt(pos).number;
-		const removed = (v: Editor, pos: number) => deletedAt(lc, lineAt(v, pos));
-		state = st.EditorState.create({
-			doc,
-			extensions: [
-				...common,
-				mg.unifiedMergeView({ original, mergeControls: false, gutter: false, syntaxHighlightDeletions: false }),
-				// Image side: the old number, "+" for a line the container added.
-				gutter({
-					class: 'hk-num',
-					lineMarker: (v, line) => new Nums([String(aLineOf(lc, lineAt(v, line.from)) ?? '+')]),
-					widgetMarker: (v, _w, block) => {
-						const n = removed(v, block.from);
-						return n.length ? new Nums(n.map(String)) : null;
-					},
-					initialSpacer: () => new Nums([String(original.lines)])
-				}),
-				// Container side: the new number, "−" for a removed line.
-				gutter({
-					class: 'hk-num',
-					lineMarker: (v, line) => new Nums([String(lineAt(v, line.from))]),
-					widgetMarker: (v, _w, block) => {
-						const n = removed(v, block.from);
-						return n.length ? new Nums(n.map(() => '−')) : null;
-					},
-					initialSpacer: () => new Nums([String(doc.lines)])
-				})
-			]
-		});
-	}
+	const doc = st.Text.of(d.modified.split(/\r\n?|\n/));
+	const original = st.Text.of(d.original.split(/\r\n?|\n/));
+	const lineAt = (v: Editor, pos: number) => v.state.doc.lineAt(pos).number;
+	const removed = (v: Editor, pos: number) => deletedAt(numbering(mg, v.state), lineAt(v, pos));
+	return st.EditorState.create({
+		doc,
+		extensions: [
+			...common,
+			mg.unifiedMergeView({
+				original,
+				mergeControls: false,
+				gutter: false,
+				syntaxHighlightDeletions: false,
+				diffConfig: DIFF_CONFIG
+			}),
+			// Image side: the old number, "+" for a line the container added.
+			gutter({
+				class: 'hk-num',
+				lineMarker: (v, line) => new Nums([String(aLineOf(numbering(mg, v.state), lineAt(v, line.from)) ?? '+')]),
+				widgetMarker: (v, _w, block) => {
+					const n = removed(v, block.from);
+					return n.length ? new Nums(n.map(String)) : null;
+				},
+				initialSpacer: () => new Nums([String(original.lines)])
+			}),
+			// Container side: the new number, "−" for a removed line.
+			gutter({
+				class: 'hk-num',
+				lineMarker: (v, line) => new Nums([String(lineAt(v, line.from))]),
+				widgetMarker: (v, _w, block) => {
+					const n = removed(v, block.from);
+					return n.length ? new Nums(n.map(() => '−')) : null;
+				},
+				initialSpacer: () => new Nums([String(doc.lines)])
+			})
+		]
+	});
+}
+
+/** Draws d in parent; the returned function removes it. */
+export async function mountDiff(parent: HTMLElement, d: DiffInput, label: string): Promise<() => void> {
+	const { EditorView } = await import('@codemirror/view');
+	const state = await diffState(d, label, document.documentElement.dataset.theme !== 'light');
 	const view = new EditorView({ parent, state });
 	return () => view.destroy();
 }

@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
+	import { untrack } from 'svelte';
 	import { ApiError, getContainer, previewFile, type Change } from '#lib/api.ts';
 	import { kindLabel } from '#lib/changes.ts';
 	import {
@@ -22,32 +23,45 @@
 	// the explorer would show (F2, v0.2 §5.5), nothing more; its text goes
 	// into CodeMirror as a document, never as HTML. CodeMirror and the merge
 	// extension load with the first diff, apart from the initial bundle.
+	// active false: the diff is out of sight (another panel below 90 rem);
+	// it asks the agent nothing, and resumes where it was when shown again.
 	let {
 		id,
 		change,
 		stopped = false,
+		active = true,
 		fileHref
-	}: { id: string; change: Change; stopped?: boolean; fileHref?: string } = $props();
+	}: { id: string; change: Change; stopped?: boolean; active?: boolean; fileHref?: string } = $props();
 
 	type Loading = { image: number | null; container: number | null };
 	let result = $state<DiffInput | NoDiff | null>(null);
 	let progress = $state<Loading>({ image: null, container: null });
 	let error = $state('');
 	let reloads = $state(0);
+	let key = $derived(`${id}\n${change.kind}\n${change.path}\n${reloads}`);
+	// The sides received for key, kept while the diff is hidden.
+	let got: { key: string; image?: Side; container?: Side } = { key: '' };
 
 	$effect(() => {
+		const k = key;
 		const wantedId = id;
 		const c = change;
 		const fromStopped = stopped;
-		void reloads;
+		const shown = active;
+		if (got.key !== k) {
+			got = { key: k };
+			untrack(() => {
+				result = null;
+				error = '';
+				progress = { image: null, container: null };
+			});
+		}
+		if (!shown || untrack(() => result !== null || error !== '')) return;
 		const want = needs(c.kind);
-		const got: { image: Side; container: Side } = { image: null, container: null };
-		let left = Number(want.image) + Number(want.container);
+		const have = got;
+		const missing = (side: 'image' | 'container') => want[side] && !(side in have);
 		let current = true;
 		const stops: (() => void)[] = [];
-		result = null;
-		error = '';
-		progress = { image: null, container: null };
 
 		const fail = (e: unknown, message: (code: string, detail?: string) => string) => {
 			if (!current) return;
@@ -60,9 +74,9 @@
 		};
 		const settle = (side: 'image' | 'container', s: Side) => {
 			if (!current || error) return;
-			got[side] = s;
+			have[side] = s;
 			progress = { ...progress, [side]: null };
-			if (--left === 0) result = sides(c, got.image, got.container);
+			if (!missing('image') && !missing('container')) result = sides(c, have.image ?? null, have.container ?? null);
 		};
 		const ask = (side: 'image' | 'container', run: () => Promise<Side>, delay: number, message: (code: string, detail?: string) => string) => {
 			stops.push(
@@ -80,11 +94,11 @@
 			);
 		};
 
-		if (want.container)
+		if (missing('container'))
 			ask('container', () => previewFile(wantedId, c.path), 1000, (code, detail) =>
 				code === 'too_large' ? t('files.tooLarge') : fsErrorMessage(code, detail, fromStopped)
 			);
-		if (want.image) {
+		if (missing('image')) {
 			// The image of the container by its ID (an untagged image too), never by name.
 			getContainer(wantedId).then(
 				(r) => {

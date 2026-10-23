@@ -99,7 +99,7 @@
 						<FilePreview {id} {name} path={file} {entry} {stopped} {readOnly} />
 					{:else if diff}
 						{#key `${diff.kind}:${diff.path}`}
-							<UnifiedDiff {id} change={diff} {stopped} fileHref={fileHref(diff.path)} />
+							<UnifiedDiff {id} change={diff} {stopped} active={wide || contentCurrent} fileHref={fileHref(diff.path)} />
 						{/key}
 					{:else}
 						<p class="muted empty"><Icon name="file" size={20} /> {t('files.selectFile')}</p>
