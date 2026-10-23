@@ -432,6 +432,9 @@ func TestSecretsInventoryNameFromClearTextOnly(t *testing.T) {
 		// "--token" is the masked value of "--password=", so the next argument
 		// is masked whole as its value: its key "MY_PASSWORD_s3cr3t" is value.
 		{"app", "--password=", "--token", "MY_PASSWORD_s3cr3t=x"},
+		// The shell is read from args[0], here a masked value: path.Base
+		// would take "sh" out of it.
+		{"API_TOKEN=hunter/sh", "-c", "echo TOKEN=abc"},
 	}
 	fake := &dockerx.Fake{Infos: map[string]dockerx.ContainerInfo{}}
 	for n, cmd := range cases {
