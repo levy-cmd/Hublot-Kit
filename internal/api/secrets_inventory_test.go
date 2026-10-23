@@ -429,6 +429,9 @@ func TestSecretsInventoryNameFromClearTextOnly(t *testing.T) {
 		{"app", "--password", "-c", "Authorization: Bearer s3cr3t"},
 		{"app", "--password=", "postgres://u:s3cr3t@db", "--password", "y"},
 		{"sh", "-c", "PASS=s3cr3t app", "--secret", "z"},
+		// "--token" is the masked value of "--password=", so the next argument
+		// is masked whole as its value: its key "MY_PASSWORD_s3cr3t" is value.
+		{"app", "--password=", "--token", "MY_PASSWORD_s3cr3t=x"},
 	}
 	fake := &dockerx.Fake{Infos: map[string]dockerx.ContainerInfo{}}
 	for n, cmd := range cases {

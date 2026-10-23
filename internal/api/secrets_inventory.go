@@ -102,14 +102,18 @@ func maskedArgs(part string, raw []string) []argJSON {
 		if i > 0 {
 			prev = raw[i-1]
 		}
+		// A name comes only from text the masking left in clear (second
+		// review of tranche 4): after "--password=", "--Tok3n_SECRET" is the
+		// masked value, not a flag that names the next argument.
+		clear := func(j int) bool { return j >= 0 && masked[j] == raw[j] }
 		w := invWhole.FindStringSubmatch(raw[i])
 		switch {
 		case len(raw[i]) > invMaxArg:
-		case invFlag.MatchString(prev) && secrets.SecretName(prev):
+		case clear(i-1) && invFlag.MatchString(prev) && secrets.SecretName(prev):
 			a.Kind, a.Name = "flag", strings.TrimSuffix(prev, "=")
-		case i > 0 && invShellFlag.MatchString(prev) && slices.Contains(invShells, path.Base(raw[0])):
+		case i > 0 && clear(0) && clear(i-1) && invShellFlag.MatchString(prev) && slices.Contains(invShells, path.Base(raw[0])):
 			a.Kind, a.Name = "shell", path.Base(raw[0])+" "+prev
-		case w != nil && (secrets.SecretName(w[1]) || strings.Contains(strings.ToLower(w[1]), "pwd")):
+		case w != nil && strings.HasPrefix(m, w[1]+"=") && (secrets.SecretName(w[1]) || strings.Contains(strings.ToLower(w[1]), "pwd")):
 			a.Kind, a.Name = "assignment", w[1]
 		case secrets.URLCredentials(raw[i]):
 			a.Kind = "url"
