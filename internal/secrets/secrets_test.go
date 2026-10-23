@@ -275,35 +275,49 @@ func within(t *testing.T, name string, d time.Duration, f func()) {
 }
 
 // Fix round 1, I1: the cost of the masking is linear, and a value over the
-// cap is masked whole.
+// cap is masked whole. The costs are relative (review of tranche 6 of v0.2:
+// absolute ceilings of 100 and 250 ms failed under load): each call is
+// compared with Line on a banal input of maxLen bytes, measured in the same
+// conditions. A quadratic cost on such an input is hundreds of times that;
+// linear work stays within a small factor, whatever the machine.
 func TestCost(t *testing.T) {
+	pad := func(s, fill string) string { return s + strings.Repeat(fill, (maxLen-len(s))/len(fill)) }
+	plain := pad("", "abc ")
 	big := strings.Repeat("a=", 1<<16) // 128 KiB
-	within(t, "Masked 128 Kio", 100*time.Millisecond, func() {
-		if !Masked("X", big) {
-			t.Error("au-dessus du plafond : non masqué")
+	if !Masked("X", big) {
+		t.Error("au-dessus du plafond : non masqué")
+	}
+	if _, m := Args([]string{"app", "--x=" + big}); !m {
+		t.Error("au-dessus du plafond : non masqué")
+	}
+	for _, c := range []struct {
+		name string
+		f    func()
+	}{
+		{"Masked 128 Kio", func() { Masked("X", big) }},
+		{"Line 128 Kio", func() { Line(strings.Repeat("key", 43690)) }},
+		{"Args 128 Kio", func() { Args([]string{"app", "--x=" + big}) }},
+		// Just under the cap: the work itself must be linear.
+		{"Masked a= sous le plafond", func() { Masked("X", strings.Repeat("a=", maxLen/2-1)) }},
+		{"Masked k=v, sous le plafond", func() { Masked("X", strings.Repeat("k=v,", maxLen/4-1)) }},
+		{"Line key sous le plafond", func() { Line(strings.Repeat("key", maxLen/3-1)) }},
+		{"Args sous le plafond", func() { Args([]string{"app", "--attrs=" + strings.Repeat("service.name=x,", 500)}) }},
+	} {
+		within(t, c.name, 5*time.Second, c.f) // a cost far from linear fails here instead of hanging
+		r := relCost(c.f, func() { Line(plain) })
+		t.Logf("%s : rapport %.1f", c.name, r)
+		if r > 20 {
+			t.Errorf("%s : %.1f fois le coût de Line sur une entrée banale de %d octets, plafond 20", c.name, r, maxLen)
 		}
-	})
-	within(t, "Line 128 Kio", 100*time.Millisecond, func() { Line(strings.Repeat("key", 43690)) })
-	within(t, "Args 128 Kio", 100*time.Millisecond, func() {
-		if _, m := Args([]string{"app", "--x=" + big}); !m {
-			t.Error("au-dessus du plafond : non masqué")
-		}
-	})
-	// Just under the cap: the work itself must be linear.
-	within(t, "Masked a= sous le plafond", 250*time.Millisecond, func() { Masked("X", strings.Repeat("a=", maxLen/2-1)) })
-	within(t, "Masked k=v, sous le plafond", 250*time.Millisecond, func() { Masked("X", strings.Repeat("k=v,", maxLen/4-1)) })
-	within(t, "Line key sous le plafond", 250*time.Millisecond, func() { Line(strings.Repeat("key", maxLen/3-1)) })
-	within(t, "Args sous le plafond", 250*time.Millisecond, func() { Args([]string{"app", "--attrs=" + strings.Repeat("service.name=x,", 500)}) })
+	}
 
 	// Fix round 2, I: many words of §7 that share one separator, then a long
 	// tail; and a flag made of many words, then many blanks before a mask.
 	// Each word must not rescan the tail. The cost is compared with a plain
 	// input of the same size (ratio, not a duration: CI machines differ).
-	pad := func(s, fill string) string { return s + strings.Repeat(fill, (maxLen-len(s))/len(fill)) }
 	sep := pad(":"+strings.Repeat("key", 700)+"=x;", ";")
 	blanks := pad("-"+strings.Repeat("key", 700), " ")
 	blanks = blanks[:maxLen-len(Mask)] + Mask
-	plain := pad("", "abc ")
 	if Line(sep) == sep || Line(blanks) != blanks || Line(plain) != plain {
 		t.Error("entrées du test de coût : masquage inattendu")
 	}
@@ -316,19 +330,25 @@ func TestCost(t *testing.T) {
 	}
 }
 
-// costRatio: the best time of Line on s over the best time on ref, over a
-// few runs (the best time is the least noisy).
+// costRatio: relCost of Line on s over Line on ref.
 func costRatio(s, ref string) float64 {
-	best := func(in string) time.Duration {
+	return relCost(func() { Line(s) }, func() { Line(ref) })
+}
+
+// relCost: the best time of f over the best time of ref, over a few runs of
+// 16 calls each (the best time is the least noisy; both run alike under
+// load or -race).
+func relCost(f, ref func()) float64 {
+	best := func(g func()) time.Duration {
 		b := time.Duration(1 << 62)
 		for range 5 {
 			st := time.Now()
 			for range 16 {
-				Line(in)
+				g()
 			}
 			b = min(b, time.Since(st))
 		}
-		return b
+		return max(b, time.Nanosecond)
 	}
-	return float64(best(s)) / float64(best(ref))
+	return float64(best(f)) / float64(best(ref))
 }

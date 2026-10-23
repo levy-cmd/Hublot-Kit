@@ -840,8 +840,10 @@ type extraction struct {
 	err     error
 }
 
-// keepExtract: the results kept extractKeep; any other error is delivered
-// once, then the next request extracts again.
+// keepExtract: the results kept extractKeep (a content, or a definitive
+// error of an immutable image). Any other error is passing (Docker cut, the
+// connection lost): delivered once to a request, then the next request
+// extracts again; nobody asking, it is forgotten after Idle.
 func keepExtract(err error) bool {
 	return err == nil || errors.Is(err, ErrTooLarge) || errors.Is(err, ErrUnsupportedImage)
 }
@@ -919,18 +921,23 @@ func (v *Views) startExtract(key, id string, ref layerRef, total int64) *extract
 		close(e.done)
 		delete(v.running, id)
 		<-v.slots
-		switch {
-		case v.extracts[key] != e:
-		case keepExtract(err):
-			time.AfterFunc(extractKeep, func() {
+		forget := func(after time.Duration) {
+			time.AfterFunc(after, func() {
 				v.mu.Lock()
 				defer v.mu.Unlock()
 				if v.extracts[key] == e {
 					delete(v.extracts, key)
 				}
 			})
+		}
+		switch {
+		case v.extracts[key] != e:
+		case keepExtract(err):
+			forget(extractKeep)
 		case errors.Is(err, ErrIndexing):
 			delete(v.extracts, key) // abandoned: the next request starts again
+		default:
+			forget(lim.Idle) // passing: for a request still polling, never for the next visit
 		}
 	}()
 	return e

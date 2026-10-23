@@ -9,8 +9,11 @@ package fsview
 // CI (overlay2, containerd) and in the VMs.
 
 import (
+	"archive/tar"
+	"bufio"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -85,6 +88,7 @@ func TestImageIndexReal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	t.Logf("format de docker save : %s", exportFormat(t, dc, id))
 	v := NewViews(dc, Options{})
 	fsys, took := imageReady(t, v, id)
 	t.Logf("index de l'image de test : %v", took)
@@ -161,4 +165,36 @@ func TestImageIndexRealMeasure(t *testing.T) {
 	walk("/")
 	b, read := imageRead(t, fsys, file)
 	t.Logf("%s : index en %v (%d entrées visibles), aperçu de %s (%d octets) en %v", ref, took, n, file, len(b), read)
+}
+
+// exportFormat describes the export of image id as the index reads it: the
+// kinds of its blobs (gzip, tar, other) and its other entries (plan v0.2
+// tranche 6 step 8: the format under overlay2, shown by the CI).
+func exportFormat(t *testing.T, dc dockerx.Client, id string) string {
+	t.Helper()
+	rc, err := dc.ImageSave(context.Background(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rc.Close()
+	kinds := map[blobKind]int{}
+	var others []string
+	tr := tar.NewReader(rc)
+	for {
+		h, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		if blobDigest(h.Name) == "" || h.Typeflag != tar.TypeReg {
+			others = append(others, h.Name)
+			continue
+		}
+		head, _ := bufio.NewReaderSize(tr, 4096).Peek(512)
+		kinds[kindOf(head)]++
+	}
+	return fmt.Sprintf("blobs gzip %d, tar %d, zstd %d, autres %d ; entrées %v",
+		kinds[blobGzip], kinds[blobTar], kinds[blobZstd], kinds[blobOther], others)
 }
