@@ -1334,3 +1334,71 @@ func TestImageSearch(t *testing.T) {
 		t.Error("autre image : indexed")
 	}
 }
+
+// A pax global header ('g') of a layer is not a file: never listed.
+func TestImageIndexGlobalHeaderSkipped(t *testing.T) {
+	layer := streamLayer(t, func(tw *tar.Writer) {
+		tw.WriteHeader(&tar.Header{Name: "pax_global_header", Typeflag: tar.TypeXGlobalHeader,
+			PAXRecords: map[string]string{"comment": "global"}})
+		tw.WriteHeader(&tar.Header{Name: "f", Typeflag: tar.TypeReg, Mode: 0o644})
+	})
+	x := mustBuild(t, layer)
+	if got := listNames(t, x, "/"); !slices.Equal(got, []string{"f"}) {
+		t.Errorf("List(/) = %v, attendu [f]", got)
+	}
+}
+
+// A too_large of an extraction is kept like a content (extractKeep): the
+// next poll asks nothing of Docker.
+func TestImageExtractTooLargeKept(t *testing.T) {
+	f := imageDocker(saveArchive(t, layerOf(t, tfile("big", strings.Repeat("y", MaxExtract+1)))))
+	fsys := readyImage(t, NewViews(f, Options{}), imgID)
+	for range 3 {
+		if _, err := readImage(t, fsys, "/big"); !errors.Is(err, ErrTooLarge) {
+			t.Fatalf("Open(/big) : %v", err)
+		}
+	}
+	if n := f.ImageSaveCalls.Load(); n != 2 {
+		t.Errorf("%d exports, attendu 2 (l'index, puis une extraction)", n)
+	}
+}
+
+// failing is an export cut in the middle (Docker restarted, connection lost).
+type failing struct{ rc io.ReadCloser }
+
+func (f failing) Read([]byte) (int, error) { return 0, errors.New("connection reset by peer") }
+func (f failing) Close() error             { return f.rc.Close() }
+
+// A passing error (Docker cut) is not kept: delivered to the client that
+// still polls, forgotten after Idle when nobody asks for it (review of
+// tranche 6: an hour later, the file showed "Docker unavailable").
+func TestImageExtractTransientErrorForgotten(t *testing.T) {
+	var cut atomic.Bool
+	cut.Store(true)
+	h := newSaveHook(imageDocker(saveArchive(t, layerOf(t, tfile("f", "F")))), func(_ context.Context, _ string, rc io.ReadCloser) io.ReadCloser {
+		if cut.Load() {
+			return failing{rc}
+		}
+		return rc
+	})
+	fsys := readyImage(t, NewViews(h, Options{Extract: ExtractLimits{Idle: 50 * time.Millisecond}}), imgID)
+
+	// A client that polls gets it once.
+	if _, err := readImage(t, fsys, "/f"); !errors.Is(err, dockerx.ErrUnavailable) {
+		t.Fatalf("export coupé : %v", err)
+	}
+	// A client gone: the error stays nowhere once Idle has passed.
+	if _, err := fsys.Open(tctx, "/f"); !errors.Is(err, ErrIndexing) {
+		t.Fatalf("seconde extraction : %v", err)
+	}
+	for deadline := time.Now().Add(2 * time.Second); h.callsOf(imgID) < 3; time.Sleep(time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("seconde extraction jamais lancée")
+		}
+	}
+	time.Sleep(200 * time.Millisecond)
+	cut.Store(false) // Docker is back
+	if got, err := readImage(t, fsys, "/f"); err != nil || got != "F" {
+		t.Errorf("après le retour de Docker : %q, %v", got, err)
+	}
+}
