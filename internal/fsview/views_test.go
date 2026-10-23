@@ -517,3 +517,111 @@ func TestViewsLateErrorDeliveredOnce(t *testing.T) {
 		t.Errorf("%d GET /archive après la livraison, attendu 2", n)
 	}
 }
+
+// lockedExport models dockerd (moby daemon/archive.go): GET /archive holds
+// the container lock until the whole tar is sent, and an Inspect of that
+// container, with or without size, waits for it. Measured on Docker Desktop
+// 29.7.2 (v0.1.1): docker inspect of a stopped golang:1 took 10.6 s during
+// its 11.6 s export, 0.02 s at rest. waitLock gives up after 2 s, like a
+// client deadline, so that a red run stays short.
+type lockedExport struct {
+	*gated
+	exporting atomic.Bool
+}
+
+func (l *lockedExport) GetArchive(ctx context.Context, id, p string) (io.ReadCloser, error) {
+	if p == "/" {
+		l.exporting.Store(true)
+	}
+	return l.gated.GetArchive(ctx, id, p)
+}
+
+func (l *lockedExport) waitLock(ctx context.Context) error {
+	if !l.exporting.Load() {
+		return nil
+	}
+	select {
+	case <-l.open:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-time.After(2 * time.Second):
+		return fmt.Errorf("%w : context deadline exceeded", dockerx.ErrUnavailable)
+	}
+}
+
+func (l *lockedExport) Inspect(ctx context.Context, id string) (dockerx.ContainerInfo, error) {
+	if err := l.waitLock(ctx); err != nil {
+		return dockerx.ContainerInfo{}, err
+	}
+	return l.gated.Inspect(ctx, id)
+}
+
+func (l *lockedExport) SizeRootFs(ctx context.Context, id string) (int64, error) {
+	if err := l.waitLock(ctx); err != nil {
+		return 0, err
+	}
+	return l.gated.SizeRootFs(ctx, id)
+}
+
+func newLockedExport(t *testing.T) *lockedExport {
+	return &lockedExport{gated: &gated{Fake: stoppedDocker(t), open: make(chan struct{}), free: 4096}}
+}
+
+// v0.1.1, spec §5.2 step 2: while the export holds the container, polls
+// answer 202 at once, by full ID or by name, with a progress that moves
+// (SizeRootFs is read before the export takes the lock).
+func TestViewsPollsDuringLockedExport(t *testing.T) {
+	d := newLockedExport(t)
+	v := NewViews(d, Options{FirstWait: 50 * time.Millisecond})
+	if _, err := v.For(tctx, "db"); !errors.Is(err, ErrIndexing) {
+		t.Fatalf("première requête : %v", err)
+	}
+	for _, ref := range []string{"db", vID, "db", vID} {
+		start := time.Now()
+		_, err := v.For(tctx, ref)
+		var ie *IndexingError
+		if dt := time.Since(start); !errors.As(err, &ie) || dt > 200*time.Millisecond {
+			t.Fatalf("relance %s pendant l'export : %v en %s, attendu 202 immédiat", ref, err, dt)
+		}
+	}
+	for deadline := time.Now().Add(3 * time.Second); ; time.Sleep(5 * time.Millisecond) {
+		_, err := v.For(tctx, "db")
+		var ie *IndexingError
+		if !errors.As(err, &ie) {
+			t.Fatalf("attendu indexing : %v", err)
+		}
+		if ie.Progress > 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("progression bloquée à 0 : SizeRootFs attend la fin de l'export")
+		}
+	}
+	close(d.open)
+	fsys := ready(t, v, "db")
+	if _, _, err := fsys.List(tctx, "/etc"); err != nil {
+		t.Fatal(err)
+	}
+	if n := archiveCalls(d.Fake, vID, "/"); n != 1 {
+		t.Errorf("%d GET /archive de /, attendu 1", n)
+	}
+}
+
+// The identity is checked again when an index is served: restarted and
+// stopped once the build is over, the container gets a new index, never the
+// old one.
+func TestViewsServeReinspects(t *testing.T) {
+	d := newLockedExport(t)
+	v := NewViews(d, Options{})
+	v.For(tctx, "db")
+	close(d.open)
+	ready(t, v, "db")
+	info := d.Infos["db"]
+	info.FinishedAt = "2026-10-09T11:00:00Z"
+	d.Infos["db"], d.Infos[vID] = info, info
+	ready(t, v, "db")
+	if n := archiveCalls(d.Fake, vID, "/"); n != 2 {
+		t.Errorf("ÉVASION : %d GET /archive de /, attendu 2 (ancien index servi)", n)
+	}
+}
