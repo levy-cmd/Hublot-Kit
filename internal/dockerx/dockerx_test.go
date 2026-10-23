@@ -2,6 +2,7 @@ package dockerx
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -80,6 +81,36 @@ func TestFromSummaryNameSkipsLinkAlias(t *testing.T) {
 	c := fromSummary(container.Summary{ID: "x", Names: []string{"/other/alias", "/web"}})
 	if c.Name != "web" {
 		t.Fatalf("name = %q", c.Name)
+	}
+}
+
+// Spec v0.2 §5.1: project and service come from the list's labels, and pass
+// the label rule (§5.2): a value §7 would mask is not sent, and the
+// container counts as "no project". No other label leaves through the list.
+func TestContainersProject(t *testing.T) {
+	c := fromSummary(container.Summary{ID: "x", Names: []string{"/shop-web-1"}, Labels: map[string]string{
+		"com.docker.compose.project": "shop", "com.docker.compose.service": "web",
+		"traefik.http.middlewares.auth.basicauth.users": "admin:$apr1$H6uskkkW$IgXLP6ewTrSuBkTrqE8wj/",
+	}})
+	if c.Project != "shop" || c.Service != "web" {
+		t.Fatalf("projet, service : %q %q", c.Project, c.Service)
+	}
+	b, _ := json.Marshal(c)
+	if !strings.Contains(string(b), `"project":"shop","service":"web"`) || strings.Contains(string(b), "apr1") ||
+		strings.Contains(string(b), "traefik") {
+		t.Errorf("JSON : %s", b)
+	}
+	// Outside Compose: both fields absent.
+	b, _ = json.Marshal(fromSummary(container.Summary{ID: "y"}))
+	if strings.Contains(string(b), "project") || strings.Contains(string(b), "service") {
+		t.Errorf("hors Compose : %s", b)
+	}
+	// A value §7 masks: dropped, never sent.
+	m := fromSummary(container.Summary{ID: "z", Labels: map[string]string{
+		"com.docker.compose.project": "postgres://u:s3cr3t@db/app", "com.docker.compose.service": "--password s3cr3t",
+	}})
+	if b, _ := json.Marshal(m); m.Project != "" || m.Service != "" || strings.Contains(string(b), "s3cr3t") {
+		t.Errorf("FUITE : %s", b)
 	}
 }
 

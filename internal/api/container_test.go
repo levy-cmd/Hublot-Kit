@@ -126,6 +126,46 @@ func TestContainerRadiography(t *testing.T) {
 	}
 }
 
+// Spec v0.2 §5.2 (Q60): labels leave the agent through secrets.Labels only;
+// outside com.docker.compose. and org.opencontainers.image., the key alone,
+// and no reveal for them.
+func TestContainerLabelsNeverLeak(t *testing.T) {
+	f, c := radioFixture(t, false)
+	web := f.docker.Infos["web"]
+	web.Details.Labels = map[string]string{
+		"traefik.http.middlewares.auth.basicauth.users": "admin:$apr1$H6uskkkW$IgXLP6ewTrSuBkTrqE8wj/",
+		"com.docker.compose.project":                    "shop",
+		"com.docker.compose.x":                          "postgres://u:s3cr3t@db/app",
+		"org.opencontainers.image.source":               "https://github.com/o/r",
+		"backup.dsn":                                    "s3cr3t",
+	}
+	f.docker.Infos["web"], f.docker.Infos[webID] = web, web
+	rec := f.do("GET", "/api/containers/web", "", c)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("statut %d : %s", rec.Code, rec.Body)
+	}
+	body := rec.Body.String()
+	for _, w := range []string{"s3cr3t", "$apr1$", "IgXLP6ew"} {
+		if strings.Contains(body, w) {
+			t.Errorf("FUITE : %s dans la réponse", w)
+		}
+	}
+	for _, want := range []string{
+		`{"key":"com.docker.compose.project","value":"shop","masked":false}`,
+		`{"key":"traefik.http.middlewares.auth.basicauth.users","value":null,"masked":true}`,
+		`{"key":"com.docker.compose.x","value":null,"masked":true}`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("%s absent de %s", want, body)
+		}
+	}
+	// No reveal of a label: env/reveal knows only Config.Env.
+	r := f.do("POST", "/api/containers/web/env/reveal", `{"name":"backup.dsn"}`, c)
+	if r.Code != http.StatusNotFound || strings.Contains(r.Body.String(), "s3cr3t") {
+		t.Errorf("label révélé : %d %s", r.Code, r.Body)
+	}
+}
+
 func TestContainerErrors(t *testing.T) {
 	f, c := radioFixture(t, false)
 	if rec := f.do("GET", "/api/containers/absent", "", c); rec.Code != http.StatusNotFound || errCode(t, rec) != "not_found" {
