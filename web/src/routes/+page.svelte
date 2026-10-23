@@ -4,6 +4,7 @@
 	import { getContext } from 'svelte';
 	import type { Container } from '#lib/api.ts';
 	import { containerList } from '#lib/containerList.svelte.ts';
+	import { imageList } from '#lib/imageList.svelte.ts';
 	import { countGroups, filterContainers, groupOf, NO_PROJECT, projectsOf, STATES, stateLabel } from '#lib/containers.ts';
 	import { errorMessage, t, tf } from '#lib/i18n/index.ts';
 	import Icon from '#lib/icons/Icon.svelte';
@@ -44,6 +45,8 @@
 	$effect(() => {
 		if (containerList.error?.status === 401) goto('/login').catch(() => {});
 	});
+	// The counter of the Images tab: the list shared with the side bar.
+	$effect(() => imageList.ensure());
 
 	// A phone shows the detail as a full page (spec v0.2 §3).
 	let narrow = $state(false);
@@ -122,6 +125,11 @@
 						{t(tab.key)} <span class="count">{tab.n()}</span>
 					</a>
 				{/each}
+				<!-- Spec v0.2 §3: an image is not a container; this tab leads to its page. -->
+				<a href="/images">
+					{t('nav.images')}
+					{#if imageList.items}<span class="count">{imageList.items.length}</span>{/if}
+				</a>
 			</nav>
 
 			<div class="filters">

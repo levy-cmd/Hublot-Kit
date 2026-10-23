@@ -59,7 +59,7 @@ func TestHistoryArgAndLabel(t *testing.T) {
 		"ARG GH_PAT=s3cr3t-o":                    "ARG GH_PAT=••••••",
 		"ARG GH_PAT":                             "ARG GH_PAT",
 		"ARG A B=s3cr3t-p":                       "ARG A B=••••••",
-		"ARG A=s3cr3t-q B=s3cr3t-r":              "ARG A=•••••• B=••••••",
+		"ARG A=s3cr3t-q B=s3cr3t-r":              "ARG ••••••",
 		"ARG NOTE=a s3cr3t-s c":                  "ARG ••••••",
 		"ARG =s3cr3t-t":                          "ARG ••••••",
 		"ARG s3cr3t-u!":                          "ARG ••••••",
@@ -78,22 +78,24 @@ func TestHistoryArgAndLabel(t *testing.T) {
 
 // Review of tranche 5 (relecteur, critical): a value with a blank made the
 // next word of the form NAME= pass for a name ("ARG NPM_AUTH=Basic
-// dXNl…==" let the base64 out). Fail closed: with an ARG, or with "|N" for
-// N ≥ 2, every word must be NAME=… (NAME of [A-Za-z_][A-Za-z0-9_]*), and
-// there must be exactly N of them; else the whole part is masked. With
-// "|1", the single value runs to the shell, blanks included.
+// dXNl…==" let the base64 out). Fail closed: with "|N" for N ≥ 2, every
+// word must be NAME=… (NAME of [A-Za-z_][A-Za-z0-9_]*), and there must be
+// exactly N of them (a blank in a value always adds a word); with "|1", the
+// single value runs to the shell. An ARG has no count: "dXNl…==" is a
+// NAME= word too, so at most one assignment, its last word, after names
+// alone; else the whole part is masked.
 func TestHistoryValueWithBlanks(t *testing.T) {
 	check(t, map[string]string{
 		"ARG NPM_AUTH=Basic s3cr3tbase64==":                              "ARG ••••••",
 		"RUN |2 NPM_AUTH=Basic s3cr3tbase64== OTHER=1 /bin/sh -c npm ci": "RUN |2 •••••• /bin/sh -c npm ci",
-		"|2 NPM_AUTH=Basic s3cr3tbase64== /bin/sh -c npm ci":             "|2 •••••• /bin/sh -c npm ci",
+		"|2 NPM_AUTH=Basic s3cr3tbase64== OTHER=1 /bin/sh -c npm ci":     "|2 •••••• /bin/sh -c npm ci",
 		"|2 A=x B=y C=s3cr3t-a /bin/sh -c x":                             "|2 •••••• /bin/sh -c x",
 		"|3 A=x B=s3cr3t-b /bin/sh -c x":                                 "|3 •••••• /bin/sh -c x",
 		"|2 A.b=x C=s3cr3t-c /bin/sh -c x":                               "|2 •••••• /bin/sh -c x",
 		"|2 A-b=x C=s3cr3t-d /bin/sh -c x":                               "|2 •••••• /bin/sh -c x",
 		"|2 A=s3cr3t-e B=s3cr3t-f /bin/sh -c x":                          "|2 A=•••••• B=•••••• /bin/sh -c x",
 		"|1 NPM_AUTH=Basic s3cr3tbase64== /bin/sh -c npm ci":             "|1 NPM_AUTH=•••••• /bin/sh -c npm ci",
-		"ARG A=1 B=s3cr3t-g":                                             "ARG A=•••••• B=••••••",
+		"ARG A=1 B=s3cr3t-g":                                             "ARG ••••••", // two assignments: "A=1 B=…" may be one value
 		"ARG A=1 s3cr3t-h":                                               "ARG ••••••",
 		"ARG A.b=s3cr3t-i":                                               "ARG ••••••",
 		"ARG A B":                                                        "ARG A B",

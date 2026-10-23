@@ -8,33 +8,38 @@ import (
 
 // buildArgs: the prefix of a history line run with build arguments, "|N"
 // (classic builder) or "RUN |N" (BuildKit), then a blank.
-var buildArgs = regexp.MustCompile(`^(?:RUN )?\|([0-9]+) `)
+var buildArgs = regexp.MustCompile(`^(?:RUN\s+)?\|([0-9]+)\s`)
 
-// argName: a word that starts an assignment of the prefix (NAME=).
-var argName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_.-]*=`)
+// argName: a word that is an assignment of a build argument (NAME=…).
+var argName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*=`)
 
 // shellMarks end the build arguments: the first one found starts the command.
 var shellMarks = []string{" /bin/sh -c ", " /bin/bash -c "}
 
 // instruction: a line of the ARG or LABEL instruction, as BuildKit records
 // it ("ARG GH_PAT=value", "LABEL k=v k2=v2") or the classic builder
-// ("/bin/sh -c #(nop)  ARG …"), in any case.
-var instruction = regexp.MustCompile(`^((?:/bin/sh -c #\(nop\) +)?(?i:ARG|LABEL)) (?s:(.*))$`)
+// ("/bin/sh -c #(nop)  ARG …"), ONBUILD or not, in any case, followed by
+// any blank.
+var instruction = regexp.MustCompile(`^((?:/bin/sh -c #\(nop\)\s+)?(?i:ONBUILD\s+)?(?i:ARG|LABEL))\s+(?s:(.*))$`)
 
 // bareName: a build argument without a value ("ARG GH_PAT").
-var bareName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_.-]*$`)
+var bareName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 // History masks one line of an image's history (spec v0.2 §5.4). The build
 // arguments of "|N NAME=value … /bin/sh -c …" are secrets whatever their
 // name (GH_PAT, NPM_AUTH hold no word of §7): every value is masked up to
 // the first " /bin/sh -c " or " /bin/bash -c ", the names stay (at most N of
-// them: a value may hold blanks and "=", the count does not find its end).
-// Without a shell, or if the first word is not NAME=, the whole part is
-// masked (fail closed). Then the line goes through Line.
+// them). With "|1", the value runs to the shell, blanks included. With N ≥ 2,
+// a value with a blank would make its next word pass for a name (review of
+// tranche 5: "NPM_AUTH=Basic dXNl…==" let the base64 out): every word must
+// be NAME=…, and there must be exactly N of them. Without a shell, or on
+// any other form, the whole part is masked (fail closed). Then the line
+// goes through Line.
 //
 // BuildKit also keeps "ARG NAME=value" with the value given by --build-arg,
 // and "LABEL k=v …" without quotes (measured, Docker 29.7, tranche 5): the
-// values of an ARG are masked as after "|N"; a LABEL line keeps none of its
+// value of an ARG is masked (names alone, then one NAME=… at the end, else
+// the whole part); a LABEL line keeps none of its
 // text, since labels leave the agent through Labels only (spec v0.2 §7) and
 // "a b=c d" cannot be cut into keys and values.
 func History(createdBy string) string {
@@ -62,53 +67,61 @@ func History(createdBy string) string {
 	if end < 0 {
 		return Line(pre + " " + Mask)
 	}
-	args, cmd := strings.TrimPrefix(rest[:end], " "), rest[end:]
+	args, cmd := "", rest[end:]
+	if end > 0 {
+		args = rest[1:end] // rest[0] is the blank after |N
+	}
 	if args == "" {
 		return Line(pre + cmd)
 	}
 	return Line(pre + " " + maskArgs(args, n) + cmd)
 }
 
-// maskArgs: "NAME=••••••" for each of the first n words that start an
-// assignment, the other words being part of a value; Mask alone if the
-// first word does not start one (or n is 0: values without a name).
+// maskArgs: "NAME=••••••" for the n assignments of a "|N" prefix, or Mask
+// alone: the single NAME= of "|1" (its value runs to the shell), else
+// exactly n words, each NAME=….
 func maskArgs(args string, n int) string {
-	words := strings.Split(args, " ")
-	if n == 0 || !argName.MatchString(words[0]) {
+	words := strings.Fields(args)
+	if n == 0 || len(words) == 0 || !argName.MatchString(words[0]) {
 		return Mask
 	}
-	var names []string
+	if n == 1 {
+		return argName.FindString(words[0]) + Mask
+	}
+	if len(words) != n {
+		return Mask
+	}
+	names := make([]string, 0, n)
 	for _, w := range words {
-		if len(names) == n {
-			break
+		name := argName.FindString(w)
+		if name == "" {
+			return Mask
 		}
-		if name := argName.FindString(w); name != "" {
-			names = append(names, name+Mask)
-		}
+		names = append(names, name+Mask)
 	}
 	return strings.Join(names, " ")
 }
 
-// maskArgInstruction masks the words of an ARG instruction: a name alone
-// stays until the first NAME=value; then each NAME= keeps its name and
-// masks its value, the other words being part of a value. Mask alone if the
-// first word is neither.
+// maskArgInstruction masks the words of an ARG instruction: names alone,
+// then at most one NAME=…, the last word, which keeps its name. An ARG
+// gives no count of its arguments, and the rest of a value with a blank
+// may look like NAME= ("Basic dXNl…=="): any other form masks the whole
+// part.
 func maskArgInstruction(args string) string {
 	words := strings.Fields(args)
-	var out []string
-	inValue := false
+	if len(words) == 0 {
+		return Mask
+	}
+	out := make([]string, 0, len(words))
 	for i, w := range words {
 		switch name := argName.FindString(w); {
-		case name != "":
-			out, inValue = append(out, name+Mask), true
-		case !inValue && bareName.MatchString(w):
+		case name != "" && i == len(words)-1:
+			out = append(out, name+Mask)
+		case bareName.MatchString(w):
 			out = append(out, w)
-		case i == 0:
+		default:
 			return Mask
 		}
-	}
-	if len(out) == 0 {
-		return Mask
 	}
 	return strings.Join(out, " ")
 }

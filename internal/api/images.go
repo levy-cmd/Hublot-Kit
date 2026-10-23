@@ -243,13 +243,12 @@ func (s *server) imageDetail(ctx context.Context, id string) (imageDetailJSON, e
 	if info.ID != id {
 		return imageDetailJSON{}, errImageMismatch
 	}
-	ep, epMasked := secrets.Args(info.Entrypoint)
-	cmd, cmdMasked := secrets.Args(info.Cmd)
+	ep, cmd, cmdMasked := maskCommand(info.Entrypoint, info.Cmd)
 	out := imageDetailJSON{
 		ID: info.ID, Tags: nonNil(info.Tags), Size: info.Size, Created: info.Created,
 		OS: info.OS, Architecture: info.Architecture, Variant: info.Variant,
 		Config: imageConfigJSON{
-			Env: secrets.Env(info.Env), Entrypoint: nonNil(ep), Cmd: nonNil(cmd), CommandMasked: epMasked || cmdMasked,
+			Env: secrets.Env(info.Env), Entrypoint: ep, Cmd: cmd, CommandMasked: cmdMasked,
 			WorkingDir: info.WorkingDir, User: info.User, ExposedPorts: nonNil(info.ExposedPorts),
 			Labels: secrets.Labels(info.Labels),
 		},

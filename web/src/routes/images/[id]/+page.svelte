@@ -7,7 +7,7 @@
 	import { formatSize } from '#lib/files.ts';
 	import { errorMessage, lang, t, tf } from '#lib/i18n/index.ts';
 	import Icon from '#lib/icons/Icon.svelte';
-	import { getImage, imageName, imageShortId, layerCounts, platform, type ImageDetail } from '#lib/images.ts';
+	import { getImage, imageName, layerCounts, platform, type ImageDetail } from '#lib/images.ts';
 	import { commandLine, splitLabels } from '#lib/xray.ts';
 
 	// Spec v0.2 §5.4: one image, by its full ID only (a name in the address
@@ -193,7 +193,6 @@
 						<li>
 							<a href="/?c={c.id}" title={t('images.openContainer')}>{c.name}</a>
 							<span class="state tone-{stateTone(c.state)}"><span class="dot {stateTone(c.state)}"></span>{stateLabel(c.state)}</span>
-							<span class="mono muted small">{imageShortId(c.id)}</span>
 						</li>
 					{/each}
 				</ul>
