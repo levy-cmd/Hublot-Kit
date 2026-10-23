@@ -1,9 +1,13 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
+	"errors"
+	"io"
 	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -353,13 +357,128 @@ func TestNewServerTimeouts(t *testing.T) {
 	}
 }
 
+// closedSoon: the server closed conn (EOF or reset) within limit.
+func closedSoon(conn net.Conn, limit time.Duration) bool {
+	conn.SetReadDeadline(time.Now().Add(limit))
+	_, err := io.Copy(io.Discard, conn)
+	var ne net.Error
+	return !(errors.As(err, &ne) && ne.Timeout())
+}
+
+// v0.1.2 (counter-audit, constat 2): the cap of 512 was global; 2 000 mute
+// sockets of one address made three legitimate requests out of four time
+// out. Each source address (RemoteAddr) holds at most PerIP connections:
+// past that, a new one is closed at once.
+func TestLimitListenerPerIP(t *testing.T) {
+	inner, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ln := limitListener(inner, connLimits{Max: 10, PerIP: 2, FirstByte: time.Minute})
+	defer ln.Close()
+	accepted := make(chan net.Conn, 10)
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			accepted <- c
+		}
+	}()
+	dial := func(local string) net.Conn {
+		d := net.Dialer{}
+		if local != "" {
+			d.LocalAddr = &net.TCPAddr{IP: net.ParseIP(local)}
+		}
+		c, err := d.Dial("tcp", inner.Addr().String())
+		if err != nil {
+			return nil
+		}
+		t.Cleanup(func() { c.Close() })
+		return c
+	}
+	var got []net.Conn
+	for i := 0; i < 2; i++ {
+		dial("")
+		select {
+		case c := <-accepted:
+			got = append(got, c)
+		case <-time.After(2 * time.Second):
+			t.Fatal("connexion sous la limite par adresse non acceptée")
+		}
+	}
+	extra := dial("")
+	if !closedSoon(extra, 2*time.Second) {
+		t.Fatal("3e connexion de la même adresse gardée ouverte")
+	}
+	select {
+	case <-accepted:
+		t.Fatal("3e connexion de la même adresse remise au serveur")
+	default:
+	}
+	if other := dial("127.0.0.2"); other != nil { // Linux: all of 127/8 is local
+		select {
+		case c := <-accepted:
+			c.Close()
+		case <-time.After(2 * time.Second):
+			t.Fatal("une autre adresse est refusée")
+		}
+	}
+	got[0].Close()
+	dial("")
+	select {
+	case c := <-accepted:
+		c.Close()
+	case <-time.After(2 * time.Second):
+		t.Fatal("place rendue à l'adresse non reprise")
+	}
+	got[1].Close()
+}
+
+// A connection that sends no byte is closed after FirstByte, well before
+// ReadHeaderTimeout; once a byte came, the server's own delays apply.
+func TestMuteConnectionClosedFast(t *testing.T) {
+	inner, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ln := limitListener(inner, connLimits{Max: 10, PerIP: 10, FirstByte: 200 * time.Millisecond})
+	srv := newServer()
+	srv.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "ok") })
+	go srv.Serve(ln)
+	defer srv.Close()
+	mute, err := net.Dial("tcp", inner.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mute.Close()
+	start := time.Now()
+	if !closedSoon(mute, 3*time.Second) || time.Since(start) > 2*time.Second {
+		t.Fatalf("connexion muette encore ouverte après %s", time.Since(start))
+	}
+	slow, err := net.Dial("tcp", inner.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer slow.Close()
+	slow.Write([]byte("G"))
+	time.Sleep(400 * time.Millisecond) // past FirstByte, within ReadHeaderTimeout
+	slow.Write([]byte("ET / HTTP/1.1\r\nHost: x\r\n\r\n"))
+	slow.SetReadDeadline(time.Now().Add(3 * time.Second))
+	resp, err := http.ReadResponse(bufio.NewReader(slow), nil)
+	if err != nil || resp.StatusCode != http.StatusOK {
+		t.Fatalf("requête lente mais commencée : %v %v", resp, err)
+	}
+}
+
 // At most n connections at once: the next one waits until one closes.
 func TestLimitListener(t *testing.T) {
 	inner, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
-	ln := limitListener(inner, 2)
+	ln := limitListener(inner, connLimits{Max: 2, PerIP: 10, FirstByte: time.Minute})
 	defer ln.Close()
 	accepted := make(chan net.Conn, 3)
 	stopped := make(chan struct{})

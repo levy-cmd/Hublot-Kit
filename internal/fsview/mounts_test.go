@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -88,9 +89,10 @@ func TestHostBind(t *testing.T) {
 func fakeHostRoot(t *testing.T) string {
 	t.Helper()
 	root := t.TempDir()
-	old := hostRoot
+	old, oldNS := hostRoot, selfPIDNamespace
 	hostRoot = root
-	t.Cleanup(func() { hostRoot = old })
+	selfPIDNamespace = func() (string, error) { return hostPIDNamespace, nil }
+	t.Cleanup(func() { hostRoot, selfPIDNamespace = old, oldNS })
 	return root
 }
 
@@ -161,6 +163,48 @@ func TestHostBindResolvesHostLinks(t *testing.T) {
 	}
 	if err := HostBind(ctx, docker, allowed); err != nil {
 		t.Fatalf("montages ordinaires refusés : %v", err)
+	}
+}
+
+// v0.1.2 (counter-audit, constat 3): an agent started with --init and
+// without --pid=host is not PID 1, yet /proc/1/root is its own container's
+// root, and the check passed (fail open). The agent must be in the host's
+// PID namespace, or every host path is refused.
+func TestHostBindOutsideHostPIDNamespace(t *testing.T) {
+	fakeHostRoot(t)
+	docker := &dockerx.Fake{Volumes: map[string]map[string]string{"v": {"type": "none", "o": "bind", "device": "/srv/v"}}}
+	for _, ns := range []func() (string, error){
+		func() (string, error) { return "pid:[4026532745]", nil }, // a container's namespace
+		func() (string, error) { return "", fs.ErrPermission },
+	} {
+		selfPIDNamespace = ns
+		for _, m := range []dockerx.Mount{
+			{Type: "bind", Source: "/srv/data", Destination: "/d"},
+			{Type: "volume", Name: "v", Destination: "/v", Driver: "local"},
+		} {
+			err := HostBind(context.Background(), docker, []dockerx.Mount{m})
+			if !errors.Is(err, ErrForbiddenPath) || !strings.Contains(err.Error(), "--pid=host") {
+				t.Errorf("%+v : %v, attendu un refus qui nomme --pid=host", m, err)
+			}
+		}
+	}
+	selfPIDNamespace = func() (string, error) { return hostPIDNamespace, nil }
+	if err := HostBind(context.Background(), docker, []dockerx.Mount{{Type: "bind", Source: "/srv/data", Destination: "/d"}}); err != nil {
+		t.Errorf("espace de PID de l'hôte : %v", err)
+	}
+	if hostPIDNamespace != "pid:[4026531836]" {
+		t.Errorf("espace de PID initial : %q", hostPIDNamespace)
+	}
+}
+
+// Under Linux, tests run in the host's PID namespace (CI runner, or
+// scripts/test-linux.sh with --pid=host): the real reading finds it.
+func TestSelfPIDNamespaceIsHostsUnderLinux(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("Linux only")
+	}
+	if ns, err := selfPIDNamespace(); err != nil || ns != hostPIDNamespace {
+		t.Fatalf("espace de PID : %q %v, attendu %q", ns, err, hostPIDNamespace)
 	}
 }
 
