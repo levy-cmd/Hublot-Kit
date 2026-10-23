@@ -37,6 +37,9 @@ var witnessHistory = []string{
 	"|1 X=s3cr3t-c make",
 	`/bin/sh -c curl -H "Authorization: Bearer s3cr3t-d" x`,
 	"ENV DB_PASSWORD=s3cr3t-env",
+	// BuildKit, measured (tranche 5): the value of --build-arg, and the labels.
+	"ARG GH_PAT=s3cr3t-arg",
+	"LABEL traefik.http.middlewares.a.basicauth.users=admin:s3cr3t-lbl-hist",
 }
 
 // imagesFake: image 1 (tagged, two containers, every secret), image 2

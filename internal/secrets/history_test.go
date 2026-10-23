@@ -45,6 +45,39 @@ func TestHistoryBuildArgs(t *testing.T) {
 		"/bin/sh -c #(nop) ADD file:abc in / ": "/bin/sh -c #(nop) ADD file:abc in / ",
 		"RUN /bin/sh -c apk add --no-cache curl # buildkit": "RUN /bin/sh -c apk add --no-cache curl # buildkit",
 	}
+	check(t, cases)
+}
+
+// Measured on Docker 29.7 (BuildKit, tranche 5): the history also keeps
+// "ARG NAME=value" with the value given by --build-arg, and "LABEL k=v …"
+// with every label, quotes removed ("a b=c d" for "a b"="c d"). A build
+// argument is masked whatever its name, as after "|N"; a label leaves the
+// agent through secrets.Labels only (spec v0.2 §7), so a LABEL line keeps
+// none of its text.
+func TestHistoryArgAndLabel(t *testing.T) {
+	check(t, map[string]string{
+		"ARG GH_PAT=s3cr3t-o":                    "ARG GH_PAT=••••••",
+		"ARG GH_PAT":                             "ARG GH_PAT",
+		"ARG A B=s3cr3t-p":                       "ARG A B=••••••",
+		"ARG A=s3cr3t-q B=s3cr3t-r":              "ARG A=•••••• B=••••••",
+		"ARG NOTE=a s3cr3t-s c":                  "ARG NOTE=••••••",
+		"ARG =s3cr3t-t":                          "ARG ••••••",
+		"ARG s3cr3t-u!":                          "ARG ••••••",
+		"arg GH_PAT=s3cr3t-v":                    "arg GH_PAT=••••••",
+		"/bin/sh -c #(nop)  ARG GH_PAT=s3cr3t-w": "/bin/sh -c #(nop)  ARG GH_PAT=••••••",
+		"LABEL traefik.http.middlewares.a.basicauth.users=admin:s3cr3t-x org.opencontainers.image.title=x": "LABEL ••••••",
+		"LABEL a b=c s3cr3t-y":                   "LABEL ••••••",
+		"label org.opencontainers.image.title=x": "label ••••••",
+		"/bin/sh -c #(nop)  LABEL a=s3cr3t-z":    "/bin/sh -c #(nop)  LABEL ••••••",
+		// Only the instruction itself: a RUN that says "ARG" or "LABEL" is a shell line.
+		"RUN /bin/sh -c echo ARG X=1 # buildkit": "RUN /bin/sh -c echo ARG X=1 # buildkit",
+		"ARGS=1":                                 "ARGS=1",
+		"LABELS x":                               "LABELS x",
+	})
+}
+
+func check(t *testing.T, cases map[string]string) {
+	t.Helper()
 	for in, want := range cases {
 		got := History(in)
 		if got != want {
