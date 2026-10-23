@@ -166,3 +166,6 @@
     - `revealEnv` passe par `decodeOne`.
   - Mesures (Docker Desktop, 42 conteneurs) : 66 à 182 ms ; un conteneur verrouillé par un `GET /archive?path=/` lu lentement est `unavailable` en 3,1 s, les autres complets.
   - Mutations : toutes tuées, sauf une, **acceptée** : le second `ctx.Err()` après l'acquisition d'une place (`secrets_inventory.go`). Il ne ferme qu'une course étroite (une place libérée à l'instant du délai, que `select` choisit au hasard) : le relecteur la juge quasi équivalente. Le contrôle reste ; il a corrigé un vrai défaut vu une fois sous `-race` (8 Inspect après le délai).
+  - Second correctif (relecteur, critique) : `name` reprenait l'argument précédent sans vérifier que le masquage l'avait laissé intact (`["app","--password=","--Tok3n_SECRET_xyz","x"]` donnait `name:"--Tok3n_SECRET_xyz"`). Désormais un nom ne vient que d'un texte resté en clair : drapeau précédent intact, shell et son drapeau intacts, clé `NOM=` présente dans le texte masqué. 3355bd2 (test rouge), 1262582, 9ebf7a6 (témoin `clear(0)` : `["API_TOKEN=hunter/sh","-c",…]`).
+  - Mutations : retrait de chacune des quatre gardes (drapeau précédent, shell, `clear(0)`, préfixe de clé), toutes tuées.
+- **Tranche 4 (page Secrets)** : validée par le relecteur et par Codex. CI de la PR brouillon #10 verte sur 9ebf7a6 (run 40001838524).
