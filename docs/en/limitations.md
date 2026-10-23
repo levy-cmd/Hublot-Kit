@@ -17,6 +17,10 @@ The technical spec ([§13, in French](../superpowers/specs/2026-10-07-hublot-kit
 - Only the cgroup layouts of Docker are recognised: with the cgroupfs driver and a custom `--cgroup-parent`, a
   running container answers `container_changed` and cannot be explored. With the systemd driver it works.
 - Measured on Ubuntu (AppArmor) and Fedora (SELinux enforcing). Other security modules were not measured.
+- Connections: at most 64 at once per address (an IPv6 /64 counts as one), 512 in all. Someone who controls several
+  addresses (on the machine itself, all of `127.0.0.0/8`) can still fill the 512 and make legitimate requests wait. A
+  page rebound to `127.0.0.1` (DNS rebinding, see [security](security.md)) can hold the 64 connections of the local
+  user.
 
 ## Files
 

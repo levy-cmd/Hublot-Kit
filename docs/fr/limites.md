@@ -19,6 +19,10 @@ tous les détails.
   personnalisé, un conteneur actif répond `container_changed` et ne s'explore pas. Avec le pilote systemd, cela
   marche.
 - Mesuré sur Ubuntu (AppArmor) et Fedora (SELinux `enforcing`). Les autres modules de sécurité n'ont pas été mesurés.
+- Connexions : 64 au plus en même temps par adresse (un /64 IPv6 compte pour une), 512 en tout. Qui dispose de
+  plusieurs adresses (sur la machine elle-même, tout `127.0.0.0/8`) peut encore remplir les 512 et faire attendre les
+  requêtes légitimes. Une page rebindée sur `127.0.0.1` (rebinding DNS, voir [sécurité](securite.md)) peut tenir les
+  64 connexions de l'utilisateur local.
 
 ## Fichiers
 

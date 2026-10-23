@@ -248,6 +248,7 @@ func (l *limitedListener) Accept() (net.Conn, error) {
 		if h, _, err := net.SplitHostPort(ip); err == nil {
 			ip = h
 		}
+		ip = api.AddressBlock(ip) // an IPv6 host gets a whole /64 (counter-audit)
 		l.mu.Lock()
 		if l.perIP[ip] >= l.lim.PerIP {
 			l.mu.Unlock()

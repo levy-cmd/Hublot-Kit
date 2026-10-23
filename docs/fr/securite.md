@@ -24,7 +24,8 @@ Traitez le jeton d'accès comme le mot de passe root du serveur.
 - 5 échecs de connexion par minute et par adresse IP, puis `rate_limited`. Chaque tentative est comptée avant la
   lecture de son jeton : une salve de requêtes n'en obtient pas plus. Les échecs sont écrits dans le journal d'audit,
   10 lignes par minute au plus par adresse (une adresse IPv6 compte pour tout son /64) ; au-delà, une ligne
-  `suppressed` pour cette adresse, et la minute suivante une ligne compte les échecs qui n'ont pas été écrits.
+  `suppressed` pour cette adresse, et une minute plus tard une ligne par adresse compte les échecs qui n'ont pas été
+  écrits, même s'ils ont cessé.
 - Une connexion doit envoyer son premier octet en 5 secondes, une requête être lue en 15 secondes (ses en-têtes en
   10), une édition ou un envoi, une fois connecté, en 10 minutes ; une connexion inactive est fermée au bout d'une
   minute. L'agent garde au plus 512 connexions ouvertes, 64 par adresse (`--max-conns-per-ip`). Un téléchargement ou
@@ -35,7 +36,7 @@ Traitez le jeton d'accès comme le mot de passe root du serveur.
   (`--public-origin`, ou le `Host` de la requête). Les en-têtes `X-Forwarded-*` ne sont jamais crus.
 - Rebinding DNS : sans `--public-origin`, l'origine de confiance vient de `Host`, donc un nom rebindé passe le
   contrôle d'`Origin` ; ce sont alors le cookie `SameSite=Strict` et le jeton qui vous protègent, et une page rebindée
-  peut épuiser les tentatives de connexion de `127.0.0.1` pendant une minute. Exposé hors de `127.0.0.1`, renseignez
+  peut épuiser les tentatives de connexion de `127.0.0.1` pendant une minute, ou tenir ses 64 connexions. Exposé hors de `127.0.0.1`, renseignez
   `--public-origin`.
 
 ## Contenu des conteneurs
