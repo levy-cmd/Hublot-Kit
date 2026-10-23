@@ -68,7 +68,8 @@ Traitez le jeton d'accès comme le mot de passe root du serveur.
   forme connue (chaînes de connexion, `--requirepass …`, `Authorization: Bearer …`). La commande et le message
   d'erreur sont masqués partie par partie.
 - Les labels suivent une liste blanche : seules les valeurs des labels `com.docker.compose.*` et
-  `org.opencontainers.image.*` sont montrées, si le masquage ci-dessus n'y trouve rien. Les autres montrent leur nom,
+  `org.opencontainers.image.*` sont montrées, si le masquage ci-dessus n'y trouve rien et si ce ne sont pas des chemins
+  de l'hôte (`config_files`, `working_dir`, `environment_file` de Compose). Les autres montrent leur nom,
   jamais leur valeur, et ne se révèlent pas : un label `basicauth.users` de Traefik porte une empreinte de mot de passe
   que les règles ci-dessus ne reconnaissent pas.
 - Une valeur masquée se révèle une à une, et chaque révélation est écrite dans le journal d'audit (le nom, jamais la

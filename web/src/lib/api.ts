@@ -210,7 +210,8 @@ export type Figures = {
 	imageSize: number | null;
 	files: { count: number; source: 'index' | 'snapshot' | 'count'; at: string } | null;
 };
-export const getFigures = (id: string) => api<Figures>(`/containers/${encodeURIComponent(id)}/figures`);
+export const getFigures = (id: string, signal?: AbortSignal) =>
+	api<Figures>(`/containers/${encodeURIComponent(id)}/figures`, { signal });
 
 // The agent journals the reveal (env.reveal) before it answers. The value is
 // only returned: never logged, never stored by the caller beyond its state.

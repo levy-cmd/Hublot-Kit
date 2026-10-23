@@ -9,7 +9,7 @@
 	import { formatSize } from '#lib/files.ts';
 	import { errorMessage, lang, t, tf } from '#lib/i18n/index.ts';
 	import Icon from '#lib/icons/Icon.svelte';
-	import { commandLine, isStopped, labelChip, lastExit, portLabel } from '#lib/xray.ts';
+	import { commandLine, isStopped, lastExit, portLabel, splitLabels } from '#lib/xray.ts';
 	import ChangesList from './ChangesList.svelte';
 	import CopyButton from './CopyButton.svelte';
 	import FileBrowser from './FileBrowser.svelte';
@@ -76,14 +76,16 @@
 		const wanted = id;
 		void reloads;
 		let current = true;
+		const abort = new AbortController(); // another container: the request goes
 		figures = null;
-		getFigures(wanted)
+		getFigures(wanted, abort.signal)
 			.then((f) => {
 				if (current) figures = f;
 			})
 			.catch(() => {}); // "—": the figures are a bonus, the detail tells the errors
 		return () => {
 			current = false;
+			abort.abort();
 		};
 	});
 	const size = (n: number | null | undefined) => (n == null ? '—' : formatSize(n));
@@ -96,11 +98,9 @@
 	// copies this form, never a revealed value.
 	let command = $derived(radio ? commandLine([...radio.entrypoint, ...radio.cmd]) : '');
 	let exit = $derived(radio ? lastExit(radio.state) : null);
-	let labels = $derived(radio ? radio.labels.map((l) => labelChip(l, t('container.labelMasked'))) : []);
-	// An image may bring forty labels: ten first, the rest on demand.
-	const LABELS_SHOWN = 10;
-	let labelsOpen = $state(false);
-	let shownLabels = $derived(labelsOpen ? labels : labels.slice(0, LABELS_SHOWN));
+	// Chips for the labels in clear; the masked ones (often thirty of an
+	// image's) are keys only, behind one folded line.
+	let labels = $derived(splitLabels(radio?.labels ?? []));
 	// Three lines at most, "Show all" when it is longer (the mock-up's block).
 	let cmdEl = $state<HTMLElement>();
 	let cmdOpen = $state(false);
@@ -234,31 +234,31 @@
 					<span class="block-icon"><Icon name="info" /></span>
 					<div class="block-main">
 						<h3>{t('container.labels')}</h3>
-						{#if labels.length === 0}
+						{#if labels.shown.length === 0 && labels.masked.length === 0}
 							<p class="muted">{t('container.noLabels')}</p>
-						{:else}
-							<ul class="chips" id="detail-labels">
-								{#each shownLabels as l (l.key)}
+						{/if}
+						{#if labels.shown.length > 0}
+							<ul class="chips">
+								{#each labels.shown as l (l.key)}
 									<li class="chip">
 										<span class="k mono">{l.key}</span>
-										{#if l.masked}
-											<span class="v masked" title={t('container.labelMaskedHint')}>{l.value}</span>
-										{:else if l.value}
-											<span class="v mono">{l.value}</span>
-										{/if}
+										{#if l.value}<span class="v mono">{l.value}</span>{/if}
 									</li>
 								{/each}
 							</ul>
-							{#if labels.length > LABELS_SHOWN}
-								<button
-									type="button"
-									class="more"
-									aria-expanded={labelsOpen}
-									aria-controls="detail-labels"
-									onclick={() => (labelsOpen = !labelsOpen)}
-									>{labelsOpen ? t('container.showLess') : tf('container.labelsAll', { n: labels.length })}</button
-								>
-							{/if}
+						{/if}
+						{#if labels.masked.length > 0}
+							{@const n = labels.masked.length}
+							{@const others = labels.shown.length > 0}
+							<details class="masked-labels">
+								<summary title={t('container.labelMaskedHint')}>
+									{tf(`container.labelsMasked${others ? 'Other' : ''}.${n === 1 ? 'one' : 'other'}`, { n })}
+								</summary>
+								<p class="note">{t('container.labelMaskedHint')}</p>
+								<ul class="keys">
+									{#each labels.masked as k (k)}<li class="mono">{k}</li>{/each}
+								</ul>
+							</details>
 						{/if}
 					</div>
 				</div>
@@ -414,10 +414,28 @@
 		border-left: 1px solid var(--trait);
 		color: var(--texte);
 	}
-	.chip .v.masked {
-		font-style: italic;
+	details.masked-labels {
+		border: 0;
+		padding: 0;
+		width: 100%;
+		font-size: var(--t-s);
+	}
+	details.masked-labels summary {
+		font-weight: 500;
 		color: var(--texte-doux);
-		cursor: help;
+	}
+	details.masked-labels[open] summary {
+		margin-bottom: 0.4rem;
+	}
+	.keys {
+		list-style: none;
+		margin: 0.4rem 0 0;
+		padding: 0;
+		display: grid;
+		gap: 0.15rem;
+		font-size: var(--t-xs);
+		color: var(--texte-doux);
+		overflow-wrap: anywhere;
 	}
 	.tab-body {
 		display: grid;

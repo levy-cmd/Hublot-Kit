@@ -3,7 +3,7 @@
 	import { t, tf } from '#lib/i18n/index.ts';
 	import Icon from '#lib/icons/Icon.svelte';
 	import Ring from '#lib/icons/Ring.svelte';
-	import { nav, navHref, type NavItem } from '#lib/nav.ts';
+	import { currentNav, nav, navHref } from '#lib/nav.ts';
 	import ReadOnlyNotice from './ReadOnlyNotice.svelte';
 
 	let { readOnly, version, open }: { readOnly: boolean; version: string; open: boolean } = $props();
@@ -13,24 +13,8 @@
 		page.url.searchParams.get('c') ?? (page.url.pathname.startsWith('/c/') ? (page.params.id ?? null) : null)
 	);
 
-	// The current entry: same path (a container page counts as the list), and
-	// every parameter of its link present; the most specific one wins.
-	let current = $derived.by(() => {
-		const path = page.url.pathname.startsWith('/c/') ? '/' : page.url.pathname;
-		let best: NavItem | null = null;
-		let bestScore = -1;
-		for (const item of nav) {
-			const u = new URL(item.href, 'http://x');
-			if (u.pathname !== path) continue;
-			const params = [...u.searchParams];
-			if (!params.every(([k, v]) => page.url.searchParams.get(k) === v)) continue;
-			if (params.length > bestScore) {
-				best = item;
-				bestScore = params.length;
-			}
-		}
-		return best?.id ?? null;
-	});
+	// The current page (nav.ts): a panel shortcut never is.
+	let current = $derived(currentNav(page.url));
 </script>
 
 <nav id="sidebar" class="sidebar" class:open aria-label={t('shell.nav')}>

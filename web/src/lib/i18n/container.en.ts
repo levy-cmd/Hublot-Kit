@@ -44,8 +44,10 @@ export default {
 	'container.figure.unknown': 'Not available',
 	'container.labels': 'Labels',
 	'container.noLabels': 'No labels',
-	'container.labelsAll': 'Show all {n} labels',
-	'container.labelMasked': 'masked',
+	'container.labelsMasked.one': '{n} masked label',
+	'container.labelsMasked.other': '{n} masked labels',
+	'container.labelsMaskedOther.one': '{n} other masked label',
+	'container.labelsMaskedOther.other': '{n} other masked labels',
 	'container.labelMaskedHint':
-		'Value masked: only com.docker.compose.* and org.opencontainers.image.* labels are shown (guide, "Labels"). Read it on the host with docker inspect.'
+		'Values masked: only com.docker.compose.* and org.opencontainers.image.* labels are shown, except paths of the host (guide, "Labels"). Read them on the host with docker inspect.'
 };

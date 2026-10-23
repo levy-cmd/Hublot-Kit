@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import type { Radiography } from './api';
 import {
-	addReveal, askFor, commandLine, envValue, forgetReveals, isStopped, labelChip, lastExit, mountLabel, noReveals, portLabel,
+	addReveal, askFor, commandLine, envValue, forgetReveals, isStopped, lastExit, mountLabel, noReveals, portLabel,
 	removeReveal, restartLabel, revealedFor, shortId, splitLabels
 } from './xray';
 
@@ -90,19 +90,12 @@ describe('xray (F7)', () => {
 		expect(revealedFor(addReveal(hid, askFor(a, 'a'), 'a', 'DB_PASSWORD', 's3cr3t'), 'a')).toEqual({ DB_PASSWORD: 's3cr3t' });
 	});
 
-	it('shows a label value only when the agent sent it in clear (spec v0.2 §5.2)', () => {
-		expect(labelChip({ key: 'com.docker.compose.project', value: 'shop', masked: false }, 'masqué')).toEqual({
-			key: 'com.docker.compose.project', value: 'shop', masked: false
+	it('keeps an empty value in clear as a chip, not as masked (spec v0.2 §5.2)', () => {
+		expect(splitLabels([{ key: 'com.docker.compose.depends_on', value: '', masked: false }])).toEqual({
+			shown: [{ key: 'com.docker.compose.depends_on', value: '' }],
+			masked: []
 		});
-		expect(labelChip({ key: 'traefik.http.middlewares.auth.basicauth.users', value: null, masked: true }, 'masqué')).toEqual({
-			key: 'traefik.http.middlewares.auth.basicauth.users', value: 'masqué', masked: true
-		});
-		// Masked wins over a value, should one ever come with it.
-		expect(labelChip({ key: 'backup.dsn', value: 's3cr3t', masked: true }, 'masqué').value).toBe('masqué');
-		// An empty value in clear stays empty, not masked.
-		expect(labelChip({ key: 'com.docker.compose.depends_on', value: '', masked: false }, 'masqué')).toEqual({
-			key: 'com.docker.compose.depends_on', value: '', masked: false
-		});
+		expect(splitLabels([])).toEqual({ shown: [], masked: [] });
 	});
 
 	it('shows the labels in clear as chips, the masked ones as keys only (review of tranche 2)', () => {

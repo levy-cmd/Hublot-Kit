@@ -64,7 +64,8 @@ Treat the access token like the root password of the server.
   (connection strings, `--requirepass …`, `Authorization: Bearer …`). The command and the error message are masked
   part by part.
 - Labels follow an allow list: only the values of `com.docker.compose.*` and `org.opencontainers.image.*` labels
-  are shown, if the masking above finds nothing in them. Other labels show their name, never their value, and cannot
+  are shown, if the masking above finds nothing in them and they are not paths of the host (Compose's `config_files`,
+  `working_dir`, `environment_file`). Other labels show their name, never their value, and cannot
   be revealed: a Traefik `basicauth.users` label holds a password hash the rules above do not recognise.
 - A masked value is revealed one at a time, and each reveal is written to the audit log (the name, never the value)
   before the value is sent.

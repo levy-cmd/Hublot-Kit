@@ -1,6 +1,7 @@
 package secrets
 
 import (
+	"slices"
 	"sort"
 	"strings"
 )
@@ -18,10 +19,22 @@ type Label struct {
 // (traefik…basicauth.users=admin:$apr1$…), so the rule is a whitelist.
 var safeLabelPrefixes = []string{"com.docker.compose.", "org.opencontainers.image."}
 
+// hostPathLabels: Compose labels whose values are paths of the host machine
+// (review of tranche 2, a ruling that narrows Q60): masked like a label
+// outside the whitelist.
+var hostPathLabels = []string{
+	"com.docker.compose.project.config_files",
+	"com.docker.compose.project.working_dir",
+	"com.docker.compose.project.environment_file",
+}
+
 // SafeLabel: the value of label key may be shown, by the whitelist of spec
 // v0.2 §5.2 and by §7 (Masked), which still applies under the whitelist: a
 // label set by hand under com.docker.compose. may hold anything.
 func SafeLabel(key, value string) bool {
+	if slices.Contains(hostPathLabels, key) {
+		return false
+	}
 	for _, p := range safeLabelPrefixes {
 		if strings.HasPrefix(key, p) {
 			return !Masked(key, value)

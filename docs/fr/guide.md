@@ -50,7 +50,7 @@ Ils arrivent après le reste du détail, sans le retenir ; « — » veut dire e
 
 ### Labels
 
-Les labels portent souvent des secrets que le masquage ne reconnaît pas, par exemple `traefik.http.middlewares.auth.basicauth.users=admin:$apr1$…`. Seules les valeurs des labels `com.docker.compose.*` et `org.opencontainers.image.*` sont montrées, et seulement si le masquage n'y trouve rien. Les autres labels montrent leur nom avec la valeur « masqué », sans révélation possible : leur valeur se lit sur l'hôte avec `docker inspect`.
+Les labels portent souvent des secrets que le masquage ne reconnaît pas, par exemple `traefik.http.middlewares.auth.basicauth.users=admin:$apr1$…`. Seules les valeurs des labels `com.docker.compose.*` et `org.opencontainers.image.*` sont montrées, et seulement si le masquage n'y trouve rien ; celles qui donnent des chemins de la machine hôte (`com.docker.compose.project.config_files`, `.working_dir` et `.environment_file`) sont masquées aussi. Les valeurs montrées forment des puces ; les labels masqués tiennent sur une ligne repliée, « N autres labels masqués », qui ne déplie que leurs noms. Aucun label ne se révèle : sa valeur se lit sur l'hôte avec `docker inspect`.
 
 ## Les panneaux du bas
 

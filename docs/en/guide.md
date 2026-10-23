@@ -50,7 +50,7 @@ They come after the rest of the detail, without holding it back; "—" means loa
 
 ### Labels
 
-Labels often hold secrets the masking does not recognise, for example `traefik.http.middlewares.auth.basicauth.users=admin:$apr1$…`. Only the values of `com.docker.compose.*` and `org.opencontainers.image.*` labels are shown, and only if the masking finds nothing in them. Other labels show their name with the value "masked", and cannot be revealed: read their value on the host with `docker inspect`.
+Labels often hold secrets the masking does not recognise, for example `traefik.http.middlewares.auth.basicauth.users=admin:$apr1$…`. Only the values of `com.docker.compose.*` and `org.opencontainers.image.*` labels are shown, and only if the masking finds nothing in them; those that give paths of the host machine (`com.docker.compose.project.config_files`, `.working_dir` and `.environment_file`) are masked too. The values shown are chips; the masked labels fit on one folded line, "N other masked labels", which unfolds their names only. No label can be revealed: read its value on the host with `docker inspect`.
 
 ## The bottom panels
 

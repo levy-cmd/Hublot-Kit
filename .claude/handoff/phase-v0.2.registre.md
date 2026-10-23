@@ -87,7 +87,8 @@
 ## Contrat de parallélisme
 - Tranches 8 et 6 (si elles partent en parallèle) :
   - `internal/fsview/views.go` appartient à la tranche 6 ;
-  - la tranche 8 le lit sans l'écrire : elle appelle `(*Views).Cached(id) (FS, bool)`, livrée par la tranche 2, pour la photo des métadonnées ;
+  - la tranche 8 le lit sans l'écrire : elle appelle `(*Views).Cached(info dockerx.ContainerInfo) (FS, bool)`, livrée par la tranche 2, pour la photo des métadonnées (et `CachedCount(info) (n int, at time.Time, ok bool)` pour le comptage) ;
+  - contrat révisé à la revue de la tranche 2 (le plan donnait un ID seul, ce qui ne permet pas de vérifier la clé `ID + FinishedAt` sans un `Inspect` caché) : **l'appelant passe un `Inspect` qu'il vient de faire**, car `newTarFS` reprend `info.Mounts` et `info.Tmpfs`, et la clé `info.ID + info.FinishedAt` garantit que l'index décrit l'état présent ; `false` pour un conteneur actif, un index jamais servi, en cours ou en échec ;
   - si la tranche 6 change `Cached` (signature ou comportement, avec le cache partagé avec les images), elle l'écrit ici avant la fusion, et la tranche 8 se rebase ;
   - `internal/fsview/fsview.go` appartient à la tranche 8.
 - Autres paires : séquentielles par défaut. Avant tout parallèle (4 avec 3, 8 avec 5 et 6), écrire ici les fichiers possédés de chaque côté, en s'appuyant sur le découpage de l'i18n par module et sur `nav.ts` (plan, « Ordre, branches et parallélisme »).
@@ -104,3 +105,10 @@
   - Ruling: le point de Codex (sous 90 rem, un panneau déjà ouvert reste monté quand on le cache, et son flux de logs continue) passe en tête de la tranche 2. Le flux de logs doit se couper quand son panneau est caché, pour libérer une des 8 places.
   - Minor reporté : le test i18n ne vérifie que le préfixe des clés en gabarit (`container.tab.${k}`).
   - Reste pour la clôture : refaire les captures `docs/images/` (README encore en v0.1) et aligner `V=0.1.0` dans la doc d'installation.
+- **Tranche 2 (projets Compose, labels, chiffres clés)** : 9e2b362 (flux de logs coupé quand son panneau est caché), 4500e64 (tests rouges), 364b960, ecb5695 ; correctif de revue : f0b78bc (tests rouges), puis le correctif.
+  - Écarts au plan : contrat de `Cached` révisé (ci-dessus) ; dernière sortie lue dans `state.finishedAt` (déjà présent, omis pour la date zéro) ; fichiers touchés hors liste : `routes/+page.svelte`, `containers.ts`, `i18n/containers.*`, `panels.ts`, `nav.ts`, `Sidebar.svelte`, `e2e/parcours.e2e.ts`.
+  - Coûts mesurés (Docker Desktop, 40 conteneurs) : liste 98 ms, sans `size` ; `figures` 14 à 96 ms au premier appel, 3 ms en cache ; fichiers tirés de l'index déjà servi seulement.
+  - Revue : le relecteur valide ; Codex demande de regrouper les `Inspect` avec `size` simultanés d'un même conteneur (fait, regroupement maison, un appel détaché borné par le délai de 30 s ; `TestFiguresSizeCoalesced`).
+  - **Décision de la session principale (resserre Q60)** : les labels de Compose qui donnent des chemins de l'hôte (`com.docker.compose.project.config_files`, `.working_dir`, `.environment_file`) sont masqués comme un label hors liste blanche. Test témoin `TestLabelsHostPathsMasked` (`/home/alice/…`).
+  - Retouches : les labels en clair en puces, les labels masqués repliés sur une ligne « N autres labels masqués » qui ne montre que leurs clés ; `getFigures` annulé au changement de conteneur ; l'e2e vérifie la reprise du flux avec `after=`.
+  - Barre latérale : « Diff avec l'image » surligné sur la page Conteneurs n'était pas un survol. La détection marquait comme page courante toute entrée dont les paramètres étaient dans l'adresse (`?panel=diff`). Corrigé : une entrée de panneau (Diff, Logs) n'est jamais la page courante, Conteneurs l'est (`currentNav`, test dans `nav.test.ts`).

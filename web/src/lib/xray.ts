@@ -1,12 +1,18 @@
 import type { ContainerState, EnvVar, Label, Mount, Port, Radiography } from './api.ts';
 
 /**
- * A label as a chip (spec v0.2 §5.2): "key=value", or "key=" + the masked
- * text when the agent masked it. No label is ever revealed.
+ * The labels of the detail (spec v0.2 §5.2, review of tranche 2): those the
+ * agent sent in clear become chips; the masked ones are only their keys,
+ * behind one folded line. No label is ever revealed.
  */
-export function labelChip(l: Label, masked: string): { key: string; value: string; masked: boolean } {
-	const hidden = l.masked || l.value === null;
-	return { key: l.key, value: hidden ? masked : (l.value as string), masked: hidden };
+export function splitLabels(labels: Label[]): { shown: { key: string; value: string }[]; masked: string[] } {
+	const shown: { key: string; value: string }[] = [];
+	const masked: string[] = [];
+	for (const l of labels) {
+		if (l.masked || l.value === null) masked.push(l.key);
+		else shown.push({ key: l.key, value: l.value });
+	}
+	return { shown, masked };
 }
 
 /**

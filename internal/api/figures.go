@@ -57,31 +57,67 @@ type sizeEntry struct {
 	at         time.Time
 }
 
+// sizeCall is one Inspect with size=true in flight, shared by every request
+// for that container meanwhile (review of tranche 2, Codex).
+type sizeCall struct {
+	done       chan struct{} // closed once rw, rootfs and err are set
+	rw, rootfs *int64
+	err        error
+}
+
 // figureCache belongs to one server (routes_figures.go).
 type figureCache struct {
-	mu     sync.Mutex
-	sizes  map[string]sizeEntry // full container ID
-	images map[string]int64     // image ID
+	mu       sync.Mutex
+	sizes    map[string]sizeEntry // full container ID
+	inflight map[string]*sizeCall // full container ID
+	images   map[string]int64     // image ID
 }
 
 func newFigureCache() *figureCache {
-	return &figureCache{sizes: map[string]sizeEntry{}, images: map[string]int64{}}
+	return &figureCache{sizes: map[string]sizeEntry{}, inflight: map[string]*sizeCall{}, images: map[string]int64{}}
 }
 
+// size answers from the cache, else joins the call in flight for id, else
+// starts it. The call runs on its own, bounded by figuresTimeout: a request
+// that goes away leaves it to the others, never fails them.
 func (c *figureCache) size(ctx context.Context, d dockerx.Client, id string) (rw, rootfs *int64, err error) {
-	now := figuresNow()
+	now, timeout := figuresNow(), figuresTimeout
 	c.mu.Lock()
-	e, ok := c.sizes[id]
-	c.mu.Unlock()
-	if ok && now.Sub(e.at) < sizeTTL {
+	if e, ok := c.sizes[id]; ok && now.Sub(e.at) < sizeTTL {
+		c.mu.Unlock()
 		return e.rw, e.rootfs, nil
 	}
-	rw, rootfs, err = d.ContainerSize(ctx, id)
-	if err != nil {
-		return nil, nil, err
+	call, ok := c.inflight[id]
+	if !ok {
+		call = &sizeCall{done: make(chan struct{})}
+		c.inflight[id] = call
+		go c.fetch(d, id, call, now, timeout)
 	}
+	c.mu.Unlock()
+	select {
+	case <-call.done:
+		return call.rw, call.rootfs, call.err
+	case <-ctx.Done():
+		return nil, nil, fmt.Errorf("%w: %v", dockerx.ErrUnavailable, ctx.Err())
+	}
+}
+
+func (c *figureCache) fetch(d dockerx.Client, id string, call *sizeCall, now time.Time, timeout time.Duration) {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	rw, rootfs, err := d.ContainerSize(ctx, id)
 	c.mu.Lock()
-	defer c.mu.Unlock()
+	delete(c.inflight, id)
+	if err == nil {
+		c.storeLocked(id, sizeEntry{rw: rw, rootfs: rootfs, at: now})
+	}
+	call.rw, call.rootfs, call.err = rw, rootfs, err
+	c.mu.Unlock()
+	close(call.done)
+}
+
+func (c *figureCache) storeLocked(id string, e sizeEntry) {
+	now := e.at
 	if len(c.sizes) >= maxSizes {
 		for k, old := range c.sizes {
 			if now.Sub(old.at) >= sizeTTL {
@@ -90,9 +126,8 @@ func (c *figureCache) size(ctx context.Context, d dockerx.Client, id string) (rw
 		}
 	}
 	if len(c.sizes) < maxSizes {
-		c.sizes[id] = sizeEntry{rw: rw, rootfs: rootfs, at: now}
+		c.sizes[id] = e
 	}
-	return rw, rootfs, nil
 }
 
 // image: nil for an image Docker no longer has (docker rmi -f of an image
