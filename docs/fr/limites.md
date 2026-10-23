@@ -100,7 +100,8 @@ tous les détails.
 ## Recherche (v0.2)
 
 - La recherche de fichiers n'est possible que dans l'index déjà construit d'un conteneur arrêté que l'explorateur a ouvert. Pour un conteneur en marche, il n'y a pas d'index : ouvrez l'explorateur.
-- La requête d'une recherche de fichiers part dans l'adresse de l'appel à l'agent (`…/fs/search?q=`). L'agent ne la journalise pas et ne la garde pas, mais un reverse proxy placé devant lui qui journalise les adresses la verrait. Un nom de fichier peut être sensible : réglez les journaux du proxy en conséquence.
+- La requête d'une recherche de fichiers part dans le corps d'un POST (`…/fs/search`), jamais dans une adresse : l'agent ne la journalise pas et ne la garde pas, et un journal d'accès ordinaire de reverse proxy ne la voit pas. Un proxy réglé pour journaliser les corps des requêtes la verrait : un nom de fichier peut être sensible.
+- Pendant l'export d'un conteneur arrêté (construction de son index), Docker verrouille le conteneur. L'agent reconnaît cette construction par l'ID complet ou le nom du conteneur, jamais par un ID court : un appel direct à l'API avec un ID court attend alors le verrou, jusqu'au délai de la route (10 s pour les fichiers et la recherche ; les chiffres clés, eux, attendent ce verrou quel que soit l’ID, jusqu’à 30 s, v0.2 §5.3). L'interface envoie toujours l'ID complet.
 
 ## Masquage des secrets
 

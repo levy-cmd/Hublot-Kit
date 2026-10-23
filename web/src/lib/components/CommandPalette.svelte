@@ -12,7 +12,7 @@
 	import Icon from '#lib/icons/Icon.svelte';
 	import type { IconName } from '#lib/icons/icons.ts';
 	import {
-		fileItems, isPaletteKey, MAX_QUERY, PALETTE_EVENT, rank, sections, searchFiles, validQuery,
+		fileItems, fullId, isPaletteKey, MAX_QUERY, PALETTE_EVENT, rank, sections, searchFiles, validQuery,
 		type FileSearch, type PaletteItem, type PaletteKind
 	} from '#lib/palette.ts';
 	import { paletteItems } from '#lib/palette/index.ts';
@@ -25,14 +25,16 @@
 	let active = $state(0);
 	let dialog = $state<HTMLDialogElement>();
 	let input = $state<HTMLInputElement>();
-	let list = $state<HTMLUListElement>();
+	let list = $state<HTMLDivElement>();
 
 	// The container open: ?c= on the list, or the full page /c/<id>.
 	let fullPage = $derived(page.url.pathname.startsWith('/c/'));
-	let chosen = $derived(page.url.searchParams.get('c') ?? (fullPage ? (page.params.id ?? null) : null));
-	let chosenName = $derived(
-		containerList.items?.find((c) => c.id === chosen || c.name === chosen)?.name ?? chosen?.slice(0, 12) ?? ''
+	// Always the full ID of the list, whatever the URL says (fullId): the
+	// agent recognises an export in progress by the full ID only.
+	let chosen = $derived(
+		fullId(containerList.items, page.url.searchParams.get('c') ?? (fullPage ? (page.params.id ?? null) : null))
 	);
+	let chosenName = $derived(containerList.items?.find((c) => c.id === chosen)?.name ?? '');
 
 	let files = $state<FileSearch | null>(null);
 	let filesBusy = $state(false);
@@ -218,20 +220,26 @@
 			</button>
 		</div>
 
-		<ul id="palette-list" role="listbox" aria-label={t('palette.title')} bind:this={list}>
+		<!-- Sections are groups named by their title: a screen reader says
+		     "Files of X" with the option (review of tranche 3). -->
+		<div id="palette-list" class="list" role="listbox" aria-label={t('palette.title')} bind:this={list}>
 			{#each groups as g (g.kind)}
-				<li role="presentation" class="section">{t(`palette.section.${g.kind}`)}</li>
-				{#each g.items as it (it.kind + it.href)}
-					{@render option(it)}
-				{/each}
+				<div role="group" aria-labelledby="palette-sec-{g.kind}">
+					<div id="palette-sec-{g.kind}" class="section">{t(`palette.section.${g.kind}`)}</div>
+					{#each g.items as it (it.kind + it.href)}
+						{@render option(it)}
+					{/each}
+				</div>
 			{/each}
 			{#if fileGroup.length}
-				<li role="presentation" class="section">{tf('palette.section.file', { name: chosenName })}</li>
-				{#each fileGroup as it (it.href)}
-					{@render option(it)}
-				{/each}
+				<div role="group" aria-labelledby="palette-sec-files">
+					<div id="palette-sec-files" class="section">{tf('palette.section.file', { name: chosenName })}</div>
+					{#each fileGroup as it (it.href)}
+						{@render option(it)}
+					{/each}
+				</div>
 			{/if}
-		</ul>
+		</div>
 
 		<div class="foot">
 			<p class="status" role="status">
@@ -262,7 +270,7 @@
 	<!-- The keyboard stays in the field (combobox, aria-activedescendant): the
 	     options take the mouse only. -->
 	<!-- svelte-ignore a11y_click_events_have_key_events -->
-	<li
+	<div
 		id={optionId(i)}
 		role="option"
 		tabindex="-1"
@@ -274,7 +282,7 @@
 		<Icon name={iconOf(it)} size={16} />
 		<span class="label" class:mono={it.kind === 'file'}>{it.label}</span>
 		{#if it.detail}<span class="detail">{it.detail}</span>{/if}
-	</li>
+	</div>
 {/snippet}
 
 <style>
@@ -312,8 +320,7 @@
 	.field:focus-within {
 		box-shadow: inset 0 -2px 0 var(--focus);
 	}
-	ul {
-		list-style: none;
+	.list {
 		margin: 0;
 		padding: 0.25rem 0.5rem 0.5rem;
 		overflow-y: auto;

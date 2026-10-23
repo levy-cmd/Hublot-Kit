@@ -2,24 +2,34 @@ package api
 
 import (
 	"context"
+	"encoding/json"
+	"io"
 	"net/http"
 	"strings"
 	"unicode/utf8"
 )
 
-// GET /api/containers/{id}/fs/search?q= (spec v0.2 §5.8, Q61): the files
+// POST /api/containers/{id}/fs/search, body {"q": "…"} (spec v0.2 §5.8,
+// Q61): the files
 // of the global search, only in the index of a stopped container already
 // served to the explorer (Views.SearchCached). It never builds an index,
 // never exports, and never answers 202: without such an index, indexed is
 // false and the palette offers to open the explorer.
 //
-// The query is never logged, audited, or repeated in an answer: errors
-// below carry fixed details only.
+// The query is in the body, never in the URL that a reverse proxy logs
+// (review of tranche 3); a POST goes through the Origin check of spec §7. It
+// is never logged, audited, or repeated in an answer: errors below carry
+// fixed details only.
+//
+// {id} is matched as given: Indexing knows a build by the full ID or the
+// name, never a prefix (v0.1.1). A short ID during an export waits for
+// dockerd's lock in Inspect, up to fsTimeout; the UI sends the full ID.
 
 const (
 	minQuery      = 2   // characters
 	maxQuery      = 200 // characters
 	maxSearchHits = 200
+	maxSearchBody = 4096 // bytes: 200 characters of 4 bytes, escaped, fit
 )
 
 type searchHit struct {
@@ -47,14 +57,23 @@ func (s *server) fsSearch(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "not_found", "invalid container ID")
 		return
 	}
-	q := r.URL.Query().Get("q")
+	var body struct {
+		Q string `json:"q"`
+	}
+	dec := json.NewDecoder(io.LimitReader(r.Body, maxSearchBody))
+	if err := dec.Decode(&body); err != nil || dec.More() {
+		writeReserved(w, "invalid_query", `the body must be {"q": "…"}, of 2 to 200 characters`)
+		return
+	}
+	q := body.Q
 	if !validQuery(q) {
 		writeReserved(w, "invalid_query", "the query must have 2 to 200 characters")
 		return
 	}
 	// An index being built is not served: answer at once, without the
 	// Inspect that would wait for dockerd's lock during the export (v0.1.1).
-	if s.d.Views.Pending(id) != nil {
+	// Indexing, not Pending: a search is not a visit (LRU, Grace).
+	if s.d.Views.Indexing(id) {
 		writeJSON(w, http.StatusOK, notIndexed)
 		return
 	}

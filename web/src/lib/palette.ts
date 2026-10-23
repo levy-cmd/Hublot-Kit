@@ -2,7 +2,7 @@
 // are searched here, in the lists the browser already has; files only in the
 // index already built of the container open (Q61), through the agent.
 // Nothing is kept: no history, no storage, never the query in the page's URL.
-import { api, type EntryType } from './api.ts';
+import { api, type Container, type EntryType } from './api.ts';
 import { t } from './i18n/index.ts';
 
 export type PaletteKind = 'container' | 'image' | 'project' | 'page' | 'file';
@@ -68,9 +68,33 @@ export function sections(items: PaletteItem[]): { kind: PaletteKind; items: Pale
 
 export type FileSearch = { indexed: boolean; results: { path: string; type: EntryType }[]; truncated: boolean };
 
-/** GET /api/containers/{id}/fs/search: never builds an index (Q61). */
+/**
+ * POST /api/containers/{id}/fs/search, never builds an index (Q61). The
+ * query goes in the body, never in a URL that a reverse proxy would log
+ * (review of tranche 3); id is the full ID (fullId).
+ */
 export const searchFiles = (id: string, q: string, signal: AbortSignal) =>
-	api<FileSearch>(`/containers/${encodeURIComponent(id)}/fs/search?q=${encodeURIComponent(q.trim())}`, { signal });
+	api<FileSearch>(`/containers/${encodeURIComponent(id)}/fs/search`, {
+		method: 'POST',
+		body: JSON.stringify({ q: q.trim() }),
+		signal
+	});
+
+/**
+ * The full ID, in the list the agent gave, of ref: a full ID, a name, or a
+ * unique prefix of 12 hex digits or more (a /c/<short ID> link). null
+ * otherwise. The agent knows a build in progress by the full ID only (no
+ * prefix, v0.1.1): with a short ID, a request during an export would wait
+ * for Docker's lock (review of tranche 3).
+ */
+export function fullId(list: Container[] | null, ref: string | null): string | null {
+	if (!list || !ref) return null;
+	const exact = list.find((c) => c.id === ref || c.name === ref);
+	if (exact) return exact.id;
+	if (!/^[0-9a-f]{12,63}$/.test(ref)) return null;
+	const found = list.filter((c) => c.id.startsWith(ref));
+	return found.length === 1 ? found[0].id : null;
+}
 
 /** The explorer of container id, at dir and file if given, on the list or on the full page. */
 function explorerHref(id: string, fullPage: boolean, dir?: string, file?: string): string {

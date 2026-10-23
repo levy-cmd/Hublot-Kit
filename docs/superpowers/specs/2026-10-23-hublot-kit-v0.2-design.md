@@ -310,7 +310,7 @@ La réponse de `figures` : `{"sizeRw": 1234, "sizeRootFs": 56789, "imageSize": 5
 - **Lecture d'un fichier** : jusqu'à la fin de la couche qui le porte, blobs précédents compris ; au pire, un export complet (fichier dans la dernière couche envoyée). Les durées ci-dessus sont des bornes hautes.
 - **Côté démon** : l'export d'une image ne verrouille pas les conteneurs (contrairement à `GET /archive`), mais il occupe un cœur et le disque pendant sa durée.
 
-**Recherche et liste** : `GET /api/images/{id}/fs?path=`, `/fs/file?path=`, `/fs/search?q=` (v0.2 §5.8), mêmes formes de réponse que les routes de conteneur (§6). Aucune route d'écriture ni de téléchargement.
+**Recherche et liste** : `GET /api/images/{id}/fs?path=`, `/fs/file?path=`, `POST /fs/search` (v0.2 §5.8), mêmes formes de réponse que les routes de conteneur (§6). Aucune route d'écriture ni de téléchargement.
 
 ### 5.6 Diff de contenu avec l'image (F17)
 
@@ -399,15 +399,17 @@ Ouverte par Ctrl+K (Cmd+K sur macOS ; `preventDefault`, car Firefox y place sa p
 
 **Ce qu'elle cherche**
 1. Conteneurs (nom, ID court, image, projet, service), images (étiquettes, ID court), projets Compose et pages de l'interface : **dans le navigateur**, sur les listes déjà chargées (`/api/containers`, `/api/images`). Aucune route nouvelle, coût nul côté agent.
-2. Fichiers : **seulement** dans l'index déjà construit du conteneur ou de l'image actuellement ouvert (Q61) : `GET /api/containers/{id}/fs/search?q=` ou `GET /api/images/{id}/fs/search?q=`.
+2. Fichiers : **seulement** dans l'index déjà construit du conteneur ou de l'image actuellement ouvert (Q61) : `POST /api/containers/{id}/fs/search` ou `POST /api/images/{id}/fs/search`, corps `{"q": "…"}` (4 Kio au plus), sous le contrôle d'`Origin` de toute requête POST (§7). La requête n'est jamais dans une URL (revue de la tranche 3).
+   - `{id}` est l'**ID complet** : l'interface n'envoie que lui (la palette le tire de la liste, le détail de la radiographie). L'agent reconnaît une indexation en cours par l'ID complet ou le nom, jamais par un préfixe (v0.1.1) : un appel d'API avec un ID court pendant l'export du conteneur attend le verrou de Docker dans `Inspect`, jusqu'au délai de la route (10 s pour les fichiers et la recherche ; les chiffres clés, eux, attendent ce verrou quel que soit l’ID, jusqu’à 30 s, v0.2 §5.3).
    - La route ne lance **jamais** de construction. Sans index en cache : `{"indexed": false, "results": []}`, et la palette propose « Ouvrir l'explorateur ».
    - Pour un conteneur actif (`procfs`), il n'y a pas d'index : `indexed: false`.
-   - Recherche par sous-chaîne, sans tenir compte de la casse, sur le chemin complet ; requête de 2 à 200 caractères, sinon `400 invalid_query` ; 200 résultats au plus, puis `truncated` ; parcours de l'index en mémoire, sous la garde des routes de fichiers.
+   - Recherche par sous-chaîne, sans tenir compte de la casse, sur le chemin complet ; requête de 2 à 200 caractères, sinon `400 invalid_query` (corps illisible compris) ; 200 résultats au plus, les noms qui contiennent la requête avant les chemins qui la contiennent par un dossier parent, puis `truncated` ; parcours de l'index en mémoire, comme l'explorateur le liste (dossiers seuls, 10 000 noms par dossier), sous la garde des routes de fichiers.
+   - Pendant une indexation, la réponse est `200 {"indexed": false}`, sans `Inspect` ni `202` ; savoir qu'une construction est en cours ne compte pas comme une visite de l'index (ni LRU, ni délai d'inactivité).
 
 **Fuites possibles, et parades**
 - Un nom de fichier peut être sensible (`/srv/backup-db-prod-2026.sql.gz`, `/run/secrets/stripe_live_key`). La recherche ne renvoie que des noms que l'explorateur montre déjà à la même session, pour un seul conteneur à la fois, jamais en balayage de tous les conteneurs.
 - Rien n'est mémorisé : ni historique de recherche, ni `localStorage`, ni requête dans l'URL de la page.
-- L'agent ne journalise pas la requête. Elle part dans l'URL de l'appel d'API (`?q=`) : un reverse proxy qui journalise les URL la verrait. La doc le dit.
+- L'agent ne journalise pas la requête et ne la répète dans aucune réponse. Elle part dans le corps d'un POST, jamais dans une URL : un journal d'accès ordinaire de reverse proxy ne la voit pas ; un proxy qui journaliserait les corps la verrait. La doc le dit.
 - Les valeurs masquées (env, commande, labels) ne sont jamais indexées par la palette, qui ne lit que des noms.
 
 ### 5.9 Inventaire des secrets (F19)
@@ -442,12 +444,12 @@ Pour une session seulement, comme toutes les routes (§6).
 | GET | `/api/containers/{id}` | ajoute `labels` (`[{key, value, masked}]`, v0.2 §5.2) et `finishedAt` |
 | GET | `/api/containers/{id}/figures` | v0.2 §5.3 |
 | GET | `/api/containers/{id}/count` | v0.2 §5.7 ; `202 indexing` |
-| GET | `/api/containers/{id}/fs/search?q=` | v0.2 §5.8 ; `400 invalid_query` |
+| POST | `/api/containers/{id}/fs/search` | v0.2 §5.8 ; corps `{"q"}` ; Origin ; `400 invalid_query` |
 | GET | `/api/images` | v0.2 §5.4 |
 | GET | `/api/images/{id}` | v0.2 §5.4 ; `404 not_found` (ID inconnu ou mal formé) |
 | GET | `/api/images/{id}/fs?path=` | v0.2 §5.5 ; `202 indexing`, `too_large`, `unsupported_image` |
 | GET | `/api/images/{id}/fs/file?path=` | v0.2 §5.5 ; `202 indexing` (extraction), `not_regular`, `too_large` (plus de 2 Mio) |
-| GET | `/api/images/{id}/fs/search?q=` | v0.2 §5.8 |
+| POST | `/api/images/{id}/fs/search` | v0.2 §5.8 ; corps `{"q"}` ; Origin |
 | POST | `/api/containers/{id}/snapshots` | v0.2 §5.7 ; Origin ; `202` à la forme de `indexing` (plus `snapshot`), `409 conflict`, `413 too_large`, `forbidden_path` ; permise en lecture seule (Q57) |
 | GET | `/api/snapshots` | v0.2 §5.7 |
 | DELETE | `/api/snapshots/{sid}` | v0.2 §5.7 ; Origin ; `204`, `404 not_found` |

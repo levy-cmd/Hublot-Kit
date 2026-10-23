@@ -99,7 +99,8 @@ func TestFsSearchPostOnly(t *testing.T) {
 	fake := stoppedFake(t)
 	f, c := stoppedFixture(t, fake, fake, fsview.Options{})
 	for _, u := range []string{"/api/containers/db/fs/search", "/api/containers/db/fs/search?q=host"} {
-		if rec := f.do("GET", u, "", c); rec.Code != http.StatusMethodNotAllowed {
+		// 404 of the /api/ fallback: no GET route under this path.
+		if rec := f.do("GET", u, "", c); rec.Code != http.StatusNotFound || strings.Contains(rec.Body.String(), "indexed") {
 			t.Errorf("GET %s : %d %s", u, rec.Code, rec.Body)
 		}
 	}

@@ -71,13 +71,18 @@
 	// Spec v0.2 §5.3: the key figures come apart, and never hold the detail
 	// back ("—" while they load, or if they fail: up to 30 s while dockerd
 	// exports the container).
+	// Asked by the full ID of the radiography, never by the URL's (a /c/<short
+	// ID> link): the agent recognises an export in progress by the full ID
+	// only (review of tranche 3).
 	let figures = $state<Figures | null>(null);
+	let fullID = $derived(radio?.id ?? null);
 	$effect(() => {
-		const wanted = id;
+		const wanted = fullID;
 		void reloads;
+		figures = null;
+		if (!wanted) return;
 		let current = true;
 		const abort = new AbortController(); // another container: the request goes
-		figures = null;
 		getFigures(wanted, abort.signal)
 			.then((f) => {
 				if (current) figures = f;

@@ -31,7 +31,7 @@ Under 80 rem wide, the bar shrinks to its icons; under 48 rem, it becomes a draw
 - It also searches **files**, but only those of the open container (`?c=` or the container's page), and only in the index already built when the explorer opened it. The search never starts an export or a walk: for a running container, or a stopped one the explorer has not opened yet, the palette offers "Open the explorer". It matches the full path, case ignored; names that contain the search come before paths that contain it through a parent directory. 200 files at most, then the palette asks you to narrow the search.
 - It returns only names the explorer already shows for that container, never a content, never a masked value (environment, command, labels).
 - Keyboard: the arrows choose, Enter opens, Escape closes and gives the focus back where it was; Tab stays in the palette.
-- Nothing is kept: no history, no browser storage, no query in the page's address. The file query goes in the address of the call to the agent (`/api/containers/{id}/fs/search?q=`), which the agent does not log; a reverse proxy that logs addresses would see it (see [the limitations](limitations.md)).
+- Nothing is kept: no history, no browser storage, no query in the page's address. The file query goes in the body of a POST call to the agent (`/api/containers/{id}/fs/search`), never in an address; the agent does not log it (see [the limitations](limitations.md)).
 
 Images will join the palette with the Images page.
 

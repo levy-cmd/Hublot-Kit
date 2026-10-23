@@ -88,7 +88,8 @@ The technical spec ([§13, in French](../superpowers/specs/2026-10-07-hublot-kit
 ## Search (v0.2)
 
 - Files can be searched only in the index already built of a stopped container the explorer has opened. A running container has no index: open the explorer.
-- The query of a file search goes in the address of the call to the agent (`…/fs/search?q=`). The agent neither logs nor keeps it, but a reverse proxy in front of it that logs addresses would see it. A file name can be sensitive: set the proxy's logs accordingly.
+- The query of a file search goes in the body of a POST (`…/fs/search`), never in an address: the agent neither logs nor keeps it, and an ordinary access log of a reverse proxy does not see it. A proxy set to log request bodies would see it: a file name can be sensitive.
+- While a stopped container is exported (its index being built), Docker locks the container. The agent recognises that build by the container's full ID or name, never by a short ID: a direct API call with a short ID then waits for the lock, up to the route's deadline (10 s for files and search; the key figures wait for that lock whatever the ID, up to 30 s). The interface always sends the full ID.
 
 ## Secret masking
 

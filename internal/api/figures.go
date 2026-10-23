@@ -31,6 +31,11 @@ var figuresTimeout = 30 * time.Second
 // that a test can make either deadline end first.
 var figuresCallTimeout = 30 * time.Second
 
+// errSizeTimeout: the shared call reached figuresCallTimeout. Every request
+// that waited on it answers 504, the one that started it as well as those
+// that joined it, whatever their own deadline (review of tranche 3).
+var errSizeTimeout = errors.New("size call timed out")
+
 // figuresNow is the clock of the size cache; tests replace it.
 var figuresNow = time.Now
 
@@ -111,6 +116,9 @@ func (c *figureCache) fetch(d dockerx.Client, id string, call *sizeCall, now tim
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 	rw, rootfs, err := d.ContainerSize(ctx, id)
+	if err != nil && errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		err = fmt.Errorf("%w: %w", errSizeTimeout, err)
+	}
 	c.mu.Lock()
 	delete(c.inflight, id)
 	if err == nil {
@@ -173,7 +181,7 @@ func (s *server) figures(c *figureCache) http.HandlerFunc {
 		ctx, cancel := context.WithTimeout(r.Context(), figuresTimeout)
 		defer cancel()
 		fail := func(err error) {
-			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			if errors.Is(err, errSizeTimeout) || errors.Is(ctx.Err(), context.DeadlineExceeded) {
 				writeError(w, http.StatusGatewayTimeout, "internal",
 					fmt.Sprintf("Docker did not answer within %s (export of the container in progress?)", figuresTimeout))
 				return

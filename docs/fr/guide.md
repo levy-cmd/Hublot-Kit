@@ -31,7 +31,7 @@ Sous 80 rem de large, la barre se réduit à ses icônes ; sous 48 rem, elle dev
 - Elle cherche aussi les **fichiers**, mais seulement ceux du conteneur ouvert (`?c=` ou la page du conteneur), et seulement dans l'index déjà construit quand l'explorateur l'a ouvert. La recherche ne lance jamais d'export ni de parcours : pour un conteneur en marche, ou un conteneur arrêté que l'explorateur n'a pas encore ouvert, la palette propose « Ouvrir l'explorateur ». La recherche porte sur le chemin complet, sans tenir compte de la casse ; les noms qui contiennent la recherche passent avant les chemins qui la contiennent par un dossier parent. 200 fichiers au plus, puis la palette demande de préciser.
 - Elle ne renvoie que des noms que l'explorateur montre déjà pour ce conteneur, jamais un contenu, jamais une valeur masquée (environnement, commande, labels).
 - Au clavier : les flèches choisissent, Entrée ouvre, Échap ferme et rend le focus là où il était ; Tab reste dans la palette.
-- Rien n'est gardé : ni historique, ni stockage du navigateur, ni requête dans l'adresse de la page. La requête des fichiers part dans l'adresse de l'appel à l'agent (`/api/containers/{id}/fs/search?q=`), que l'agent ne journalise pas ; un reverse proxy qui journalise les adresses la verrait (voir [les limites](limites.md)).
+- Rien n'est gardé : ni historique, ni stockage du navigateur, ni requête dans l'adresse de la page. La requête des fichiers part dans le corps d'un appel POST à l'agent (`/api/containers/{id}/fs/search`), jamais dans une adresse ; l'agent ne la journalise pas (voir [les limites](limites.md)).
 
 Les images rejoindront la palette avec la page Images.
 

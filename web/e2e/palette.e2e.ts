@@ -7,8 +7,18 @@ test('recherche globale : Ctrl+K, conteneur, fichier', async ({ page }) => {
 	const token = process.env.HUBLOT_TOKEN;
 	if (!token) throw new Error('HUBLOT_TOKEN absent : lancer par scripts/e2e.sh');
 	const searches: string[] = [];
+	const badSearches: string[] = [];
+	// Every call to a file, search or figures route, to check the ID it names.
+	const byId: string[] = [];
 	page.on('request', (r) => {
-		if (r.url().includes('/fs/search')) searches.push(r.url());
+		const u = new URL(r.url());
+		if (u.pathname.endsWith('/fs/search')) {
+			searches.push(r.url());
+			// Review of tranche 3 (Codex): a POST, the query in its body only.
+			if (r.method() !== 'POST' || u.search !== '') badSearches.push(`${r.method()} ${r.url()}`);
+		}
+		const m = /^\/api\/containers\/([^/]+)\/(fs|figures)/.exec(u.pathname);
+		if (m) byId.push(m[1]);
 	});
 	await page.goto('/login');
 	await page.locator('#token').fill(token);
@@ -54,13 +64,27 @@ test('recherche globale : Ctrl+K, conteneur, fichier', async ({ page }) => {
 	await input.fill('note.tx');
 	const hit = dialog.getByRole('option', { name: /\/root\/note\.txt/ });
 	await expect(hit).toBeVisible();
-	await expect(dialog).toContainText('Fichiers de hublot-e2e');
+	// The section is a named group: a screen reader says "Fichiers de …".
+	await expect(dialog.getByRole('group', { name: 'Fichiers de hublot-e2e' })).toContainText('/root/note.txt');
 	while ((await hit.getAttribute('aria-selected')) !== 'true') await page.keyboard.press('ArrowDown');
 	await page.keyboard.press('Enter');
 	await expect(page).toHaveURL(/file=%2Froot%2Fnote\.txt/);
 	await expect(page.locator('.preview')).toContainText('bonjour hublot');
 	expect(searches.length).toBeGreaterThan(0);
-	expect(searches.every((u) => u.includes('/fs/search?q='))).toBe(true);
+
+	// Review of tranche 3 (Codex): a /c/<short ID> link; the file, search and
+	// figures routes still get the full ID, the only one the agent matches
+	// with a build in progress.
+	const id = new URL(page.url()).searchParams.get('c')!;
+	await page.goto(`/c/${id.slice(0, 12)}?tab=files`);
+	await expect(page.getByRole('button', { name: 'root/', exact: true })).toBeVisible();
+	await page.keyboard.press('Control+K');
+	await input.fill('note.tx');
+	await expect(dialog.getByRole('option', { name: /\/root\/note\.txt/ })).toBeVisible();
+	await page.keyboard.press('Escape');
+	expect(byId.length).toBeGreaterThan(0);
+	expect(byId.filter((x) => x !== id)).toEqual([]);
+	expect(badSearches).toEqual([]);
 
 	// A running container (the agent) has no index: the explorer is offered,
 	// never a file.

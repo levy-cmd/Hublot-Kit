@@ -91,6 +91,11 @@
   - contrat révisé à la revue de la tranche 2 (le plan donnait un ID seul, ce qui ne permet pas de vérifier la clé `ID + FinishedAt` sans un `Inspect` caché) : **l'appelant passe un `Inspect` qu'il vient de faire**, car `newTarFS` reprend `info.Mounts` et `info.Tmpfs`, et la clé `info.ID + info.FinishedAt` garantit que l'index décrit l'état présent ; `false` pour un conteneur actif, un index jamais servi, en cours ou en échec ;
   - si la tranche 6 change `Cached` (signature ou comportement, avec le cache partagé avec les images), elle l'écrit ici avant la fusion, et la tranche 8 se rebase ;
   - `internal/fsview/fsview.go` appartient à la tranche 8.
+- **Contrat de la recherche (tranche 3, révisé à la revue)** : `(*Views).SearchCached(ctx context.Context, info dockerx.ContainerInfo, q string, limit int) (hits []SearchHit, truncated, indexed bool)` remplace `SearchCached(key string, …)` du plan.
+  - Même clé que `Cached(info)` (ID complet et `FinishedAt`). L'appelant passe un `Inspect` qu'il vient de faire. Seul un index déjà servi est lu, sans construction ni visite.
+  - `(*Views).Indexing(ref string) bool` : une construction en cours de `ref` (ID complet ou nom, jamais un préfixe), sans visite (contrairement à `Pending`).
+  - La clé `"image:" + ID` du plan n'existe plus. La tranche 6 ajoute dans `search.go` `(*Views).SearchImage(ctx, imageID string, q string, limit int) (hits []SearchHit, truncated, indexed bool)` sur son cache d'images (index déjà servi seulement, jamais d'export), qui réutilise `(*index).search`, et la route `POST /api/images/{id}/fs/search` (corps `{"q"}`).
+  - Route : `POST /api/containers/{id}/fs/search`, corps `{"q": "…"}`, sous le contrôle d'Origin ; la requête n'est jamais dans une URL.
 - Autres paires : séquentielles par défaut. Avant tout parallèle (4 avec 3, 8 avec 5 et 6), écrire ici les fichiers possédés de chaque côté, en s'appuyant sur le découpage de l'i18n par module et sur `nav.ts` (plan, « Ordre, branches et parallélisme »).
 
 ## Tranches
@@ -124,3 +129,17 @@
   - Ruling (session principale, resserre Q60) : les labels Compose qui portent des chemins de l'hôte (`project.config_files`, `project.working_dir`, `project.environment_file`) ont leur valeur masquée.
   - À faire en tête de la tranche 3 : un test du regroupement sur DEUX conteneurs (une clé commune n'est détectée par aucun test).
   - Minor reporté : une requête qui rejoint un calcul en cours reçoit 503 au lieu de 504 quand il expire.
+- **Tranche 3 (recherche globale Ctrl+K)** : 2b1b75a (test du regroupement sur deux conteneurs), a335abd (tests rouges), 982bc90 ; correctif de revue : voir ci-dessous.
+  - Écarts au plan :
+    - contrat `SearchCached(ctx, info, …)` (ci-dessus) ;
+    - pas de résultats « images » avant la tranche 5 (pas de page, donc pas de lien) ;
+    - « NGINX » donne aussi le dossier `/etc/nginx` (chemin complet, spec §5.8) ;
+    - fichiers hors liste : `nav.ts` (`action`), `Sidebar.svelte`, `nav.test.ts`, `web/e2e/palette.e2e.ts`, `ContainerDetail.svelte` (chiffres demandés par l'ID complet).
+  - Mesures : recherche servie par l'agent en 2,5 à 3,3 ms (index réel) ; parcours complet 3,1 ms pour 37 224 entrées, 245 ms pour 1 000 000 (M4).
+  - Revue : le relecteur valide ; Codex demande un correctif ; première CI (PR brouillon #10) rouge sur `TestFiguresTimeout`.
+  - Correctif de revue :
+    - 504 pour toute requête qui attend un calcul de taille expiré, qu'elle l'ait lancé ou rejoint (Minor de la tranche 2, cause de la CI rouge) ; délai du calcul séparé (`figuresCallTimeout`) pour des tests déterministes, `-count=50` vert ;
+    - recherche en `POST` avec la requête dans le corps (Codex) ;
+    - l'interface n'envoie que l'ID complet aux routes de fichiers, de recherche et de chiffres (`fullId`, figures par l'ID de la radiographie ; e2e sur `/c/<ID court>`). Pas de correspondance par préfixe côté agent (v0.1.1) : la limite d'un ID court pendant un export est écrite dans la spec et les limites ;
+    - `Indexing` au lieu de `Pending` dans la recherche (pas une visite) ;
+    - sections de la palette en `role="group"` nommés.

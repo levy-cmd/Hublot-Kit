@@ -39,6 +39,22 @@ func (v *Views) SearchCached(ctx context.Context, info dockerx.ContainerInfo, q 
 	return hits, truncated, true
 }
 
+// Indexing reports whether a build of ref (full ID or name, as Pending
+// matches them: never a prefix) is in progress, without asking Docker and
+// without making a visit of it: unlike Pending, neither its last use (Grace,
+// IdleTTL) nor its place in the LRU change. For the search, which is not a
+// visit (review of tranche 3).
+func (v *Views) Indexing(ref string) bool {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	for _, b := range v.builds {
+		if (b.id == ref || b.name == ref) && !finished(b) {
+			return true
+		}
+	}
+	return false
+}
+
 // search walks the index from "/" as the explorer lists it: through
 // directories only, the first MaxEntries names of each (List). An entry
 // left in the map but out of reach (a directory replaced by a file later
