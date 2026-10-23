@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
@@ -434,6 +435,74 @@ func TestLimitListenerPerIP(t *testing.T) {
 		t.Fatal("place rendue à l'adresse non reprise")
 	}
 	got[1].Close()
+}
+
+// fakeListener hands out one end of a pipe per remote address given.
+type fakeListener struct{ conns chan net.Conn }
+
+func (l fakeListener) Accept() (net.Conn, error) {
+	c, ok := <-l.conns
+	if !ok {
+		return nil, net.ErrClosed
+	}
+	return c, nil
+}
+func (l fakeListener) Close() error   { return nil }
+func (l fakeListener) Addr() net.Addr { return &net.TCPAddr{} }
+
+type remoteConn struct {
+	net.Conn
+	remote net.Addr
+}
+
+func (c remoteConn) RemoteAddr() net.Addr { return c.remote }
+
+// v0.1.2 (counter-audit): counted per address, one IPv6 host with its /64
+// filled the 512 connections. The cap counts an IPv6 /64 as one address, and
+// an IPv4 address mapped in IPv6 as that IPv4 address.
+func TestLimitListenerGroupsAddresses(t *testing.T) {
+	fl := fakeListener{conns: make(chan net.Conn, 16)}
+	ln := limitListener(fl, connLimits{Max: 20, PerIP: 2, FirstByte: time.Minute})
+	accepted := make(chan net.Conn, 16)
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			accepted <- c
+		}
+	}()
+	try := func(remote string) (ok bool, peer net.Conn) {
+		srvEnd, cliEnd := net.Pipe()
+		t.Cleanup(func() { srvEnd.Close(); cliEnd.Close() })
+		ap, err := netip.ParseAddrPort(remote)
+		if err != nil {
+			t.Fatal(err)
+		}
+		fl.conns <- remoteConn{srvEnd, net.TCPAddrFromAddrPort(ap)}
+		select {
+		case c := <-accepted:
+			return true, c
+		case <-time.After(300 * time.Millisecond):
+			return false, nil // closed at once; Accept waits for the next one
+		}
+	}
+	feed := func(want bool, remotes ...string) {
+		t.Helper()
+		for _, r := range remotes {
+			if ok, _ := try(r); ok != want {
+				t.Errorf("%s : acceptée %v, attendu %v", r, ok, want)
+			}
+		}
+	}
+	feed(true, "[2001:db8:1:2::1]:1", "[2001:db8:1:2::2]:1")
+	feed(false, "[2001:db8:1:2:ffff::3]:1") // same /64
+	feed(true, "[2001:db8:1:3::1]:1")       // another /64
+	feed(true, "192.0.2.1:1", "[::ffff:192.0.2.1]:2")
+	feed(false, "[::ffff:192.0.2.1]:3", "192.0.2.1:4")
+	feed(true, "192.0.2.2:1")
+	close(fl.conns)
 }
 
 // A connection that sends no byte is closed after FirstByte, well before

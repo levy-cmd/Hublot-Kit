@@ -106,9 +106,16 @@ func (f *fixture) do(method, path, body string, cookie *http.Cookie) *httptest.R
 		r.AddCookie(cookie)
 	}
 	rec := httptest.NewRecorder()
-	f.h.ServeHTTP(rec, r)
+	f.h.ServeHTTP(deadlineRecorder{rec}, r)
 	return rec
 }
+
+// deadlineRecorder is a recorder that accepts write deadlines, as the
+// agent's server does: streams and downloads refuse a writer without them
+// (v0.1.2, Codex).
+type deadlineRecorder struct{ *httptest.ResponseRecorder }
+
+func (deadlineRecorder) SetWriteDeadline(time.Time) error { return nil }
 
 func (f *fixture) login(t *testing.T, token string) (*httptest.ResponseRecorder, *http.Cookie) {
 	t.Helper()
@@ -475,7 +482,9 @@ func TestLoginSuccessGivesAttemptBack(t *testing.T) {
 func TestLoginFailLogPerBlock(t *testing.T) {
 	now := time.Now()
 	logClock = func() time.Time { return now }
-	t.Cleanup(func() { logClock = time.Now })
+	oldDelay := loginSummaryDelay
+	loginSummaryDelay = 300 * time.Millisecond
+	t.Cleanup(func() { logClock, loginSummaryDelay = time.Now, oldDelay })
 	f := newFixture(t, false)
 	fail := func(remote string) {
 		r := httptest.NewRequest("POST", "http://example.com/api/login", strings.NewReader(`{"token":"mauvais"}`))
@@ -501,8 +510,9 @@ func TestLoginFailLogPerBlock(t *testing.T) {
 	block, suppressed, other := 0, 0, 0
 	for _, e := range lines() {
 		switch {
-		case e.Result == "suppressed":
+		case e.Result == "suppressed" && strings.HasPrefix(e.Error, "over "):
 			suppressed++
+		case e.Result == "suppressed":
 		case strings.HasPrefix(e.Remote, "2001:db8:1:2:"):
 			block++
 		case e.Remote == "192.0.2.77":
@@ -512,16 +522,40 @@ func TestLoginFailLogPerBlock(t *testing.T) {
 	if block != loginLogPerBlock || suppressed != 1 || other != 1 {
 		t.Fatalf("bloc %d lignes (attendu %d), suppressed %d (attendu 1), autre IP %d (attendu 1)", block, loginLogPerBlock, suppressed, other)
 	}
-	now = now.Add(61 * time.Second)
-	fail("192.0.2.78:1")
-	var summary *audit.Event
-	for _, e := range lines() {
-		if e.Result == "suppressed" && e.Remote == "" {
-			summary = &e
+	// v0.1.2 (Codex): the failures stop; the summary still comes, by a
+	// timer, and names the block.
+	want := fmt.Sprintf("%d failed logins", 200-loginLogPerBlock)
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		var summary *audit.Event
+		for _, e := range lines() {
+			if e.Result == "suppressed" && strings.HasPrefix(e.Error, want) {
+				summary = &e
+			}
 		}
+		if summary != nil {
+			if summary.Remote != "2001:db8:1:2::/64" {
+				t.Fatalf("synthèse : %+v, attendu le bloc 2001:db8:1:2::/64", summary)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("synthèse jamais écrite sans nouvel échec : %v", lines())
+		}
+		time.Sleep(50 * time.Millisecond)
 	}
-	if want := fmt.Sprint(200 - loginLogPerBlock); summary == nil || !strings.Contains(summary.Error, want) {
-		t.Fatalf("synthèse de la minute passée : %+v, attendu %s échecs non écrits", summary, want)
+}
+
+// One grouping for the login.fail budget and the connection cap: an IPv4
+// address (mapped in IPv6 or not), or the /64 of an IPv6 address.
+func TestAddressBlock(t *testing.T) {
+	for in, want := range map[string]string{
+		"192.0.2.1": "192.0.2.1", "::ffff:192.0.2.1": "192.0.2.1", "2001:db8:1:2::5": "2001:db8:1:2::/64",
+		"2001:db8:1:2:ffff::1": "2001:db8:1:2::/64", "::1": "::/64", "pas une ip": "pas une ip",
+	} {
+		if got := AddressBlock(in); got != want {
+			t.Errorf("AddressBlock(%q) = %q, attendu %q", in, got, want)
+		}
 	}
 }
 
@@ -731,6 +765,41 @@ func TestStalledDownloadsFreeTheirSlots(t *testing.T) {
 			t.Fatalf("créneaux jamais rendus : %d %s", rec.Code, rec.Body)
 		}
 		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+// v0.1.2 (Codex): a writer on which no write deadline can be set ends the
+// download or the stream before sending anything (fail closed), never goes
+// on without protection. A plain recorder has no deadline.
+func TestNoWriteDeadlineNoTransfer(t *testing.T) {
+	f, c := writeFixture(t, false)
+	f.docker.LogStreams = map[string][]byte{webID: bigLogs(10, 100)}
+	f.docker.LogsGate = make(chan struct{})
+	t.Cleanup(func() { close(f.docker.LogsGate) })
+	serve := func(target string) (body string, aborted bool) {
+		r := httptest.NewRequest("GET", "http://example.com"+target, nil)
+		r.AddCookie(c)
+		rec := httptest.NewRecorder()
+		done := make(chan bool, 1)
+		go func() {
+			defer func() { done <- recover() == http.ErrAbortHandler }()
+			f.h.ServeHTTP(rec, r)
+		}()
+		select {
+		case aborted = <-done:
+		case <-time.After(3 * time.Second):
+			t.Fatalf("%s : toujours en cours sans délai d'écriture", target)
+		}
+		return rec.Body.String(), aborted
+	}
+	if body, _ := serve("/api/containers/web/fs/download?path=/etc/app.conf"); strings.Contains(body, "port=80") {
+		t.Errorf("téléchargement envoyé sans délai d'écriture : %q", body)
+	}
+	if body, _ := serve("/api/containers/web/logs/download"); strings.Contains(body, "lll") {
+		t.Errorf("logs téléchargés sans délai d'écriture : %q", body)
+	}
+	if body, _ := serve("/api/containers/web/logs"); strings.Contains(body, "lll") {
+		t.Errorf("flux SSE sans délai d'écriture : %q", body)
 	}
 }
 
