@@ -1,8 +1,10 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"strings"
@@ -45,6 +47,28 @@ type searchAnswer struct {
 
 var notIndexed = searchAnswer{Results: []searchHit{}}
 
+// errBody: a request body that is not exactly one JSON value of max bytes at
+// most.
+var errBody = errors.New("invalid body")
+
+// decodeOne decodes ONE JSON value of max bytes at most into v, with nothing
+// after it but blanks (review of tranche 3, Codex): a second value, a stray
+// "}" or "]", or a body longer than max is refused, wherever it starts.
+func decodeOne(body io.Reader, max int64, v any) error {
+	b, err := io.ReadAll(io.LimitReader(body, max+1))
+	if err != nil || int64(len(b)) > max {
+		return errBody
+	}
+	dec := json.NewDecoder(bytes.NewReader(b))
+	if err := dec.Decode(v); err != nil {
+		return errBody
+	}
+	if err := dec.Decode(new(json.RawMessage)); err != io.EOF {
+		return errBody
+	}
+	return nil
+}
+
 // validQuery: 2 to 200 characters of valid UTF-8, without NUL.
 func validQuery(q string) bool {
 	n := utf8.RuneCountInString(q)
@@ -60,8 +84,7 @@ func (s *server) fsSearch(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Q string `json:"q"`
 	}
-	dec := json.NewDecoder(io.LimitReader(r.Body, maxSearchBody))
-	if err := dec.Decode(&body); err != nil || dec.More() {
+	if err := decodeOne(r.Body, maxSearchBody, &body); err != nil {
 		writeReserved(w, "invalid_query", `the body must be {"q": "…"}, of 2 to 200 characters`)
 		return
 	}
