@@ -90,15 +90,22 @@ var (
 // invMaxArg: past this, secrets.Args masks an argument whole (its maxLen).
 const invMaxArg = 8 << 10
 
-// maskedArgs names the arguments of raw that secrets.Args changes.
-func maskedArgs(part string, raw []string) []argJSON {
+// maskedArgs names the arguments that secrets.Args changes in the entrypoint
+// and the command, masked end to end as the radiography does (maskCommand:
+// Docker runs them as one argv, second review of tranche 5); part and index
+// name the field of origin.
+func maskedArgs(entrypoint, cmd []string) []argJSON {
+	raw := append(slices.Clip(entrypoint), cmd...)
 	masked, _ := secrets.Args(raw)
 	var out []argJSON
 	for i, m := range masked {
 		if m == raw[i] {
 			continue
 		}
-		a, prev := argJSON{Part: part, Index: i, Kind: "other"}, ""
+		a, prev := argJSON{Part: "entrypoint", Index: i, Kind: "other"}, ""
+		if i >= len(entrypoint) {
+			a.Part, a.Index = "cmd", i-len(entrypoint)
+		}
 		if i > 0 {
 			prev = raw[i-1]
 		}
@@ -133,8 +140,7 @@ func secretNames(row *inventoryJSON, d dockerx.Details) {
 			row.Env = append(row.Env, v.Name)
 		}
 	}
-	row.Args = append(row.Args, maskedArgs("entrypoint", d.Entrypoint)...)
-	row.Args = append(row.Args, maskedArgs("cmd", d.Cmd)...)
+	row.Args = append(row.Args, maskedArgs(d.Entrypoint, d.Cmd)...)
 	for _, l := range secrets.Labels(d.Labels) {
 		if l.Masked {
 			row.Labels = append(row.Labels, l.Key)

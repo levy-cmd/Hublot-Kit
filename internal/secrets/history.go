@@ -16,6 +16,11 @@ var argName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*=`)
 // shellMarks end the build arguments: the first one found starts the command.
 var shellMarks = []string{" /bin/sh -c ", " /bin/bash -c "}
 
+// anyShell: a shell mark however spaced. After "|N", more than one makes the
+// cut unsure: a value may hold a mark itself, and what follows it would only
+// go through Line (second review of tranche 5, Codex).
+var anyShell = regexp.MustCompile(`/bin/(?:ba)?sh\s+-c`)
+
 // instruction: a line of the ARG or LABEL instruction, as BuildKit records
 // it ("ARG GH_PAT=value", "LABEL k=v k2=v2") or the classic builder
 // ("/bin/sh -c #(nop)  ARG …"), ONBUILD or not, in any case, followed by
@@ -32,9 +37,9 @@ var bareName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 // them). With "|1", the value runs to the shell, blanks included. With N ≥ 2,
 // a value with a blank would make its next word pass for a name (review of
 // tranche 5: "NPM_AUTH=Basic dXNl…==" let the base64 out): every word must
-// be NAME=…, and there must be exactly N of them. Without a shell, or on
-// any other form, the whole part is masked (fail closed). Then the line
-// goes through Line.
+// be NAME=…, and there must be exactly N of them. Without a shell, with more
+// than one, or on any other form, the whole part is masked (fail closed).
+// Then the line goes through Line.
 //
 // BuildKit also keeps "ARG NAME=value" with the value given by --build-arg,
 // and "LABEL k=v …" without quotes (measured, Docker 29.7, tranche 5): the
@@ -58,6 +63,9 @@ func History(createdBy string) string {
 		n = int(^uint(0) >> 1) // more names than words: the words bound it
 	}
 	pre, rest := createdBy[:m[1]-1], createdBy[m[1]-1:] // rest starts with the blank
+	if len(anyShell.FindAllStringIndex(rest, 2)) > 1 {
+		return Line(pre + " " + Mask)
+	}
 	end := -1
 	for _, s := range shellMarks {
 		if i := strings.Index(rest, s); i >= 0 && (end < 0 || i < end) {
