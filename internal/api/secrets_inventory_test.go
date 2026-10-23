@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
 	"reflect"
 	"strings"
 	"sync"
@@ -34,9 +35,19 @@ type inventoryRow struct {
 	Service     string   `json:"service"`
 	State       string   `json:"state"`
 	Env         []string `json:"env"`
-	Args        []string `json:"args"`
+	Args        []argRow `json:"args"`
 	Labels      []string `json:"labels"`
 	Unavailable bool     `json:"unavailable"`
+}
+
+// argRow: a masked argument by its position and the name detected, never
+// its text (review of tranche 4, Codex: a partial mask lets the rest of the
+// value out).
+type argRow struct {
+	Part  string `json:"part"`
+	Index int    `json:"index"`
+	Kind  string `json:"kind"`
+	Name  string `json:"name,omitempty"`
 }
 
 // hexID is a full 64-character ID made of n.
@@ -102,7 +113,8 @@ func noWitness(t *testing.T, body string) {
 }
 
 // Spec v0.2 §5.9: names only. env: the names of the variables secrets.Masked
-// masks; args: the arguments secrets.Args changed, in their masked form;
+// masks; args: the position and detected name of the arguments secrets.Args
+// changed, never their text;
 // labels: the keys of the labels secrets.Labels masks. Never a value, even
 // a plain one, and arrays rather than null.
 func TestSecretsInventoryNeverLeaksValues(t *testing.T) {
@@ -125,22 +137,24 @@ func TestSecretsInventoryNeverLeaksValues(t *testing.T) {
 	got := decodeInventory(t, rec.Body.Bytes())
 	want := map[string]inventoryRow{
 		"app": {ID: hexID(1), Name: "app", Project: "shop", Service: "api", State: "running",
-			Env: []string{"DB_PASSWORD", "URL", "GITHUB_TOKEN"}, Args: []string{},
+			Env: []string{"DB_PASSWORD", "URL", "GITHUB_TOKEN"}, Args: []argRow{},
 			Labels: []string{"backup.dsn", "com.docker.compose.project.working_dir"}},
 		"cache": {ID: hexID(2), Name: "cache", Project: "shop", Service: "cache", State: "exited",
-			Env: []string{}, Args: []string{"••••••"}, Labels: []string{}},
-		"plain": {ID: hexID(4), Name: "plain", State: "running", Env: []string{}, Args: []string{}, Labels: []string{}},
+			Env: []string{}, Args: []argRow{{Part: "cmd", Index: 2, Kind: "flag", Name: "--requirepass"}}, Labels: []string{}},
+		"plain": {ID: hexID(4), Name: "plain", State: "running", Env: []string{}, Args: []argRow{}, Labels: []string{}},
+		"proxy": {ID: hexID(3), Name: "proxy", State: "running", Env: []string{},
+			Args:   []argRow{{Part: "entrypoint", Index: 2, Kind: "shell", Name: "sh -c"}},
+			Labels: []string{"traefik.http.middlewares.auth.basicauth.users"}},
 	}
 	for name, w := range want {
 		if !reflect.DeepEqual(got[name], w) {
 			t.Errorf("%s :\n obtenu  %+v\n attendu %+v", name, got[name], w)
 		}
 	}
-	// proxy: the shell line of the entrypoint, masked by secrets.Args as in
-	// the radiography; the clear argument of Cmd is not listed.
-	p := got["proxy"]
-	if len(p.Args) != 1 || !strings.Contains(p.Args[0], "••••••") || !reflect.DeepEqual(p.Labels, []string{"traefik.http.middlewares.auth.basicauth.users"}) || len(p.Env) != 0 {
-		t.Errorf("proxy : %+v", p)
+	// No masked text either: a position and a name, never "••••••" around
+	// what a partial mask would leave.
+	if strings.Contains(rec.Body.String(), "••••••") {
+		t.Errorf("texte masqué dans la réponse : %s", rec.Body)
 	}
 	if len(got) != 4 {
 		t.Errorf("%d conteneurs, attendu 4 : %s", len(got), rec.Body)
@@ -256,7 +270,7 @@ func TestSecretsInventoryTimeout(t *testing.T) {
 	got := decodeInventory(t, rec.Body.Bytes())
 	cache := got["cache"]
 	want := inventoryRow{ID: hexID(2), Name: "cache", Project: "shop", Service: "cache", State: "exited",
-		Env: []string{}, Args: []string{}, Labels: []string{}, Unavailable: true}
+		Env: []string{}, Args: []argRow{}, Labels: []string{}, Unavailable: true}
 	if !reflect.DeepEqual(cache, want) {
 		t.Errorf("verrouillé :\n obtenu  %+v\n attendu %+v", cache, want)
 	}
@@ -268,8 +282,8 @@ func TestSecretsInventoryTimeout(t *testing.T) {
 	}
 }
 
-// Spec v0.2 §5.9: never more than 4 Inspect in flight, for the whole agent:
-// two inventories at once share the same 4 places.
+// Spec v0.2 §5.9: never more than 4 Inspect in flight (simultaneous
+// inventories: TestSecretsInventoryCoalesced).
 func TestSecretsInventoryConcurrency(t *testing.T) {
 	fake := &dockerx.Fake{Infos: map[string]dockerx.ContainerInfo{}}
 	for i := range 24 {
@@ -280,28 +294,21 @@ func TestSecretsInventoryConcurrency(t *testing.T) {
 	}
 	slow := &slowDocker{Fake: fake, delay: 30 * time.Millisecond}
 	f, c := inventoryFixture(t, slow, fake, false)
-	var wg sync.WaitGroup
-	for range 2 {
-		wg.Go(func() {
-			rec := f.do("GET", "/api/secrets", "", c)
-			if rec.Code != http.StatusOK {
-				t.Errorf("%d %s", rec.Code, rec.Body)
-				return
-			}
-			noWitness(t, rec.Body.String())
-			for name, r := range decodeInventory(t, rec.Body.Bytes()) {
-				if r.Unavailable || !reflect.DeepEqual(r.Env, []string{"API_TOKEN"}) {
-					t.Errorf("%s : %+v", name, r)
-				}
-			}
-		})
+	rec := f.do("GET", "/api/secrets", "", c)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("%d %s", rec.Code, rec.Body)
 	}
-	wg.Wait()
+	noWitness(t, rec.Body.String())
+	for name, r := range decodeInventory(t, rec.Body.Bytes()) {
+		if r.Unavailable || !reflect.DeepEqual(r.Env, []string{"API_TOKEN"}) {
+			t.Errorf("%s : %+v", name, r)
+		}
+	}
 	if m := slow.max.Load(); m > 4 || m < 2 {
 		t.Errorf("%d Inspect en vol au plus, attendu de 2 à 4", m)
 	}
-	if n := slow.calls.Load(); n != 48 {
-		t.Errorf("%d Inspect, attendu 48", n)
+	if n := slow.calls.Load(); n != 24 {
+		t.Errorf("%d Inspect, attendu 24", n)
 	}
 }
 
@@ -356,5 +363,183 @@ func TestSecretsInventoryBounded(t *testing.T) {
 	}
 	if len(got) != 12 || avail != 3 || slow.calls.Load() != 3 {
 		t.Errorf("plafond de 3 : %d lignes, %d complètes, %d Inspect", len(got), avail, slow.calls.Load())
+	}
+}
+
+// Review of tranche 4 (Codex, Critical): the partial masks of spec §13 leave
+// a rest of the value in the masked text. The inventory gives the position
+// and the detected name of a masked argument, never its text: not one
+// character of a value goes out, whatever the form.
+func TestSecretsInventoryPartialMasks(t *testing.T) {
+	fake := &dockerx.Fake{Infos: map[string]dockerx.ContainerInfo{}}
+	add := func(n int, name string, ep, cmd []string) {
+		id := hexID(n)
+		fake.Containers = append(fake.Containers, dockerx.Container{ID: id, Name: name, State: "running"})
+		fake.Infos[id] = dockerx.ContainerInfo{ID: id, Name: name, Running: true, Pid: 3, Details: dockerx.Details{Entrypoint: ep, Cmd: cmd}}
+	}
+	long := "x" + strings.Repeat("s3cr3t-long", 1000)
+	add(1, "rest", nil, []string{"sh", "-c", "app Password=ab(üü)"})
+	add(2, "json", []string{"bash", "-lc", `app --token {"password": "s3cr3t-json"}`}, nil)
+	add(3, "forms", []string{"app", "postgres://u:s3cr3t-url@db", "Authorization: Bearer s3cr3t-bearer"},
+		[]string{"PGPASSWORD=s3cr3t-pg", "--password=", "s3cr3t-flag", "--db", "Server=x;Pwd=s3cr3t-pwd;", long})
+	f, c := inventoryFixture(t, fake, fake, false)
+	rec := f.do("GET", "/api/secrets", "", c)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("%d %s", rec.Code, rec.Body)
+	}
+	body := rec.Body.String()
+	for _, w := range []string{"s3cr3t", "üü", "ab(", "(", `\"`, "••••••", "Server", "u:", "app"} {
+		if strings.Contains(body, w) {
+			t.Errorf("%q dans la réponse : %s", w, body)
+		}
+	}
+	got := decodeInventory(t, rec.Body.Bytes())
+	want := map[string][]argRow{
+		"rest": {{Part: "cmd", Index: 2, Kind: "shell", Name: "sh -c"}},
+		"json": {{Part: "entrypoint", Index: 2, Kind: "shell", Name: "bash -lc"}},
+		"forms": {
+			{Part: "entrypoint", Index: 1, Kind: "url"},
+			{Part: "entrypoint", Index: 2, Kind: "authorization"},
+			{Part: "cmd", Index: 0, Kind: "assignment", Name: "PGPASSWORD"},
+			{Part: "cmd", Index: 2, Kind: "flag", Name: "--password"},
+			{Part: "cmd", Index: 4, Kind: "other"},
+			{Part: "cmd", Index: 5, Kind: "other"},
+		},
+	}
+	for name, w := range want {
+		if !reflect.DeepEqual(got[name].Args, w) {
+			t.Errorf("%s :\n obtenu  %+v\n attendu %+v", name, got[name].Args, w)
+		}
+	}
+}
+
+// Review of tranche 4 (relecteur, Important): Docker keeps two variables of
+// the same name (API_TOKEN=1, API_TOKEN=2); the inventory lists a name once.
+func TestSecretsInventoryDuplicateNames(t *testing.T) {
+	fake := &dockerx.Fake{Infos: map[string]dockerx.ContainerInfo{}}
+	id := hexID(9)
+	fake.Containers = []dockerx.Container{{ID: id, Name: "dup", State: "running"}}
+	fake.Infos[id] = dockerx.ContainerInfo{ID: id, Name: "dup", Running: true, Pid: 3,
+		Details: dockerx.Details{Env: []string{"API_TOKEN=s3cr3t-1", "DB_PASSWORD=s3cr3t-2", "API_TOKEN=s3cr3t-3"}}}
+	f, c := inventoryFixture(t, fake, fake, false)
+	got := decodeInventory(t, f.do("GET", "/api/secrets", "", c).Body.Bytes())
+	if !reflect.DeepEqual(got["dup"].Env, []string{"API_TOKEN", "DB_PASSWORD"}) {
+		t.Errorf("env : %v", got["dup"].Env)
+	}
+}
+
+// Review of tranche 4 (Codex): the error of the list may hold the address of
+// Docker with credentials; the answer is docker_unavailable with a fixed
+// detail.
+func TestSecretsInventoryListErrorMasked(t *testing.T) {
+	fake := inventoryFake()
+	f, c := inventoryFixture(t, fake, fake, false)
+	fake.Err = fmt.Errorf("%w: dial tcp://u:pw-s3cr3t@h:2376: connection refused", dockerx.ErrUnavailable)
+	rec := f.do("GET", "/api/secrets", "", c)
+	if rec.Code != http.StatusServiceUnavailable || errCode(t, rec) != "docker_unavailable" {
+		t.Errorf("%d %s", rec.Code, rec.Body)
+	}
+	for _, w := range []string{"pw-s3cr3t", "u:", "tcp://", "2376"} {
+		if strings.Contains(rec.Body.String(), w) {
+			t.Errorf("%q dans la réponse : %s", w, rec.Body)
+		}
+	}
+}
+
+// gatedList holds ListContainers until open is closed, and counts the calls.
+type gatedList struct {
+	*slowDocker
+	open  chan struct{}
+	lists atomic.Int32
+}
+
+func (g *gatedList) ListContainers(ctx context.Context) ([]dockerx.Container, error) {
+	g.lists.Add(1)
+	select {
+	case <-g.open:
+	case <-ctx.Done():
+		return nil, fmt.Errorf("%w: %v", dockerx.ErrUnavailable, ctx.Err())
+	}
+	return g.slowDocker.ListContainers(ctx)
+}
+
+// Review of tranche 4 (Codex): one caller must not take every place by
+// opening many inventories. Simultaneous inventories share one walk (one
+// list, one Inspect per container, 4 in flight at most); each waits with its
+// own deadline.
+func TestSecretsInventoryCoalesced(t *testing.T) {
+	fake := &dockerx.Fake{Infos: map[string]dockerx.ContainerInfo{}}
+	for i := range 12 {
+		id := hexID(300 + i)
+		fake.Containers = append(fake.Containers, dockerx.Container{ID: id, Name: fmt.Sprintf("k%d", i), State: "running"})
+		fake.Infos[id] = dockerx.ContainerInfo{ID: id, Name: fmt.Sprintf("k%d", i), Running: true, Pid: 9,
+			Details: dockerx.Details{Env: []string{"API_TOKEN=s3cr3t"}}}
+	}
+	g := &gatedList{slowDocker: &slowDocker{Fake: fake, delay: 20 * time.Millisecond}, open: make(chan struct{})}
+	f, c := inventoryFixture(t, g, fake, false)
+
+	// A caller that leaves: its own deadline, not the walk's.
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	defer cancel()
+	early := httptest.NewRecorder()
+	var wg sync.WaitGroup
+	wg.Go(func() {
+		r := httptest.NewRequestWithContext(ctx, "GET", "http://example.com/api/secrets", nil)
+		r.RemoteAddr = "192.0.2.1:40000"
+		r.AddCookie(c)
+		start := time.Now()
+		f.h.ServeHTTP(early, r)
+		if d := time.Since(start); d > time.Second {
+			t.Errorf("appelant parti servi en %v", d)
+		}
+	})
+	const n = 8
+	recs := make([]*httptest.ResponseRecorder, n)
+	for i := range n {
+		wg.Go(func() { recs[i] = f.do("GET", "/api/secrets", "", c) })
+	}
+	time.Sleep(300 * time.Millisecond)
+	close(g.open)
+	wg.Wait()
+	if early.Code == http.StatusOK {
+		t.Errorf("appelant parti : 200 %s", early.Body)
+	}
+	for i, rec := range recs {
+		if rec.Code != http.StatusOK || len(decodeInventory(t, rec.Body.Bytes())) != 12 {
+			t.Errorf("requête %d : %d %s", i, rec.Code, rec.Body)
+		}
+	}
+	if l := g.lists.Load(); l != 1 {
+		t.Errorf("%d listes, attendu une seule", l)
+	}
+	if k := g.calls.Load(); k != 12 {
+		t.Errorf("%d Inspect, attendu 12 (un seul parcours)", k)
+	}
+	if m := g.max.Load(); m > 4 {
+		t.Errorf("%d Inspect en vol", m)
+	}
+}
+
+// Review of tranche 4: the reveal reads one JSON object of 4 KiB at most,
+// nothing after it but blanks, as the search (decodeOne).
+func TestRevealEnvTrailingData(t *testing.T) {
+	fake := inventoryFake()
+	f, c := inventoryFixture(t, fake, fake, false)
+	u := "/api/containers/" + hexID(1) + "/env/reveal"
+	for _, body := range []string{
+		`{"name":"DB_PASSWORD"}` + strings.Repeat(" ", 5000) + "garbage",
+		`{"name":"DB_PASSWORD"}` + strings.Repeat(" ", 5000),
+		`{"name":"DB_PASSWORD"}}`,
+	} {
+		rec := f.do("POST", u, body, c)
+		if rec.Code != http.StatusNotFound || errCode(t, rec) != "not_found" || strings.Contains(rec.Body.String(), "s3cr3t") {
+			t.Errorf("corps de %d octets : %d %s", len(body), rec.Code, rec.Body)
+		}
+	}
+	if log := auditLines(t, f); strings.Contains(log, "env.reveal") {
+		t.Errorf("refus journalisé : %s", log)
+	}
+	if rec := f.do("POST", u, "{\"name\":\"DB_PASSWORD\"}\n", c); rec.Code != http.StatusOK {
+		t.Errorf("corps valide : %d %s", rec.Code, rec.Body)
 	}
 }

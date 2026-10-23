@@ -2,8 +2,8 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { NO_PROJECT } from './containers.ts';
 import {
-	addInvReveal, askInv, dropInvContainer, filterRows, forgetInv, invRevealed, noInvReveals, projectsOfRows, removeInvReveal,
-	secretCount, sortRows, type SecretRow
+	addInvReveal, argText, askInv, dropInvContainer, filterRows, forgetInv, invRevealed, noInvReveals, projectsOfRows,
+	removeInvReveal, secretCount, sortRows, uniqueNames, type SecretRow
 } from './inventory.ts';
 
 // Spec v0.2 §5.9: the Secrets page, names only, sorted by number of secrets,
@@ -24,7 +24,7 @@ const row = (name: string, o: Partial<SecretRow> = {}): SecretRow => ({
 
 describe('inventory', () => {
 	it('counts the variables and arguments masked as secrets, not the masked labels', () => {
-		expect(secretCount(row('a', { env: ['A', 'B'], args: ['••••••'], labels: ['traefik.x'] }))).toBe(3);
+		expect(secretCount(row('a', { env: ['A', 'B'], args: [{ part: 'cmd', index: 1, kind: 'flag', name: '--password' }], labels: ['traefik.x'] }))).toBe(3);
 		expect(secretCount(row('b', { labels: ['x', 'y'] }))).toBe(0);
 	});
 
@@ -34,7 +34,7 @@ describe('inventory', () => {
 			row('beta', { env: ['A'] }),
 			row('alpha'),
 			row('gamma', { env: ['A', 'B'] }),
-			row('delta', { args: ['••••••'] }),
+			row('delta', { args: [{ part: 'cmd', index: 1, kind: 'flag', name: '--password' }] }),
 			row('omega', { unavailable: true })
 		];
 		expect(sortRows(rows).map((r) => r.name)).toEqual(['gamma', 'beta', 'delta', 'zeta', 'alpha', 'omega']);
@@ -52,6 +52,24 @@ describe('inventory', () => {
 		expect(filterRows(rows, '').map((r) => r.name)).toEqual(['a', 'b', 'c']);
 		expect(filterRows(rows, 'shop').map((r) => r.name)).toEqual(['a']);
 		expect(filterRows(rows, NO_PROJECT).map((r) => r.name)).toEqual(['b']);
+	});
+
+	// Review of tranche 4 (relecteur): Docker may keep two variables of the
+	// same name; a keyed {#each} would break on them.
+	it('lists a variable name once', () => {
+		expect(uniqueNames(['API_TOKEN', 'DB_PASSWORD', 'API_TOKEN'])).toEqual(['API_TOKEN', 'DB_PASSWORD']);
+	});
+
+	// Review of tranche 4 (Codex): an argument is its position and the name
+	// detected, never its text.
+	it('names a masked argument by its position and what was detected', () => {
+		const flag = argText({ part: 'cmd', index: 2, kind: 'flag', name: '--requirepass' });
+		expect(flag).toContain('--requirepass');
+		expect(flag).toContain('3');
+		expect(argText({ part: 'entrypoint', index: 0, kind: 'assignment', name: 'PGPASSWORD' })).toContain('PGPASSWORD=');
+		expect(argText({ part: 'cmd', index: 2, kind: 'shell', name: 'sh -c' })).toContain('sh -c');
+		const unknown = argText({ part: 'cmd', index: 1, kind: 'future', name: 'x' });
+		expect(unknown).toBe(argText({ part: 'cmd', index: 1, kind: 'other' }));
 	});
 
 	it('keeps a revealed value per container and per variable', () => {
