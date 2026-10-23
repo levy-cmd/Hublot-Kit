@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/levy-cmd/hublot-kit/internal/dockerx"
+	"github.com/levy-cmd/hublot-kit/internal/files"
 	"github.com/levy-cmd/hublot-kit/internal/fsview"
 )
 
@@ -294,6 +295,40 @@ func TestStoppedPollsDuringLockedExport(t *testing.T) {
 	}
 	if l := decodeListing(t, rec); len(l.Entries) != 2 {
 		t.Fatalf("listing : %+v", l)
+	}
+}
+
+// Writes keep the order of spec §5.3 while the container is indexed: size,
+// name and the Inspect checks answer before any indexing (Views.Pending is
+// for read routes only). The fake's Inspect does not wait here: under a real
+// dockerd lock, a write waits for the end of the export (documented limit).
+func TestStoppedWritesDuringIndexingKeepTheirOrder(t *testing.T) {
+	fake := stoppedFake(t)
+	g := &gatedAPI{Fake: fake, open: make(chan struct{})}
+	defer close(g.open)
+	f, c := stoppedFixture(t, g, fake, fsview.Options{FirstWait: 50 * time.Millisecond})
+	if rec := f.do("GET", "/api/containers/db/fs?path=/", "", c); rec.Code != http.StatusAccepted {
+		t.Fatalf("première requête : %d %s", rec.Code, rec.Body)
+	}
+	if err := f.views.Pending("db"); !errors.Is(err, fsview.ErrIndexing) {
+		t.Fatalf("témoin : construction attendue en cours : %v", err)
+	}
+	cases := []struct {
+		name   string
+		rec    *httptest.ResponseRecorder
+		status int
+		code   string
+	}{
+		{"édition trop grosse", f.send("PUT", "/api/containers/db/fs/file?path=/etc/hostname",
+			bytes.Repeat([]byte("x"), files.MaxEditBytes+1), c, map[string]string{"If-Match": `"x"`}), 413, "too_large"},
+		{"édition de /etc/hosts", f.send("PUT", "/api/containers/db/fs/file?path=/etc/hosts",
+			[]byte("x"), c, map[string]string{"If-Match": `"x"`}), 403, "forbidden_path"},
+		{"envoi nommé a/b", f.upload(t, c, "db", "/etc", "a/b", []byte("x"), "*"), 400, "invalid_name"},
+	}
+	for _, tc := range cases {
+		if tc.rec.Code != tc.status || errCode(t, tc.rec) != tc.code {
+			t.Errorf("%s pendant l'indexation : %d %s, attendu %d %s", tc.name, tc.rec.Code, tc.rec.Body, tc.status, tc.code)
+		}
 	}
 }
 
