@@ -31,6 +31,42 @@
   Exception documentée : le remplissage émeraude n'est jamais seul sur une surface claire (2,40:1).
 - Questions ouvertes : Q55 à Q68 (spec v0.2 §0). Le plan applique les recommandations en attendant les réponses.
 
+## Décisions de l'utilisateur sur les questions (2026-10-23)
+- Q55 : F8 à F10 reportées après la v0.2.
+- Q56 : état réel affiché ; la lecture seule n'est pas le défaut.
+- Q59 : snapshots sans contenu ; pas de diff ligne à ligne entre deux photos.
+- Q60 : liste blanche des labels ; les autres affichent leur nom avec une valeur masquée, sans révélation.
+- Q58, Q61 à Q68 : recommandation adoptée.
+- Q57 reste ouverte, reformulée (spec v0.2 §0.2) : le coordinateur la repose à l'utilisateur.
+
+## Revue du plan (2026-10-23)
+- Codex : « plan prêt ». Le relecteur demande un correctif avant les tranches 6 et 8. Il est intégré dans la spec et dans le plan, tests compris.
+- Constats Important corrigés :
+  1. Entrée creuse : index par `Next()` seul, contexte testé à chaque tour, `TestImageIndexSparseBomb`.
+  2. Mémoire : noms et cibles de 4 Kio au plus, 256 Mio de noms au total, `PAXRecords`, `Xattrs`, `Uname` et `Gname` jetés.
+  3. Extraction et `image-match` :
+     - plafonds (4 Gio, 16 Gio décompressés, 2 min), deux extractions au plus pour l'agent, annulation après 15 s sans client ;
+     - le rang de l'entrée remplace son nom ;
+     - l'empreinte est vérifiée en lisant jusqu'à la fin du blob utile, et pas au-delà.
+  4. Fusion des couches : un dossier remplacé perd ses descendants ; `.wh.`, `.wh..` et `.wh...` sont ignorés. Tests ajoutés.
+  5. Parcours d'un conteneur actif : `openNoLinks` (RESOLVE_NO_SYMLINKS) et `O_NOATIME` ; `TestWalkLinkRace`.
+  6. Coûts écrits :
+     - un export lit aussi les volumes et verrouille le conteneur arrêté ;
+     - une photo d'un conteneur actif n'est pas atomique ;
+     - les octets lus sont plafonnés et le pic mémoire est chiffré.
+
+     Plafonds ramenés à 500 000 entrées et 1 Gio haché ; export d'un conteneur arrêté plafonné à 4 Gio et 5 min. Ajout d'une photo des métadonnées tirée de l'index déjà construit. Q57 reformulée.
+  7. Historique d'image : `secrets.History` masque toutes les valeurs après `|N` (`GH_PAT`, `NPM_AUTH`).
+  8. Conflits de fichiers :
+     - la tranche 1 crée des points d'extension (`moduleRoutes` et `routes_<module>.go`, codes d'erreur réservés, `nav/` et `i18n/` par module) : `server.go` et `fserr.go` n'ont plus qu'un écrivain ;
+     - la tranche 9 dépend aussi de la 7.
+- Minor traités :
+  - clé HMAC : `linkat`, exactement 32 octets, rotation `hublot rotate-snapshot-key`, `snapshots/` ouvert sans suivre de lien et testé ;
+  - réponse 202 de la prise à la forme de `indexing` ;
+  - mesure du HMAC refaite : 0,31 s pour 900 Mio seul ; la mesure combinée est trop bruitée (3,9 à 5,4 s) pour isoler l'écart, et l'ancienne phrase « +0,1 s » est retirée ;
+  - ustar à l'octet 257, avec test de couche non compressée ;
+  - tests rouges des tranches 3 et 9 commités seuls.
+
 ## Points à faire trancher ou relire
 - Q59 corrige une hypothèse de la demande : sans contenu conservé, même « contre le conteneur actuel », il n'y a pas de diff ligne à ligne. L'exception est le cas où l'ancienne empreinte égale celle de la version de l'image.
 - Q56 : la maquette dit « sécurisé par défaut », or `--read-only` vaut `false` par défaut. L'encart affichera l'état réel.
