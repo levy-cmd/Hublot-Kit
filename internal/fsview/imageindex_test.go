@@ -447,9 +447,33 @@ func TestImageIndexZstd(t *testing.T) {
 	}
 }
 
+// streamLayer writes a gzip layer through tar and gzip at once: the
+// decompressed bytes are never all in memory (the tests run under -race in
+// a VM of a few GiB).
+func streamLayer(t *testing.T, write func(tw *tar.Writer)) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	zw, _ := gzip.NewWriterLevel(&buf, gzip.BestSpeed)
+	tw := tar.NewWriter(zw)
+	write(tw)
+	if err := tw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
 func TestImageIndexGzipBomb(t *testing.T) {
-	big := strings.Repeat("\x00", 64<<20)
-	layer := layerOf(t, tfile("bomb", big), tfile("after", "x"))
+	layer := streamLayer(t, func(tw *tar.Writer) {
+		tw.WriteHeader(&tar.Header{Name: "bomb", Typeflag: tar.TypeReg, Mode: 0o644, Size: 64 << 20})
+		zeros := make([]byte, 1<<20)
+		for range 64 {
+			tw.Write(zeros)
+		}
+		tw.WriteHeader(&tar.Header{Name: "after", Typeflag: tar.TypeReg, Mode: 0o644})
+	})
 	t.Logf("couche : %d octets compressés, %d décompressés", len(layer), 64<<20)
 	_, err := buildArchive(saveArchive(t, layer), limitsWith(func(l *ImageLimits) { l.MaxUncompressed = 32 << 20 }))
 	if !errors.Is(err, ErrTooLarge) {
@@ -688,12 +712,11 @@ func (c *cancelAfter) Read(b []byte) (int, error) {
 }
 
 func TestImageIndexContextChecked(t *testing.T) {
-	hs := make([]hdr, 0, 100_000)
-	for i := range 100_000 {
-		hs = append(hs, tfile(fmt.Sprintf("d%d/f%d", i%100, i), ""))
-	}
-	raw := mkTar(t, hs...)
-	layer := gzipped(t, raw)
+	layer := streamLayer(t, func(tw *tar.Writer) {
+		for i := range 100_000 {
+			tw.WriteHeader(&tar.Header{Name: fmt.Sprintf("d%d/f%d", i%100, i), Typeflag: tar.TypeReg, Mode: 0o644})
+		}
+	})
 	archive, spans := outerTar(t, saveFiles(layer)...)
 	ctx, cancel := context.WithCancel(tctx)
 	defer cancel()
