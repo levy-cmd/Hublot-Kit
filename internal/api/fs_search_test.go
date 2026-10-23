@@ -92,6 +92,36 @@ func TestFsSearchQueryBounds(t *testing.T) {
 	}
 }
 
+// Review of tranche 3 (Codex, Minor): the body is ONE JSON object of 4 KiB
+// at most, nothing after it but blanks. A closing bracket, a second object or
+// any byte after the first object is refused, even past the 4 KiB, and before
+// anything is asked of Docker.
+func TestFsSearchTrailingData(t *testing.T) {
+	fake := stoppedFake(t)
+	f, c := stoppedFixture(t, fake, fake, fsview.Options{})
+	for _, body := range []string{
+		`{"q":"ab"}}`,
+		`{"q":"ab"}]`,
+		`{"q":"ab"} x`,
+		`{"q":"ab"}{"q":"cd"}`,
+		`{"q":"ab"}"`,
+		`{"q":"ab"}` + strings.Repeat(" ", 5000) + `x`,
+		`{"q":"ab"}` + strings.Repeat(" ", 5000),
+	} {
+		if rec := f.do("POST", "/api/containers/db/fs/search", body, c); rec.Code != http.StatusBadRequest || errCode(t, rec) != "invalid_query" {
+			t.Errorf("corps %.24q… (%d octets) : %d %s", body, len(body), rec.Code, rec.Body)
+		}
+	}
+	if calls := fake.Calls(); len(calls) != 0 {
+		t.Errorf("corps refusé, Docker sollicité : %v", calls)
+	}
+	for _, body := range []string{`{"q":"ab"}`, "{\"q\":\"ab\"}\n", " {\"q\":\"ab\"} \r\n\t"} {
+		if rec := f.do("POST", "/api/containers/db/fs/search", body, c); rec.Code != http.StatusOK {
+			t.Errorf("corps %q : %d %s", body, rec.Code, rec.Body)
+		}
+	}
+}
+
 // Review of tranche 3 (Codex): the query never goes in a URL. The route
 // is a POST, under the Origin check of every POST (spec §7); a GET, with or
 // without ?q=, is not served.
