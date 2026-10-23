@@ -216,6 +216,78 @@ func TestMetaAndLogout(t *testing.T) {
 	}
 }
 
+// Spec v0.2 §5.10: meta says how Docker is reached, its address masked by
+// secrets.Line (an ssh:// or tcp:// address may carry credentials).
+func TestMetaDocker(t *testing.T) {
+	f := newFixture(t, false)
+	f.docker.Daemon = dockerx.DaemonInfo{Host: "ssh://admin:pw@h", ServerVersion: "29.8.2", APIVersion: "1.44", Connected: true}
+	_, c := f.login(t, f.token)
+	rec := f.do("GET", "/api/meta", "", c)
+	body := rec.Body.String()
+	if rec.Code != http.StatusOK {
+		t.Fatalf("meta: %d %s", rec.Code, body)
+	}
+	for _, want := range []string{`"connected":true`, `"serverVersion":"29.8.2"`, `"apiVersion":"1.44"`, `"host":`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("meta lacks %s: %s", want, body)
+		}
+	}
+	if strings.Contains(body, "pw") {
+		t.Fatalf("the Docker address leaks its password: %s", body)
+	}
+}
+
+// Docker down: meta still answers (the UI shows "Docker unreachable").
+func TestMetaDockerDown(t *testing.T) {
+	f := newFixture(t, false)
+	f.docker.Err = errors.New("dial unix /var/run/docker.sock: connect: no such file or directory")
+	f.docker.Daemon = dockerx.DaemonInfo{Host: "unix:///var/run/docker.sock"}
+	_, c := f.login(t, f.token)
+	rec := f.do("GET", "/api/meta", "", c)
+	var m struct {
+		Version string `json:"version"`
+		Docker  struct {
+			Host      string `json:"host"`
+			Connected bool   `json:"connected"`
+		} `json:"docker"`
+	}
+	if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &m) != nil || m.Version != "test" {
+		t.Fatalf("meta: %d %s", rec.Code, rec.Body)
+	}
+	if m.Docker.Connected || m.Docker.Host != "unix:///var/run/docker.sock" {
+		t.Fatalf("docker: %+v", m.Docker)
+	}
+}
+
+type codedErr string
+
+func (c codedErr) Error() string   { return "coded: " + string(c) }
+func (c codedErr) APICode() string { return string(c) }
+
+// Plan v0.2: codes reserved by tranche 1 for tranches 3 and 6, so that
+// neither writes fserr.go.
+func TestReservedErrorCodes(t *testing.T) {
+	for code, want := range map[string]int{"invalid_query": http.StatusBadRequest, "unsupported_image": http.StatusUnprocessableEntity} {
+		rec := httptest.NewRecorder()
+		writeReserved(rec, code, "detail")
+		if rec.Code != want || errCode(t, rec) != code {
+			t.Errorf("%s: %d %s, want %d", code, rec.Code, rec.Body, want)
+		}
+		// A package that cannot import api (fsview) names its code by an APICode method.
+		if status, got := fsErrorStatus(fmt.Errorf("wrapped: %w", codedErr(code))); status != want || got != code {
+			t.Errorf("fsErrorStatus(%s) = %d %s", code, status, got)
+		}
+	}
+	if status, got := fsErrorStatus(codedErr("read_only")); status != http.StatusInternalServerError || got != "internal" {
+		t.Fatalf("an APICode outside the reserved ones must not pass: %d %s", status, got)
+	}
+	rec := httptest.NewRecorder()
+	writeReserved(rec, "made_up", "")
+	if rec.Code != http.StatusInternalServerError || errCode(t, rec) != "internal" {
+		t.Fatalf("an unreserved code must not pass: %d %s", rec.Code, rec.Body)
+	}
+}
+
 func TestUnknownAPIRouteIsJSON404(t *testing.T) {
 	f := newFixture(t, false)
 	rec := f.do("GET", "/api/nope", "", nil)
