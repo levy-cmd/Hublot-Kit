@@ -85,6 +85,22 @@ func TestHostBind(t *testing.T) {
 	}
 }
 
+// realSelfPIDNamespace: the reading of the agent, before TestMain.
+var realSelfPIDNamespace = selfPIDNamespace
+
+// TestMain: without root (CI job "go"), /proc/1/root is out of reach and
+// every bind would be refused; host paths are then judged as written.
+func TestMain(m *testing.M) {
+	dir, err := os.MkdirTemp("", "hublot-host")
+	if err != nil {
+		panic(err)
+	}
+	UseEmptyHostIfUnreachable(dir)
+	code := m.Run()
+	os.RemoveAll(dir)
+	os.Exit(code)
+}
+
 // fakeHostRoot points the host's root at a temporary tree for one test.
 func fakeHostRoot(t *testing.T) string {
 	t.Helper()
@@ -203,7 +219,7 @@ func TestSelfPIDNamespaceIsHostsUnderLinux(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("Linux only")
 	}
-	if ns, err := selfPIDNamespace(); err != nil || ns != hostPIDNamespace {
+	if ns, err := realSelfPIDNamespace(); err != nil || ns != hostPIDNamespace {
 		t.Fatalf("espace de PID : %q %v, attendu %q", ns, err, hostPIDNamespace)
 	}
 }

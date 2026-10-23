@@ -89,6 +89,17 @@ var selfPIDNamespace = func() (string, error) {
 	return os.Readlink("/proc/self/ns/pid")
 }
 
+// UseEmptyHostIfUnreachable is for tests run without root (CI job "go"),
+// never for the agent: when the host's root is out of reach, host paths are
+// judged against dir (an empty directory: as written), from the host's PID
+// namespace. As root, nothing changes.
+func UseEmptyHostIfUnreachable(dir string) {
+	if _, err := os.Lstat(hostRoot + "/"); err != nil {
+		hostRoot = dir
+		selfPIDNamespace = func() (string, error) { return hostPIDNamespace, nil }
+	}
+}
+
 // resolveHost resolves src, a path of the HOST (a bind Source, the device of
 // a bind volume), as dockerd will when it mounts it: every link followed,
 // absolute targets from the host's root, ".." stopped there. A component
