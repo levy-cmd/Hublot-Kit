@@ -612,8 +612,9 @@ func TestSlowClientsAreCut(t *testing.T) {
 	}
 }
 
-// A request without a body has no read delay: a logs stream lives past it
-// (the server's background read would otherwise cancel its context).
+// The read delay ends with the request's reading: a logs stream lives past
+// it (net/http lifts it for its background read; guard against a delay set
+// by hand, which would cancel the stream's context).
 func TestLogsStreamOutlivesReadTimeout(t *testing.T) {
 	f := newFixture(t, false)
 	f.docker.LogStreams = map[string][]byte{webID: nil}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -16,6 +17,7 @@ import (
 	"github.com/levy-cmd/hublot-kit/internal/dockerx"
 	"github.com/levy-cmd/hublot-kit/internal/files"
 	"github.com/levy-cmd/hublot-kit/internal/fsview"
+	"github.com/levy-cmd/hublot-kit/internal/secrets"
 )
 
 type Deps struct {
@@ -74,6 +76,7 @@ func (t *throttleLog) shouldLog(ip string) bool {
 type server struct {
 	d        Deps
 	throttle *throttleLog
+	loginLog *loginBudget
 	guard    *fsGuard
 	files    *files.Writer // the only writer (spec §7: read-only applied there)
 	// F6: limits of the logs streams, and one slot per stream open.
@@ -98,6 +101,7 @@ func New(d Deps) http.Handler {
 	s := &server{
 		d:        d,
 		throttle: &throttleLog{last: map[string]time.Time{}, now: logClock},
+		loginLog: &loginBudget{now: logClock},
 		guard:    newFSGuard(fsMaxPerContainer, fsTimeout),
 		files: &files.Writer{ReadOnly: d.ReadOnly, Docker: d.Docker, Audit: d.Audit,
 			Open: d.OpenFS, Forget: d.Views.Forget},
@@ -116,8 +120,8 @@ func New(d Deps) http.Handler {
 	mux.Handle("GET /api/containers/{id}/fs", session(s.fsList))
 	mux.Handle("GET /api/containers/{id}/fs/file", session(s.fsFile))
 	mux.Handle("GET /api/containers/{id}/fs/download", session(s.fsDownload))
-	mux.Handle("PUT /api/containers/{id}/fs/file", session(s.fsEdit))
-	mux.Handle("POST /api/containers/{id}/fs/upload", session(s.fsUpload))
+	mux.Handle("PUT /api/containers/{id}/fs/file", session(longBody(s.fsEdit)))
+	mux.Handle("POST /api/containers/{id}/fs/upload", session(longBody(s.fsUpload)))
 	mux.Handle("GET /api/containers/{id}/changes", session(s.changes))
 	mux.Handle("GET /api/containers/{id}/logs", session(s.logsStream))
 	mux.Handle("GET /api/containers/{id}/logs/download", session(s.logsDownload))
@@ -130,13 +134,49 @@ func New(d Deps) http.Handler {
 	return securityHeaders(originChecker{public: d.PublicOrigin, tls: d.TLS}.wrap(mux), d.ScriptHashes)
 }
 
+// Delays of the agent's HTTP server (v0.1.2, audit: only ReadHeaderTimeout
+// was set, and 1 000 connections held a login body that never came).
+// Variables: tests shorten them.
+var (
+	readHeaderTimeout = 10 * time.Second
+	// readTimeout bounds the reading of a whole request, body included;
+	// longBody extends it for a logged-in edit or upload. Once nothing is
+	// left to read, net/http lifts it (its background read has no
+	// deadline): a logs stream or a long download is not cut.
+	readTimeout = 15 * time.Second
+	idleTimeout = time.Minute
+	// uploadReadTimeout: reading the body of an edit or an upload, 32 MiB
+	// at most (about 55 KiB/s).
+	uploadReadTimeout = 10 * time.Minute
+)
+
+// ConfigureServer sets the delays of the agent's server. No WriteTimeout: it
+// would cut the logs stream and long downloads, whose writes have their own
+// deadlines.
+func ConfigureServer(srv *http.Server) {
+	srv.ReadHeaderTimeout = readHeaderTimeout
+	srv.ReadTimeout = readTimeout
+	srv.IdleTimeout = idleTimeout
+}
+
+// longBody extends the read delay of an edit or an upload. Registered
+// behind the session check: without a session, the short delay stays.
+func longBody(h http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		http.NewResponseController(w).SetReadDeadline(time.Now().Add(uploadReadTimeout))
+		h(w, r)
+	}
+}
+
+// login takes the attempt before reading the body, in one step (v0.1.2,
+// audit: checked before, counted after, a burst got 40 tokens checked
+// instead of 5), and gives it back on success.
 func (s *server) login(w http.ResponseWriter, r *http.Request) {
 	ip := clientIP(r)
-	if !s.d.Limiter.Allowed(ip) {
+	at, ok := s.d.Limiter.Take(ip)
+	if !ok {
 		if s.throttle.shouldLog(ip) {
-			if err := s.d.Audit.Write(audit.Event{Action: "login.fail", Result: "rate_limited", Remote: ip}); err != nil {
-				slog.Error("audit write", "err", err)
-			}
+			s.auditLogin(audit.Event{Action: "login.fail", Result: "rate_limited", Remote: ip})
 		}
 		writeError(w, http.StatusTooManyRequests, "rate_limited", "")
 		return
@@ -150,13 +190,11 @@ func (s *server) login(w http.ResponseWriter, r *http.Request) {
 		err = errors.New("trailing data")
 	}
 	if err != nil || !s.d.Verifier.Check(strings.TrimSpace(body.Token)) {
-		s.d.Limiter.Fail(ip)
-		if err := s.d.Audit.Write(audit.Event{Action: "login.fail", Result: "refused", Remote: ip}); err != nil {
-			slog.Error("audit write", "err", err)
-		}
+		s.auditLogin(audit.Event{Action: "login.fail", Result: "refused", Remote: ip})
 		writeError(w, http.StatusUnauthorized, "unauthorized", "")
 		return
 	}
+	s.d.Limiter.Refund(ip, at)
 	id, err := s.d.Sessions.Create()
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "internal", err.Error())
@@ -168,6 +206,43 @@ func (s *server) login(w http.ResponseWriter, r *http.Request) {
 		MaxAge: int(auth.SessionTTL.Seconds()),
 	})
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+// loginLogMax: at most this many login.fail lines a minute, every IP
+// together (v0.1.2, audit: 1 040 lines in 2 minutes). The next one is a
+// single "suppressed" line, then nothing until the next minute.
+var loginLogMax = 30
+
+// loginBudget counts the login.fail lines of the current minute.
+type loginBudget struct {
+	mu    sync.Mutex
+	now   func() time.Time
+	start time.Time
+	n     int
+}
+
+// next: write the line, or write the "suppressed" line instead, or neither.
+func (b *loginBudget) next() (write, suppressed bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if now := b.now(); now.Sub(b.start) >= time.Minute {
+		b.start, b.n = now, 0
+	}
+	b.n++
+	return b.n <= loginLogMax, b.n == loginLogMax+1
+}
+
+func (s *server) auditLogin(e audit.Event) {
+	write, suppressed := s.loginLog.next()
+	if suppressed {
+		e = audit.Event{Action: "login.fail", Result: "suppressed",
+			Error: fmt.Sprintf("over %d failed logins this minute: the next ones are not logged before the next minute", loginLogMax)}
+	} else if !write {
+		return
+	}
+	if err := s.d.Audit.Write(e); err != nil {
+		slog.Error("audit write", "err", err)
+	}
 }
 
 func (s *server) secureCookies() bool {
@@ -189,7 +264,8 @@ func (s *server) meta(w http.ResponseWriter, r *http.Request) {
 func (s *server) containers(w http.ResponseWriter, r *http.Request) {
 	list, err := s.d.Docker.ListContainers(r.Context())
 	if err != nil {
-		writeError(w, http.StatusServiceUnavailable, "docker_unavailable", err.Error())
+		slog.Warn("list containers", "err", secrets.Line(err.Error()))
+		writeError(w, http.StatusServiceUnavailable, "docker_unavailable", dockerDetail(dockerx.ErrUnavailable))
 		return
 	}
 	if list == nil {

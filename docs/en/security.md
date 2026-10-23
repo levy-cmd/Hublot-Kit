@@ -20,7 +20,11 @@ Treat the access token like the root password of the server.
 
 - The token is 32 random bytes, printed once. Only its SHA-256 hash is stored (`token.sha256`), and it is compared in
   constant time. `hublot reset-token` replaces it.
-- 5 failed logins per minute and per IP address, then `rate_limited`. Every failure is written to the audit log.
+- 5 failed logins per minute and per IP address, then `rate_limited`. Each attempt is counted before its token is
+  read, so a burst of requests gets no more. Failures are written to the audit log, at most 30 lines a minute for
+  all addresses together; past that, one `suppressed` line, then nothing until the next minute.
+- A request must be read within 15 seconds (headers within 10), an edit or upload once logged in within 10
+  minutes; an idle connection is closed after a minute, and the agent keeps at most 512 connections open.
 - The session lives in memory for 12 hours. Its cookie is `HttpOnly`, `SameSite=Strict`, and `Secure` with TLS or an
   `https` public origin.
 - Every request other than GET or HEAD must carry an `Origin` header equal to the trusted origin (`--public-origin`,

@@ -23,9 +23,13 @@ type IndexLimits struct {
 	MaxBytes    int64         // bytes read from GET /archive of "/"
 	MaxDuration time.Duration // the whole build, GetArchive included
 	MaxHeaders  int           // tar entries: bounds the agent's memory
+	// MaxNameBytes caps the bytes of every name and link target read, which
+	// the index keeps (v0.1.2, audit: 4 KiB paths and targets held ~5.4 GiB
+	// at the byte cap). Zero or negative: DefaultIndexLimits'.
+	MaxNameBytes int64
 }
 
-var DefaultIndexLimits = IndexLimits{MaxBytes: 4 << 30, MaxDuration: 5 * time.Minute, MaxHeaders: 1_000_000}
+var DefaultIndexLimits = IndexLimits{MaxBytes: 4 << 30, MaxDuration: 5 * time.Minute, MaxHeaders: 1_000_000, MaxNameBytes: 256 << 20}
 
 type index struct {
 	entries   map[string]Entry    // clean container path → entry, "/" included
@@ -86,7 +90,11 @@ func buildIndex(ctx context.Context, r io.Reader, lim IndexLimits, read *atomic.
 		children:  map[string][]string{},
 		hardlinks: map[string]string{},
 	}
+	if lim.MaxNameBytes <= 0 {
+		lim.MaxNameBytes = DefaultIndexLimits.MaxNameBytes
+	}
 	tr := tar.NewReader(&countingReader{ctx: ctx, r: r, n: read, max: lim.MaxBytes})
+	var names int64 // bytes of names and link targets read
 	for n := 0; ; n++ {
 		h, err := tr.Next()
 		if err == io.EOF {
@@ -101,6 +109,9 @@ func buildIndex(ctx context.Context, r io.Reader, lim IndexLimits, read *atomic.
 			return nil, fmt.Errorf("reading the archive of /: %w", err)
 		case n >= lim.MaxHeaders:
 			return nil, fmt.Errorf("%w: index beyond %d entries", ErrTooLarge, lim.MaxHeaders)
+		}
+		if names += int64(len(h.Name) + len(h.Linkname)); names > lim.MaxNameBytes {
+			return nil, fmt.Errorf("%w: index beyond %d bytes of names and link targets", ErrTooLarge, lim.MaxNameBytes)
 		}
 		x.add(h)
 	}

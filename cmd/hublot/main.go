@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sync"
 	"syscall"
 	"time"
 
@@ -89,7 +90,7 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 		return 0
 	}
 
-	srv := &http.Server{ReadHeaderTimeout: 10 * time.Second}
+	srv := newServer()
 	// A logs stream (SSE, F6) never ends by itself: Shutdown cancels the
 	// context of every request, so the streams return, then waits for them.
 	base, cancelBase := context.WithCancel(context.Background())
@@ -116,6 +117,7 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 		return 1
 	}
 	defer ln.Close()
+	ln = limitListener(ln, maxConns)
 
 	tok, created, err := auth.EnsureToken(cfg.DataDir)
 	if err != nil {
@@ -182,6 +184,65 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 		}
 	}
 	return 0
+}
+
+// newServer is the agent's HTTP server, with the delays of api.ConfigureServer
+// (v0.1.2, audit: only ReadHeaderTimeout was set).
+func newServer() *http.Server {
+	srv := &http.Server{}
+	api.ConfigureServer(srv)
+	return srv
+}
+
+// maxConns bounds the connections open at once (v0.1.2, audit): far beyond
+// what one user's browser opens, well below the file descriptors the agent
+// needs for Docker and the containers' files.
+const maxConns = 512
+
+// limitListener accepts at most n connections at once; the next one waits
+// in the kernel's backlog until one closes.
+// Close ends an Accept waiting for a slot (Shutdown waits for Serve).
+func limitListener(ln net.Listener, n int) net.Listener {
+	return &limitedListener{Listener: ln, slots: make(chan struct{}, n), done: make(chan struct{})}
+}
+
+type limitedListener struct {
+	net.Listener
+	slots chan struct{}
+	done  chan struct{}
+	once  sync.Once
+}
+
+func (l *limitedListener) Close() error {
+	l.once.Do(func() { close(l.done) })
+	return l.Listener.Close()
+}
+
+func (l *limitedListener) Accept() (net.Conn, error) {
+	select {
+	case l.slots <- struct{}{}:
+	case <-l.done:
+		return nil, net.ErrClosed
+	}
+	c, err := l.Listener.Accept()
+	if err != nil {
+		<-l.slots
+		return nil, err
+	}
+	return &limitedConn{Conn: c, release: func() { <-l.slots }}, nil
+}
+
+// limitedConn frees its slot on its first Close.
+type limitedConn struct {
+	net.Conn
+	once    sync.Once
+	release func()
+}
+
+func (c *limitedConn) Close() error {
+	err := c.Conn.Close()
+	c.once.Do(c.release)
+	return err
 }
 
 // prepareDataDir creates the data directory with mode 0700 if it does not

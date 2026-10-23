@@ -26,15 +26,21 @@ tous les détails.
   pseudo-système que l'agent ne connaît pas ne serait pas refusé ; les nœuds de périphérique restent refusés quoi
   qu'il arrive.
 - Un conteneur arrêté se lit par un index de son archive complète, construit au premier accès : cela peut prendre des
-  secondes sur une grosse image, avec une barre de progression. L'index est plafonné à 4 Gio lus, 5 minutes et
-  1 000 000 d'entrées (`too_large`) ; trois index sont gardés en mémoire.
+  secondes sur une grosse image, avec une barre de progression. L'index est plafonné à 4 Gio lus, 5 minutes,
+  1 000 000 d'entrées et 256 Mio de noms et de cibles de liens (`too_large`) ; trois index sont gardés en mémoire. Un
+  index occupe environ 237 Mo par million d'entrées aux noms ordinaires ; des noms longs ajoutent environ 1,6 octet
+  par octet de nom ou de cible, soit au plus 650 Mo environ par index aux plafonds.
 - Pendant que Docker exporte un conteneur arrêté (indexation, ou téléchargement d'un dossier), il ne répond rien
   d'autre sur ce conteneur. Pendant l'indexation, la navigation répond tout de suite avec la progression ; les autres
   requêtes sur ce conteneur (radiographie, logs, écritures, navigation pendant un téléchargement) attendent la fin de
   l'export, et échouent après 10 secondes (`docker_unavailable`) s'il dure plus.
 - Un conteneur arrêté qui monte `/`, `/proc`, `/sys` (ou dessous) ou `/dev` de l'hôte ne s'explore pas (l'erreur
   nomme le montage) : son archive contiendrait l'hôte. Ses logs, ses changements et sa radiographie restent
-  disponibles.
+  disponibles. Une source qui est un lien symbolique de l'hôte est jugée par sa cible, résolue depuis la racine de
+  l'hôte (`/proc/1/root` : l'agent a besoin de `--pid=host`) ; une source que l'agent ne sait pas résoudre est
+  refusée. Un lien changé sur l'hôte entre ce contrôle et le montage de la source par Docker n'est pas vu, ni un
+  lien que seul `dockerd` voit (dossier partagé par Docker Desktop, `dockerd` dans son propre espace de noms de
+  montage).
 - Un dossier de l'hôte monté dans un conteneur arrêté, avec un montage `/proc`, `/sys`, FUSE ou NFS en dessous, n'est
   pas détecté : l'indexation peut alors faire lire ce montage à Docker, et un serveur FUSE ou NFS bloqué peut bloquer
   `dockerd`.

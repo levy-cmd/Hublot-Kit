@@ -362,7 +362,9 @@ func TestLimitListener(t *testing.T) {
 	ln := limitListener(inner, 2)
 	defer ln.Close()
 	accepted := make(chan net.Conn, 3)
+	stopped := make(chan struct{})
 	go func() {
+		defer close(stopped)
 		for {
 			c, err := ln.Accept()
 			if err != nil {
@@ -399,6 +401,13 @@ func TestLimitListener(t *testing.T) {
 		c.Close()
 	case <-time.After(2 * time.Second):
 		t.Fatal("3e connexion jamais acceptée après une fermeture")
+	}
+	// Every slot taken, Accept waits: Close ends it (Shutdown waits for Serve).
+	ln.Close()
+	select {
+	case <-stopped:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Accept toujours bloqué après Close")
 	}
 	got[1].Close()
 }

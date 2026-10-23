@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/levy-cmd/hublot-kit/internal/dockerx"
+	"github.com/levy-cmd/hublot-kit/internal/secrets"
 )
 
 // logLimits of F6 (plan Observation, Q31 to Q33, Q37). Tests shrink them through
@@ -224,11 +225,11 @@ func (e sse) comment(text string) error {
 
 // failure reports err in the stream with the code of spec §6.
 func (e sse) failure(err error) {
-	_, code := fsErrorStatus(err)
+	status, code := fsErrorStatus(err)
 	if code == "internal" || code == "docker_unavailable" {
-		slog.Warn("logs stream error", "code", code, "err", err)
+		slog.Warn("logs stream error", "code", code, "err", secrets.Line(err.Error()))
 	}
-	e.event("failure", "", apiError{Error: code, Detail: err.Error()})
+	e.event("failure", "", apiError{Error: code, Detail: errorDetail(status, err)})
 }
 
 type logJSON struct {
@@ -484,7 +485,7 @@ func (s *server) logsDownload(w http.ResponseWriter, r *http.Request) {
 		err = bw.Flush()
 	}
 	if err != nil && r.Context().Err() == nil {
-		slog.Warn("logs download cut", "container", info.ID, "err", err)
+		slog.Warn("logs download cut", "container", info.ID, "err", secrets.Line(err.Error()))
 		if written == 0 {
 			h.Del("Content-Disposition")
 			writeFSError(w, err)

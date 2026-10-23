@@ -2,11 +2,16 @@ package fsview
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"os"
 	"path"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
+
+	securejoin "github.com/cyphar/filepath-securejoin"
 
 	"github.com/levy-cmd/hublot-kit/internal/dockerx"
 )
@@ -28,8 +33,8 @@ func HostBind(ctx context.Context, docker dockerx.Client, mounts []dockerx.Mount
 	for _, m := range mounts {
 		switch m.Type {
 		case "bind":
-			if hostSensitive(m.Source) {
-				return fmt.Errorf("%w: bind %s -> %s", ErrForbiddenPath, m.Source, m.Destination)
+			if why, refused := hostSourceRefused(m.Source); refused {
+				return fmt.Errorf("%w: bind %s%s -> %s", ErrForbiddenPath, m.Source, why, m.Destination)
 			}
 		case "tmpfs", "image":
 		case "volume":
@@ -46,8 +51,10 @@ func HostBind(ctx context.Context, docker dockerx.Client, mounts []dockerx.Mount
 			if t := opts["type"]; dangerousFSType(t) {
 				return fmt.Errorf("%w: volume %s (type=%s) -> %s", ErrForbiddenPath, m.Name, t, m.Destination)
 			}
-			if hasBindOption(opts["o"]) && opts["device"] != "" && hostSensitive(opts["device"]) {
-				return fmt.Errorf("%w: bind %s -> %s (volume %s)", ErrForbiddenPath, opts["device"], m.Destination, m.Name)
+			if dev := opts["device"]; hasBindOption(opts["o"]) && dev != "" {
+				if why, refused := hostSourceRefused(dev); refused {
+					return fmt.Errorf("%w: bind %s%s -> %s (volume %s)", ErrForbiddenPath, dev, why, m.Destination, m.Name)
+				}
 			}
 		default:
 			return fmt.Errorf("%w: mount of unknown type %q -> %s, refused", ErrForbiddenPath, m.Type, m.Destination)
@@ -63,6 +70,53 @@ func hasBindOption(o string) bool {
 		}
 	}
 	return false
+}
+
+// hostRoot is the host's root as the agent reaches it: the root of PID 1,
+// which the agent sees with --pid=host (spec §8). Tests replace it.
+var hostRoot = "/proc/1/root"
+
+// resolveHost resolves src, a path of the HOST (a bind Source, the device of
+// a bind volume), as dockerd will when it mounts it: every link followed,
+// absolute targets from the host's root, ".." stopped there. A component
+// that does not exist ends the resolution, the rest stays as written (Docker
+// creates it, or fails). Any other error: the path cannot be judged.
+// Tests replace it.
+var resolveHost = func(src string) (string, error) {
+	if os.Getpid() == 1 {
+		// PID 1 of its own PID namespace: /proc/1/root is the agent's root.
+		return "", errors.New("the agent is PID 1 of its PID namespace (no --pid=host): the host's root is out of reach")
+	}
+	full, err := securejoin.SecureJoin(hostRoot, src)
+	if err != nil {
+		return "", err
+	}
+	rel, err := filepath.Rel(hostRoot, full)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, "../") {
+		return "", fmt.Errorf("%s resolves out of the host's root", src)
+	}
+	return path.Clean("/" + rel), nil
+}
+
+// checkHostSource applies the rule of spec §5.2 step 7 to a host path, as
+// written and as resolved on the host (v0.1.2, audit: Docker keeps the
+// Source of a bind as written, …/link to / passed the text rule, and the
+// tar of / locks dockerd). why completes the refusal: "" when src itself
+// is refused, " (resolves to /)", or why it cannot be resolved (fail
+// closed). Limit: dockerd resolves the path again when it mounts it, later;
+// a link changed on the host in between is not seen.
+func hostSourceRefused(src string) (why string, refused bool) {
+	if hostSensitive(src) {
+		return "", true
+	}
+	resolved, err := resolveHost(src)
+	if err != nil {
+		return fmt.Sprintf(" (unresolvable on the host: %v)", err), true
+	}
+	if hostSensitive(resolved) {
+		return " (resolves to " + resolved + ")", true
+	}
+	return "", false
 }
 
 // hostSensitive works on a host path string (never opened). A path that is
