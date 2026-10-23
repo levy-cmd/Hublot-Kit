@@ -126,6 +126,40 @@ func TestContainerRadiography(t *testing.T) {
 	}
 }
 
+// Review of tranche 5 (Codex): Docker runs the entrypoint and the command as
+// one argv, so a secret flag that ends the entrypoint names the first
+// argument of the command. Both are masked together, then split again.
+func TestContainerCommandBoundary(t *testing.T) {
+	for _, tc := range []struct{ ep, cmd, wantEp, wantCmd []string }{
+		{[]string{"redis-server", "--requirepass"}, []string{"s3cr3t-clair", "--port", "6379"},
+			[]string{"redis-server", "--requirepass"}, []string{"••••••", "--port", "6379"}},
+		{[]string{"app", "--password="}, []string{"s3cr3t-clair"}, []string{"app", "--password="}, []string{"••••••"}},
+		{nil, []string{"redis-server", "--requirepass", "s3cr3t-clair"}, []string{}, []string{"redis-server", "--requirepass", "••••••"}},
+		{[]string{"/entry.sh"}, nil, []string{"/entry.sh"}, []string{}},
+	} {
+		f, c := radioFixture(t, false)
+		web := f.docker.Infos["web"]
+		web.Details.Entrypoint, web.Details.Cmd = tc.ep, tc.cmd
+		f.docker.Infos["web"], f.docker.Infos[webID] = web, web
+		rec := f.do("GET", "/api/containers/web", "", c)
+		if rec.Code != http.StatusOK || strings.Contains(rec.Body.String(), "s3cr3t-clair") {
+			t.Errorf("%q + %q : %d %s", tc.ep, tc.cmd, rec.Code, rec.Body)
+			continue
+		}
+		var got struct {
+			Entrypoint, Cmd []string
+			CommandMasked   bool
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+			t.Fatal(err)
+		}
+		if strings.Join(got.Entrypoint, "|") != strings.Join(tc.wantEp, "|") || strings.Join(got.Cmd, "|") != strings.Join(tc.wantCmd, "|") ||
+			got.Entrypoint == nil || got.Cmd == nil || got.CommandMasked != (len(tc.cmd) > 0) {
+			t.Errorf("%q + %q : %q %q %v", tc.ep, tc.cmd, got.Entrypoint, got.Cmd, got.CommandMasked)
+		}
+	}
+}
+
 // Spec v0.2 §5.2 (Q60): labels leave the agent through secrets.Labels only;
 // outside com.docker.compose. and org.opencontainers.image., the key alone,
 // and no reveal for them.

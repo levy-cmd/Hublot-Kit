@@ -21,6 +21,17 @@ test('images : liste, détail par ID, secrets masqués', async ({ page }) => {
 	await page.locator('button[type=submit]').click();
 	await expect(page.locator('.topbar')).toContainText('Connecté');
 
+	// Spec v0.2 §3 (review of tranche 5): the "Images" tab of the Containers
+	// page, with its counter, leads to /images.
+	const tabs = page.getByRole('navigation', { name: 'Filtrer par état' });
+	const imagesTab = tabs.getByRole('link', { name: /^Images/ });
+	await expect(imagesTab.locator('.count')).toHaveText(/^\d+$/);
+	await expect(imagesTab).toHaveAttribute('href', '/images');
+	await imagesTab.click();
+	await expect(page).toHaveURL(/\/images$/);
+	await page.goBack();
+	await expect(page).toHaveURL(/\/$/);
+
 	// The entry of the side bar, with its counter.
 	const entry = page.getByRole('navigation', { name: 'Navigation principale' }).getByRole('link', { name: /^Images/ });
 	await expect(entry.locator('.count')).toHaveText(/^\d+$/);
@@ -32,7 +43,11 @@ test('images : liste, détail par ID, secrets masqués', async ({ page }) => {
 	await page.getByRole('link', { name: 'alpine:3', exact: true }).click();
 	await expect(page).toHaveURL(/\/images\/[0-9a-f]{64}$/);
 	await expect(page.getByRole('heading', { level: 1 })).toHaveText('alpine:3');
-	await expect(page.getByRole('region', { name: 'Conteneurs de cette image' })).toContainText('hublot-e2e');
+	// A container by its name, linked by its full ID; never its short ID.
+	const ctrs = page.getByRole('region', { name: 'Conteneurs de cette image' });
+	const ctrLink = ctrs.getByRole('link', { name: 'hublot-e2e', exact: true });
+	await expect(ctrLink).toHaveAttribute('href', /^\/\?c=[0-9a-f]{64}$/);
+	expect(await ctrs.innerText()).not.toMatch(/\b[0-9a-f]{12}\b/);
 	await expect(page.getByRole('region', { name: 'Couches' })).toContainText(/\d+ couches/);
 
 	// The image with witnesses: names shown, values masked.

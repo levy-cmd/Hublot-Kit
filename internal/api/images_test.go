@@ -241,6 +241,22 @@ func TestImageConfigMasked(t *testing.T) {
 	}
 }
 
+// Review of tranche 5 (Codex): the entrypoint and the command are one argv;
+// "--requirepass" at the end of the entrypoint masks the first argument of
+// the command.
+func TestImageCommandBoundary(t *testing.T) {
+	fake := imagesFake()
+	img := fake.Images["sha256:"+imgHex(1)]
+	img.Entrypoint, img.Cmd = []string{"redis-server", "--requirepass"}, []string{"s3cr3t-clair", "--port", "6379"}
+	fake.Images["sha256:"+imgHex(1)] = img
+	f, c := imagesFixture(t, fake, fake)
+	d := getImage(t, f, c, imgHex(1))
+	if !reflect.DeepEqual(d.Config.Entrypoint, []string{"redis-server", "--requirepass"}) ||
+		!reflect.DeepEqual(d.Config.Cmd, []string{"••••••", "--port", "6379"}) || !d.Config.CommandMasked {
+		t.Errorf("commande : %q %q %v", d.Config.Entrypoint, d.Config.Cmd, d.Config.CommandMasked)
+	}
+}
+
 // {id}: the full ID only, 64 lowercase hex characters, "sha256:" accepted.
 // A name, a short ID, anything else: 404, and Docker is never asked.
 func TestImageIDParam(t *testing.T) {

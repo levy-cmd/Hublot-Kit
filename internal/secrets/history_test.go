@@ -33,7 +33,7 @@ func TestHistoryBuildArgs(t *testing.T) {
 		// The first shell, sh or bash, ends the arguments; the rest is a shell line.
 		"|1 A=s3cr3t-j /bin/bash -c x /bin/sh -c y": "|1 A=•••••• /bin/bash -c x /bin/sh -c y",
 		// A name that is not ASCII is not a name: part of the value.
-		"|2 X=a ÉCHO=s3cr3t-k /bin/sh -c y": "|2 X=•••••• /bin/sh -c y",
+		"|2 X=a ÉCHO=s3cr3t-k /bin/sh -c y": "|2 •••••• /bin/sh -c y",
 		// Then Line, on the whole line: a secret of §7 in the command.
 		"|1 X=1 /bin/sh -c mysql --password=s3cr3t-l": "|1 X=•••••• /bin/sh -c mysql --password=••••••",
 		"ENV DB_PASSWORD=s3cr3t-env":                  "ENV DB_PASSWORD=••••••",
@@ -60,7 +60,7 @@ func TestHistoryArgAndLabel(t *testing.T) {
 		"ARG GH_PAT":                             "ARG GH_PAT",
 		"ARG A B=s3cr3t-p":                       "ARG A B=••••••",
 		"ARG A=s3cr3t-q B=s3cr3t-r":              "ARG A=•••••• B=••••••",
-		"ARG NOTE=a s3cr3t-s c":                  "ARG NOTE=••••••",
+		"ARG NOTE=a s3cr3t-s c":                  "ARG ••••••",
 		"ARG =s3cr3t-t":                          "ARG ••••••",
 		"ARG s3cr3t-u!":                          "ARG ••••••",
 		"arg GH_PAT=s3cr3t-v":                    "arg GH_PAT=••••••",
@@ -73,6 +73,39 @@ func TestHistoryArgAndLabel(t *testing.T) {
 		"RUN /bin/sh -c echo ARG X=1 # buildkit": "RUN /bin/sh -c echo ARG X=1 # buildkit",
 		"ARGS=1":                                 "ARGS=1",
 		"LABELS x":                               "LABELS x",
+	})
+}
+
+// Review of tranche 5 (relecteur, critical): a value with a blank made the
+// next word of the form NAME= pass for a name ("ARG NPM_AUTH=Basic
+// dXNl…==" let the base64 out). Fail closed: with an ARG, or with "|N" for
+// N ≥ 2, every word must be NAME=… (NAME of [A-Za-z_][A-Za-z0-9_]*), and
+// there must be exactly N of them; else the whole part is masked. With
+// "|1", the single value runs to the shell, blanks included.
+func TestHistoryValueWithBlanks(t *testing.T) {
+	check(t, map[string]string{
+		"ARG NPM_AUTH=Basic s3cr3tbase64==":                              "ARG ••••••",
+		"RUN |2 NPM_AUTH=Basic s3cr3tbase64== OTHER=1 /bin/sh -c npm ci": "RUN |2 •••••• /bin/sh -c npm ci",
+		"|2 NPM_AUTH=Basic s3cr3tbase64== /bin/sh -c npm ci":             "|2 •••••• /bin/sh -c npm ci",
+		"|2 A=x B=y C=s3cr3t-a /bin/sh -c x":                             "|2 •••••• /bin/sh -c x",
+		"|3 A=x B=s3cr3t-b /bin/sh -c x":                                 "|3 •••••• /bin/sh -c x",
+		"|2 A.b=x C=s3cr3t-c /bin/sh -c x":                               "|2 •••••• /bin/sh -c x",
+		"|2 A-b=x C=s3cr3t-d /bin/sh -c x":                               "|2 •••••• /bin/sh -c x",
+		"|2 A=s3cr3t-e B=s3cr3t-f /bin/sh -c x":                          "|2 A=•••••• B=•••••• /bin/sh -c x",
+		"|1 NPM_AUTH=Basic s3cr3tbase64== /bin/sh -c npm ci":             "|1 NPM_AUTH=•••••• /bin/sh -c npm ci",
+		"ARG A=1 B=s3cr3t-g":                                             "ARG A=•••••• B=••••••",
+		"ARG A=1 s3cr3t-h":                                               "ARG ••••••",
+		"ARG A.b=s3cr3t-i":                                               "ARG ••••••",
+		"ARG A B":                                                        "ARG A B",
+		// Minor: a tab after ARG or LABEL, and ONBUILD.
+		"ARG\tGH_PAT=s3cr3t-j":                        "ARG GH_PAT=••••••",
+		"LABEL\ta=s3cr3t-k":                           "LABEL ••••••",
+		"ONBUILD ARG GH_PAT=s3cr3t-l":                 "ONBUILD ARG GH_PAT=••••••",
+		"ONBUILD LABEL a=s3cr3t-m":                    "ONBUILD LABEL ••••••",
+		"onbuild\tlabel a=s3cr3t-n":                   "onbuild\tlabel ••••••",
+		"/bin/sh -c #(nop)  ONBUILD ARG X=s3cr3t-o":   "/bin/sh -c #(nop)  ONBUILD ARG X=••••••",
+		"/bin/sh -c #(nop)  ONBUILD LABEL a=s3cr3t-p": "/bin/sh -c #(nop)  ONBUILD LABEL ••••••",
+		"RUN\t|1 X=s3cr3t-q /bin/sh -c y":             "RUN\t|1 X=•••••• /bin/sh -c y",
 	})
 }
 
