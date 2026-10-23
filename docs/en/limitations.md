@@ -25,6 +25,10 @@ The technical spec ([§13, in French](../superpowers/specs/2026-10-07-hublot-kit
 - A stopped container is read from an index of its full archive, built on first access: this can take seconds on a
   large image, with a progress bar. The index is capped at 4 GiB read, 5 minutes and 1,000,000 entries
   (`too_large`); three indexes are kept in memory.
+- While Docker exports a stopped container (indexing, or download of a folder), it answers nothing else about that
+  container. During the indexing, browsing answers at once with the progress; the other requests on that container
+  (X-ray, logs, writes, browsing during a download) wait for the end of the export, and fail after 10 seconds
+  (`docker_unavailable`) if it lasts longer.
 - A stopped container that bind-mounts `/`, `/proc`, `/sys` (or below) or `/dev` of the host cannot be explored (the
   error names the mount): its archive would contain the host. Its logs, changes and X-ray stay available.
 - A host folder bind-mounted into a stopped container, with a `/proc`, `/sys`, FUSE or NFS mount below it, is not

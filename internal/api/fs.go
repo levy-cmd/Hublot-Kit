@@ -19,7 +19,8 @@ var containerRef = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.-]{0,127}$`)
 
 // fsRequest reads {id} and the query parameter param (path, or dir for an
 // upload), then resolves the container by Inspect
-// (bounded by fsTimeout: a stuck daemon must not hang the request). Every
+// (bounded by fsTimeout: a stuck daemon must not hang the request), unless a
+// read finds the container being indexed (Views.Pending). Every
 // later step uses info.ID, the full ID: the guard counts per container, and a
 // container recreated under the same name cannot step in mid-request. On any
 // failure it answers itself.
@@ -33,6 +34,17 @@ func (s *server) fsRequest(w http.ResponseWriter, r *http.Request, param string)
 	if strings.ContainsRune(raw, 0) {
 		writeError(w, http.StatusNotFound, "not_found", "invalid path")
 		return info, "", false
+	}
+	// A poll of a read route while the container is indexed: 202 at once,
+	// without Inspect, which would wait for the whole export (dockerd holds
+	// the container lock during GET /archive, v0.1.1). Nothing is served
+	// here: the index is served after an Inspect, by Views.For. Writes keep
+	// their order of checks (spec §5.3: size and name before the container).
+	if r.Method == http.MethodGet || r.Method == http.MethodHead {
+		if err := s.d.Views.Pending(id); err != nil {
+			writeFSError(w, err)
+			return info, "", false
+		}
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), fsTimeout)
 	defer cancel()

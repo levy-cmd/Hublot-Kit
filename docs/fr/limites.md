@@ -28,6 +28,10 @@ tous les détails.
 - Un conteneur arrêté se lit par un index de son archive complète, construit au premier accès : cela peut prendre des
   secondes sur une grosse image, avec une barre de progression. L'index est plafonné à 4 Gio lus, 5 minutes et
   1 000 000 d'entrées (`too_large`) ; trois index sont gardés en mémoire.
+- Pendant que Docker exporte un conteneur arrêté (indexation, ou téléchargement d'un dossier), il ne répond rien
+  d'autre sur ce conteneur. Pendant l'indexation, la navigation répond tout de suite avec la progression ; les autres
+  requêtes sur ce conteneur (radiographie, logs, écritures, navigation pendant un téléchargement) attendent la fin de
+  l'export, et échouent après 10 secondes (`docker_unavailable`) s'il dure plus.
 - Un conteneur arrêté qui monte `/`, `/proc`, `/sys` (ou dessous) ou `/dev` de l'hôte ne s'explore pas (l'erreur
   nomme le montage) : son archive contiendrait l'hôte. Ses logs, ses changements et sa radiographie restent
   disponibles.

@@ -72,8 +72,13 @@ func NewViews(docker dockerx.Client, opt Options) *Views {
 	return &Views{docker: docker, opt: opt, builds: map[string]*build{}}
 }
 
+// sizeWait bounds the read of SizeRootFs before an export (0.02 s measured
+// at rest); past it, the build goes on with an unknown size.
+const sizeWait = 2 * time.Second
+
 type build struct {
 	id      string
+	name    string        // without the leading "/": Pending matches it
 	done    chan struct{} // closed once idx, err and doneAt are set
 	cancel  context.CancelFunc
 	read    atomic.Int64
@@ -96,7 +101,11 @@ func finished(b *build) bool {
 }
 
 // For: id may be a name or a short ID; errors of Inspect pass through.
+// During a build of id, it answers like Pending, without Inspect.
 func (v *Views) For(ctx context.Context, id string) (FS, error) {
+	if err := v.Pending(id); err != nil {
+		return nil, err
+	}
 	info, err := v.docker.Inspect(ctx, id)
 	if err != nil {
 		return nil, err
@@ -115,6 +124,26 @@ func (v *Views) For(ctx context.Context, id string) (FS, error) {
 		return nil, err
 	}
 	return newTarFS(v.docker, info, idx, func() { v.drop(key, nil) }), nil
+}
+
+// Pending returns *IndexingError when a build of ref (full ID or name, as
+// Inspect gave them when it started) is in progress, nil otherwise; it asks
+// Docker nothing. v0.1.1: dockerd holds the container lock for the whole GET
+// /archive of "/", and an Inspect of that container waits for the end
+// (measured: 10.6 s on Docker Desktop 29.7.2), so a poll that inspected first
+// timed out instead of answering 202 at once (spec §5.2 step 2). A 202 serves
+// nothing: a finished index is served only by For, after a new Inspect has
+// matched the full ID and FinishedAt of its key.
+func (v *Views) Pending(ref string) error {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	for k, b := range v.builds {
+		if (b.id == ref || b.name == ref) && !finished(b) {
+			v.touchLocked(k) // a poll is a visit (Grace, LRU), as through index
+			return &IndexingError{Progress: progress(b.read.Load(), b.total.Load())}
+		}
+	}
+	return nil
 }
 
 // Forget drops every index of container id (full ID): plan Explorateur 3
@@ -199,7 +228,7 @@ func (v *Views) startLocked(key string, info dockerx.ContainerInfo) *build {
 		v.removeLocked(v.order[i])
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), v.opt.Limits.MaxDuration)
-	b := &build{id: info.ID, done: make(chan struct{}), cancel: cancel}
+	b := &build{id: info.ID, name: info.Name, done: make(chan struct{}), cancel: cancel}
 	v.builds[key] = b
 	v.order = append(v.order, key)
 	go v.run(ctx, key, b, info)
@@ -236,11 +265,14 @@ func (v *Views) removeLocked(key string) {
 
 func (v *Views) run(ctx context.Context, key string, b *build, info dockerx.ContainerInfo) {
 	defer b.cancel()
-	go func() { // progress only: an unknown size shows 0 %
-		if size, err := v.docker.SizeRootFs(ctx, info.ID); err == nil {
-			b.total.Store(size)
-		}
-	}()
+	// Progress only: an unknown size shows 0 %. Read before the export,
+	// never during it: an Inspect with size would wait for the container
+	// lock that dockerd holds until the tar is sent (v0.1.1).
+	sctx, scancel := context.WithTimeout(ctx, sizeWait)
+	if size, err := v.docker.SizeRootFs(sctx, info.ID); err == nil {
+		b.total.Store(size)
+	}
+	scancel()
 	idx, err := v.buildFor(ctx, b, info)
 	if err != nil && errors.Is(ctx.Err(), context.Canceled) {
 		err = &IndexingError{} // removed meanwhile (restart, Forget): its waiters ask again, never a 503

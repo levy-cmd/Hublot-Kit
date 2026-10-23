@@ -29,7 +29,23 @@ func writeFSError(w http.ResponseWriter, err error) {
 	if status >= 500 {
 		slog.Warn("file route error", "code", code, "status", status, "err", err)
 	}
-	writeError(w, status, code, err.Error())
+	detail := err.Error()
+	if status == http.StatusNotFound {
+		detail = notFoundDetail(err)
+	}
+	writeError(w, status, code, detail)
+}
+
+// notFoundDetail is the detail of a 404, for users (v0.1.1): never the
+// internal error (securejoin.OpenInRoot, openat2, the daemon's response).
+func notFoundDetail(err error) string {
+	switch {
+	case errors.Is(err, errNoVariable):
+		return "unknown variable"
+	case errors.Is(err, dockerx.ErrNotFound): // a container, or an archive path
+		return "no such container or path"
+	}
+	return "no such file or directory"
 }
 
 // fsErrorStatus maps the errors of file routes to the codes of spec §6. The
