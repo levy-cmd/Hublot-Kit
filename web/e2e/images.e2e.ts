@@ -44,9 +44,14 @@ test('images : liste, détail par ID, secrets masqués', async ({ page }) => {
 	await expect(config).toContainText('bonjour-img');
 	await expect(config).toContainText('org.opencontainers.image.title');
 	await expect(config).toContainText('1 autre label masqué');
-	await expect(page.getByRole('region', { name: 'Couches' })).toContainText('GH_PAT=••••••');
+	// The RUN that reads GH_PAT changes no file: 0 bytes under overlay2 (CI),
+	// 4 KiB under the containerd store. Unfold the entries without files first.
 	await page.getByRole('button', { name: /Montrer les \d+ entrées sans fichier/ }).click();
-	await expect(page.getByRole('region', { name: 'Couches' })).toContainText('API_KEY=••••••');
+	const layers = page.getByRole('region', { name: 'Couches' });
+	await expect(layers).toContainText('RUN |1 GH_PAT=•••••• /bin/sh -c');
+	await expect(layers).toContainText('ARG GH_PAT=••••••');
+	await expect(layers).toContainText('LABEL ••••••');
+	await expect(layers).toContainText('API_KEY=••••••');
 	await expect(page.locator('body')).not.toContainText('s3cr3t');
 
 	// A name in the address: refused by the page, never sent to the agent.
