@@ -196,3 +196,53 @@ func TestFiguresUsesCachedIndexOnly(t *testing.T) {
 		t.Errorf("exports : %v, attendu le seul de l'explorateur", calls)
 	}
 }
+
+// Review of tranche 2 (deferred Minor): the size calls are coalesced per
+// container, never across containers. Two containers asked together each
+// get their own Inspect with size=true and their own figures; a key shared
+// by every container would hand one the sizes of the other.
+func TestFiguresSizeCoalescedPerContainer(t *testing.T) {
+	fakeClock(t)
+	f, c := figuresFixture(t)
+	const apiID = "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"
+	api := dockerx.ContainerInfo{ID: apiID, Name: "api", Running: true, Pid: 43}
+	api.Details.ImageID = "sha256:feed"
+	f.docker.Infos["api"], f.docker.Infos[apiID] = api, api
+	f.docker.ContainerSizes[apiID] = dockerx.SizePair{RW: i64(4321), RootFs: i64(8765)}
+	f.docker.SizeGate = make(chan struct{})
+	const n = 4
+	type answer struct {
+		name string
+		rec  *httptest.ResponseRecorder
+	}
+	done := make(chan answer, 2*n)
+	for range n {
+		for _, name := range []string{"web", "api"} {
+			go func() { done <- answer{name, f.do("GET", "/api/containers/"+name+"/figures", "", c)} }()
+		}
+	}
+	// Every request reaches the size, or waits for it: with one key per
+	// container, two calls are held at the gate.
+	for deadline := time.Now().Add(time.Second); f.docker.SizeCalls.Load() < 2 && time.Now().Before(deadline); {
+		time.Sleep(5 * time.Millisecond)
+	}
+	time.Sleep(100 * time.Millisecond)
+	close(f.docker.SizeGate)
+	want := map[string]string{
+		"web": `{"sizeRw":1234,"sizeRootFs":5678,"imageSize":999,"files":null}`,
+		"api": `{"sizeRw":4321,"sizeRootFs":8765,"imageSize":999,"files":null}`,
+	}
+	for range 2 * n {
+		select {
+		case a := <-done:
+			if got := strings.TrimSpace(a.rec.Body.String()); a.rec.Code != http.StatusOK || got != want[a.name] {
+				t.Errorf("%s : %d %s, attendu %s", a.name, a.rec.Code, got, want[a.name])
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("requête bloquée")
+		}
+	}
+	if got := f.docker.SizeCalls.Load(); got != 2 {
+		t.Errorf("%d Inspect avec size, attendu 2 (un par conteneur)", got)
+	}
+}
