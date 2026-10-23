@@ -2,11 +2,11 @@ package fsview
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"path"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -76,6 +76,19 @@ func hasBindOption(o string) bool {
 // which the agent sees with --pid=host (spec §8). Tests replace it.
 var hostRoot = "/proc/1/root"
 
+// hostPIDNamespace is the initial PID namespace, the host's: its inode is
+// fixed by the kernel (PROC_PID_INIT_INO, include/linux/proc_ns.h).
+const hostPIDNamespace = "pid:[4026531836]"
+
+// selfPIDNamespace reads the agent's PID namespace. Outside Linux the agent
+// explores nothing (procfs_other.go): no check. Tests replace it.
+var selfPIDNamespace = func() (string, error) {
+	if runtime.GOOS != "linux" {
+		return hostPIDNamespace, nil
+	}
+	return os.Readlink("/proc/self/ns/pid")
+}
+
 // resolveHost resolves src, a path of the HOST (a bind Source, the device of
 // a bind volume), as dockerd will when it mounts it: every link followed,
 // absolute targets from the host's root, ".." stopped there. A component
@@ -83,9 +96,11 @@ var hostRoot = "/proc/1/root"
 // creates it, or fails). Any other error: the path cannot be judged.
 // Tests replace it.
 var resolveHost = func(src string) (string, error) {
-	if os.Getpid() == 1 {
-		// PID 1 of its own PID namespace: /proc/1/root is the agent's root.
-		return "", errors.New("the agent is PID 1 of its PID namespace (no --pid=host): the host's root is out of reach")
+	// /proc/1 is the host's init only in the host's PID namespace. Elsewhere
+	// (no --pid=host, with or without --init) it is the agent's container,
+	// whose root would hide the host's links (v0.1.2, counter-audit).
+	if ns, err := selfPIDNamespace(); err != nil || ns != hostPIDNamespace {
+		return "", fmt.Errorf("the agent is not in the host's PID namespace (%q, %v): start it with --pid=host", ns, err)
 	}
 	full, err := securejoin.SecureJoin(hostRoot, src)
 	if err != nil {

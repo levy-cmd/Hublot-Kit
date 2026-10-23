@@ -91,8 +91,12 @@ func (s *server) fsDownload(w http.ResponseWriter, r *http.Request) {
 	setAttachment(w, name)
 	// Streamed, never held in memory. A failure midway (dockerd cut, EIO on a
 	// FUSE file) aborts the response: a clean final chunk would let the browser
-	// save a truncated file as complete. The defers above still run.
-	if _, err := io.Copy(w, o.rc); err != nil {
+	// save a truncated file as complete. The defers above still run. Each
+	// write ends within writeStallTimeout (v0.1.2, counter-audit): a client
+	// that stopped reading (download paused) frees the slot and, on a
+	// stopped container, dockerd's archive.
+	written := 0
+	if _, err := io.Copy(timedWriter{w, http.NewResponseController(w), &written}, o.rc); err != nil {
 		panic(http.ErrAbortHandler)
 	}
 }

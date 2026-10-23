@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/netip"
 	"strings"
 	"sync"
 	"time"
@@ -208,38 +209,69 @@ func (s *server) login(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
-// loginLogMax: at most this many login.fail lines a minute, every IP
-// together (v0.1.2, audit: 1 040 lines in 2 minutes). The next one is a
-// single "suppressed" line, then nothing until the next minute.
-var loginLogMax = 30
+// loginLogPerBlock: at most this many login.fail lines a minute per address
+// block, an IPv4 address or an IPv6 /64 (v0.1.2, audit: 1 040 lines in 2
+// minutes; counter-audit: a budget for every IP together let one attacker
+// hide another). The next one is a single "suppressed" line for the block;
+// the first line of a later minute is preceded by one line that counts what
+// was not written.
+var loginLogPerBlock = 10
 
 // loginBudget counts the login.fail lines of the current minute.
 type loginBudget struct {
-	mu    sync.Mutex
-	now   func() time.Time
-	start time.Time
-	n     int
+	mu      sync.Mutex
+	now     func() time.Time
+	start   time.Time
+	n       map[string]int // lines of the minute, per block
+	dropped int            // lines of the minute not written
 }
 
-// next: write the line, or write the "suppressed" line instead, or neither.
-func (b *loginBudget) next() (write, suppressed bool) {
+// next: how many lines the previous minute did not write (to report
+// first), then write the line, or write the "suppressed" line instead, or
+// neither.
+func (b *loginBudget) next(block string) (dropped int, write, suppressed bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	if now := b.now(); now.Sub(b.start) >= time.Minute {
-		b.start, b.n = now, 0
+	if now := b.now(); now.Sub(b.start) >= time.Minute || b.n == nil {
+		dropped = b.dropped
+		b.start, b.n, b.dropped = now, map[string]int{}, 0
 	}
-	b.n++
-	return b.n <= loginLogMax, b.n == loginLogMax+1
+	b.n[block]++
+	k := b.n[block]
+	if k > loginLogPerBlock {
+		b.dropped++
+	}
+	return dropped, k <= loginLogPerBlock, k == loginLogPerBlock+1
+}
+
+// addressBlock: the IPv4 address, or the /64 of an IPv6 address (one host
+// gets a whole /64).
+func addressBlock(ip string) string {
+	a, err := netip.ParseAddr(ip)
+	if err != nil || a.Unmap().Is4() {
+		return ip
+	}
+	p, _ := a.Prefix(64)
+	return p.String()
 }
 
 func (s *server) auditLogin(e audit.Event) {
-	write, suppressed := s.loginLog.next()
-	if suppressed {
-		e = audit.Event{Action: "login.fail", Result: "suppressed",
-			Error: fmt.Sprintf("over %d failed logins this minute: the next ones are not logged before the next minute", loginLogMax)}
-	} else if !write {
-		return
+	block := addressBlock(e.Remote)
+	dropped, write, suppressed := s.loginLog.next(block)
+	if dropped > 0 {
+		s.writeAudit(audit.Event{Action: "login.fail", Result: "suppressed",
+			Error: fmt.Sprintf("%d failed logins not logged in the previous minute (over %d per address block)", dropped, loginLogPerBlock)})
 	}
+	switch {
+	case suppressed:
+		s.writeAudit(audit.Event{Action: "login.fail", Result: "suppressed", Remote: block,
+			Error: fmt.Sprintf("over %d failed logins this minute from %s: the next ones are counted, not logged", loginLogPerBlock, block)})
+	case write:
+		s.writeAudit(e)
+	}
+}
+
+func (s *server) writeAudit(e audit.Event) {
 	if err := s.d.Audit.Write(e); err != nil {
 		slog.Error("audit write", "err", err)
 	}

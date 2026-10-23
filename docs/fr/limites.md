@@ -28,8 +28,8 @@ tous les détails.
 - Un conteneur arrêté se lit par un index de son archive complète, construit au premier accès : cela peut prendre des
   secondes sur une grosse image, avec une barre de progression. L'index est plafonné à 4 Gio lus, 5 minutes,
   1 000 000 d'entrées et 256 Mio de noms et de cibles de liens (`too_large`) ; trois index sont gardés en mémoire. Un
-  index occupe environ 237 Mo par million d'entrées aux noms ordinaires ; des noms longs ajoutent environ 1,6 octet
-  par octet de nom ou de cible, soit au plus 650 Mo environ par index aux plafonds.
+  index occupe environ 237 Mo par million d'entrées aux noms ordinaires ; un index mesuré juste sous le plafond de
+  256 Mio de noms occupait 371 Mio, si bien que trois index peuvent dépasser 1 Gio.
 - Pendant que Docker exporte un conteneur arrêté (indexation, ou téléchargement d'un dossier), il ne répond rien
   d'autre sur ce conteneur. Pendant l'indexation, la navigation répond tout de suite avec la progression ; les autres
   requêtes sur ce conteneur (radiographie, logs, écritures, navigation pendant un téléchargement) attendent la fin de

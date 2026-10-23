@@ -44,6 +44,7 @@ Options (each has a HUBLOT_* equivalent):
   --tls-cert FILE        TLS certificate (with --tls-key)
   --tls-key FILE         TLS key (with --tls-cert)
   --public-origin URL    public origin behind a reverse proxy
+  --max-conns-per-ip N   connections at once per source address (default 64)
 
 Subcommand:
   reset-token            create a new access token and invalidate the old one
@@ -117,7 +118,7 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 		return 1
 	}
 	defer ln.Close()
-	ln = limitListener(ln, maxConns)
+	ln = limitListener(ln, connLimits{Max: config.MaxConns, PerIP: cfg.MaxConnsPerIP, FirstByte: firstByteTimeout})
 
 	tok, created, err := auth.EnsureToken(cfg.DataDir)
 	if err != nil {
@@ -194,23 +195,36 @@ func newServer() *http.Server {
 	return srv
 }
 
-// maxConns bounds the connections open at once (v0.1.2, audit): far beyond
-// what one user's browser opens, well below the file descriptors the agent
-// needs for Docker and the containers' files.
-const maxConns = 512
+// connLimits are the caps of limitListener (v0.1.2, audit and
+// counter-audit: 2 000 mute sockets of one address filled a global cap).
+type connLimits struct {
+	Max   int // connections open at once, every address together
+	PerIP int // connections open at once per source address (RemoteAddr)
+	// FirstByte: a connection that sends nothing for this long is closed,
+	// well before ReadHeaderTimeout.
+	FirstByte time.Duration
+}
 
-// limitListener accepts at most n connections at once; the next one waits
-// in the kernel's backlog until one closes.
-// Close ends an Accept waiting for a slot (Shutdown waits for Serve).
-func limitListener(ln net.Listener, n int) net.Listener {
-	return &limitedListener{Listener: ln, slots: make(chan struct{}, n), done: make(chan struct{})}
+// firstByteTimeout: a browser sends its request as soon as it connects.
+const firstByteTimeout = 5 * time.Second
+
+// limitListener accepts at most lim.Max connections at once (the next one
+// waits in the kernel's backlog until one closes) and lim.PerIP per source
+// address (the next one is closed at once). Close ends an Accept waiting
+// for a slot (Shutdown waits for Serve).
+func limitListener(ln net.Listener, lim connLimits) net.Listener {
+	return &limitedListener{Listener: ln, lim: lim, slots: make(chan struct{}, lim.Max),
+		done: make(chan struct{}), perIP: map[string]int{}}
 }
 
 type limitedListener struct {
 	net.Listener
+	lim   connLimits
 	slots chan struct{}
 	done  chan struct{}
 	once  sync.Once
+	mu    sync.Mutex
+	perIP map[string]int
 }
 
 func (l *limitedListener) Close() error {
@@ -219,30 +233,89 @@ func (l *limitedListener) Close() error {
 }
 
 func (l *limitedListener) Accept() (net.Conn, error) {
-	select {
-	case l.slots <- struct{}{}:
-	case <-l.done:
-		return nil, net.ErrClosed
+	for {
+		select {
+		case l.slots <- struct{}{}:
+		case <-l.done:
+			return nil, net.ErrClosed
+		}
+		c, err := l.Listener.Accept()
+		if err != nil {
+			<-l.slots
+			return nil, err
+		}
+		ip := c.RemoteAddr().String()
+		if h, _, err := net.SplitHostPort(ip); err == nil {
+			ip = h
+		}
+		l.mu.Lock()
+		if l.perIP[ip] >= l.lim.PerIP {
+			l.mu.Unlock()
+			c.Close()
+			<-l.slots
+			continue
+		}
+		l.perIP[ip]++
+		l.mu.Unlock()
+		lc := &limitedConn{Conn: c, firstBy: time.Now().Add(l.lim.FirstByte), release: func() {
+			l.mu.Lock()
+			if l.perIP[ip]--; l.perIP[ip] <= 0 {
+				delete(l.perIP, ip)
+			}
+			l.mu.Unlock()
+			<-l.slots
+		}}
+		c.SetReadDeadline(lc.firstBy)
+		return lc, nil
 	}
-	c, err := l.Listener.Accept()
-	if err != nil {
-		<-l.slots
-		return nil, err
-	}
-	return &limitedConn{Conn: c, release: func() { <-l.slots }}, nil
 }
 
-// limitedConn frees its slot on its first Close.
+// limitedConn frees its slots on its first Close. Until its first byte, no
+// read deadline goes past firstBy; then the server's own apply.
 type limitedConn struct {
 	net.Conn
 	once    sync.Once
 	release func()
+	mu      sync.Mutex
+	started bool      // a byte came
+	firstBy time.Time // the first byte must come before
+	readDL  time.Time // the read deadline the server last asked for
 }
 
 func (c *limitedConn) Close() error {
 	err := c.Conn.Close()
 	c.once.Do(c.release)
 	return err
+}
+
+func (c *limitedConn) SetReadDeadline(t time.Time) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.readDL = t
+	if !c.started && (t.IsZero() || t.After(c.firstBy)) {
+		t = c.firstBy
+	}
+	return c.Conn.SetReadDeadline(t)
+}
+
+func (c *limitedConn) SetDeadline(t time.Time) error {
+	if err := c.SetReadDeadline(t); err != nil {
+		return err
+	}
+	return c.Conn.SetWriteDeadline(t)
+}
+
+func (c *limitedConn) Read(p []byte) (int, error) {
+	n, err := c.Conn.Read(p)
+	if n > 0 {
+		c.mu.Lock()
+		if !c.started {
+			c.started = true
+			c.Conn.SetReadDeadline(c.readDL)
+		}
+		c.mu.Unlock()
+	}
+	return n, err
 }
 
 // prepareDataDir creates the data directory with mode 0700 if it does not

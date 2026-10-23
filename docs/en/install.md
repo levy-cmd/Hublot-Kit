@@ -74,6 +74,7 @@ it.
 | `--read-only` | `HUBLOT_READ_ONLY` | `false`: with `true`, no write at all, and the write buttons disappear |
 | `--tls-cert`, `--tls-key` | `HUBLOT_TLS_CERT`, `HUBLOT_TLS_KEY` | empty: serve HTTPS directly with a certificate you provide |
 | `--public-origin` | `HUBLOT_PUBLIC_ORIGIN` | empty: the public URL behind a reverse proxy |
+| `--max-conns-per-ip` | `HUBLOT_MAX_CONNS_PER_IP` | `64`: connections open at once per source address (1 to 512) |
 
 `hublot --help` lists them; `hublot --version` prints the version.
 
@@ -87,6 +88,10 @@ is not marked `Secure`.
 The logs tab is a Server-Sent Events stream: the proxy must not buffer it (the agent sends `X-Accel-Buffering: no`,
 which nginx honours) and must allow long reads (the stream sends a ping every 15 seconds). The agent never trusts
 `X-Forwarded-*` headers.
+
+Behind a proxy every connection comes from the proxy's address, and the agent accepts at most 64 at once per
+address: enough for one or two users. For more, or a proxy that keeps a large pool of connections, raise it, for
+example `-e HUBLOT_MAX_CONNS_PER_IP=256` (512 at most, the cap for every address together).
 
 Without a proxy, `--tls-cert` and `--tls-key` serve HTTPS directly. v0.1 does not obtain certificates by itself.
 

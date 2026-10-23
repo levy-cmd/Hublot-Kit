@@ -23,11 +23,12 @@ Traitez le jeton d'accès comme le mot de passe root du serveur.
   (`token.sha256`), et la comparaison se fait en temps constant. `hublot reset-token` le remplace.
 - 5 échecs de connexion par minute et par adresse IP, puis `rate_limited`. Chaque tentative est comptée avant la
   lecture de son jeton : une salve de requêtes n'en obtient pas plus. Les échecs sont écrits dans le journal d'audit,
-  30 lignes par minute au plus pour toutes les adresses ensemble ; au-delà, une ligne `suppressed`, puis plus rien
-  jusqu'à la minute suivante.
-- Une requête doit être lue en 15 secondes (ses en-têtes en 10), une édition ou un envoi, une fois connecté, en
-  10 minutes ; une connexion inactive est fermée au bout d'une minute, et l'agent garde au plus 512 connexions
-  ouvertes.
+  10 lignes par minute au plus par adresse (une adresse IPv6 compte pour tout son /64) ; au-delà, une ligne
+  `suppressed` pour cette adresse, et la minute suivante une ligne compte les échecs qui n'ont pas été écrits.
+- Une connexion doit envoyer son premier octet en 5 secondes, une requête être lue en 15 secondes (ses en-têtes en
+  10), une édition ou un envoi, une fois connecté, en 10 minutes ; une connexion inactive est fermée au bout d'une
+  minute. L'agent garde au plus 512 connexions ouvertes, 64 par adresse (`--max-conns-per-ip`). Un téléchargement ou
+  un flux de logs dont le client ne lit plus pendant 30 secondes est arrêté.
 - La session vit en mémoire pendant 12 heures. Son cookie est `HttpOnly`, `SameSite=Strict`, et `Secure` avec TLS ou
   une origine publique en `https`.
 - Toute requête autre que GET ou HEAD doit porter un en-tête `Origin` égal à l'origine de confiance

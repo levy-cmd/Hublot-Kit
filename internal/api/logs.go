@@ -42,9 +42,11 @@ const maxDownloadLine = 1 << 20
 // downloads, which are never evicted.
 var errTooManyStreams = errors.New("too many open log streams")
 
-// sseWriteTimeout bounds each write of a stream (review I4): a client
-// that no longer reads cannot hold the goroutine.
-const sseWriteTimeout = 30 * time.Second
+// writeStallTimeout bounds each write of a stream (review I4), of a logs
+// download and of a file download (v0.1.2, counter-audit): a client that no
+// longer reads holds neither the goroutine nor the slot. Renewed by each
+// write, so a slow client that reads goes on. A variable: tests shorten it.
+var writeStallTimeout = 30 * time.Second
 
 // lineID is the SSE ID of a line: its timestamp, its stream, and its rank
 // among the lines of that stream with that same timestamp. Within one
@@ -189,9 +191,9 @@ type sse struct {
 	f *http.ResponseController
 }
 
-// deadline: every write of a stream ends within sseWriteTimeout (a writer
+// deadline: every write of a stream ends within writeStallTimeout (a writer
 // that cannot set one, in tests, writes without).
-func (e sse) deadline() { e.f.SetWriteDeadline(time.Now().Add(sseWriteTimeout)) }
+func (e sse) deadline() { e.f.SetWriteDeadline(time.Now().Add(writeStallTimeout)) }
 
 func (e sse) event(name, id string, data any) error {
 	b, err := json.Marshal(data)
@@ -424,7 +426,7 @@ type timedWriter struct {
 }
 
 func (t timedWriter) Write(p []byte) (int, error) {
-	t.c.SetWriteDeadline(time.Now().Add(sseWriteTimeout))
+	t.c.SetWriteDeadline(time.Now().Add(writeStallTimeout))
 	n, err := t.w.Write(p)
 	*t.n += n
 	return n, err

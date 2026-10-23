@@ -25,8 +25,8 @@ The technical spec ([§13, in French](../superpowers/specs/2026-10-07-hublot-kit
 - A stopped container is read from an index of its full archive, built on first access: this can take seconds on a
   large image, with a progress bar. The index is capped at 4 GiB read, 5 minutes, 1,000,000 entries and 256 MiB of
   names and link targets (`too_large`); three indexes are kept in memory. An index takes about 237 MB per million
-  entries with ordinary names; long names add about 1.6 bytes per byte of name or target, so at most about 650 MB
-  per index at the caps.
+  entries with ordinary names; one measured just under the 256 MiB cap of names took 371 MiB, so three indexes can
+  hold over 1 GiB.
 - While Docker exports a stopped container (indexing, or download of a folder), it answers nothing else about that
   container. During the indexing, browsing answers at once with the progress; the other requests on that container
   (X-ray, logs, writes, browsing during a download) wait for the end of the export, and fail after 10 seconds
