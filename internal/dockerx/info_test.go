@@ -2,6 +2,7 @@ package dockerx
 
 import (
 	"context"
+	"errors"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -38,6 +39,62 @@ func engineFor(t *testing.T, host string) *engine {
 		t.Fatal(err)
 	}
 	return &engine{c: c}
+}
+
+// Spec v0.2 §5.3: the list never asks Docker for sizes (565 ms against 69
+// ms for 39 containers, measured); ContainerSize and ImageInspect read what
+// the daemon answers, a missing size staying nil.
+func TestSizesOnlyWhereAsked(t *testing.T) {
+	var queries []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		queries = append(queries, r.URL.Path+"?"+r.URL.RawQuery)
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/_ping"):
+			w.Header().Set("Api-Version", "1.44")
+			_, _ = w.Write([]byte("OK"))
+		case strings.HasSuffix(r.URL.Path, "/containers/json"):
+			_, _ = w.Write([]byte(`[{"Id":"abc","Names":["/web"],"Labels":{"com.docker.compose.project":"shop"}}]`))
+		case strings.HasSuffix(r.URL.Path, "/containers/abc/json"):
+			_, _ = w.Write([]byte(`{"Id":"abc","SizeRw":1234,"SizeRootFs":5678}`))
+		case strings.HasSuffix(r.URL.Path, "/containers/nosize/json"):
+			_, _ = w.Write([]byte(`{"Id":"nosize"}`))
+		case strings.HasSuffix(r.URL.Path, "/images/sha256:feed/json"):
+			_, _ = w.Write([]byte(`{"Id":"sha256:feed","RepoTags":["nginx:1.27"],"Size":999,"Created":"2026-10-01T00:00:00Z"}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"message":"no such object"}`))
+		}
+	}))
+	t.Cleanup(srv.Close)
+	e := engineFor(t, "tcp://"+srv.Listener.Addr().String())
+	ctx := context.Background()
+	list, err := e.ListContainers(ctx)
+	if err != nil || len(list) != 1 || list[0].Project != "shop" {
+		t.Fatalf("liste : %+v %v", list, err)
+	}
+	for _, q := range queries {
+		if strings.HasSuffix(strings.Split(q, "?")[0], "/containers/json") && strings.Contains(q, "size=") {
+			t.Errorf("la liste demande les tailles : %s", q)
+		}
+	}
+	rw, root, err := e.ContainerSize(ctx, "abc")
+	if err != nil || rw == nil || root == nil || *rw != 1234 || *root != 5678 {
+		t.Errorf("ContainerSize : %v %v %v", rw, root, err)
+	}
+	if last := queries[len(queries)-1]; !strings.Contains(last, "size=1") {
+		t.Errorf("ContainerSize sans size : %s", last)
+	}
+	if rw, root, err := e.ContainerSize(ctx, "nosize"); err != nil || rw != nil || root != nil {
+		t.Errorf("tailles absentes : %v %v %v", rw, root, err)
+	}
+	img, err := e.ImageInspect(ctx, "sha256:feed")
+	if err != nil || img.ID != "sha256:feed" || img.Size != 999 || len(img.Tags) != 1 || img.Created == "" {
+		t.Errorf("ImageInspect : %+v %v", img, err)
+	}
+	if _, err := e.ImageInspect(ctx, "sha256:gone"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("image absente : %v", err)
+	}
 }
 
 func TestInfoConnected(t *testing.T) {

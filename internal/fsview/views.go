@@ -146,6 +146,44 @@ func (v *Views) Pending(ref string) error {
 	return nil
 }
 
+// Cached returns the index of the stopped container info already served to
+// a request, under the key For would use (full ID and FinishedAt of info,
+// which the caller has just inspected): spec v0.2 §5.3 (figures) and §5.7
+// (photo of the metadata). It never starts a build, never asks Docker, and
+// does not count as a visit (LRU, IdleTTL). false: no such index, a build in
+// progress or failed, a running container, or an index of an older state.
+func (v *Views) Cached(info dockerx.ContainerInfo) (FS, bool) {
+	key, b := v.cached(info)
+	if b == nil {
+		return nil, false
+	}
+	return newTarFS(v.docker, info, b.idx, func() { v.drop(key, b) }), true
+}
+
+// CachedCount is the number of entries of the index Cached would serve, "/"
+// excluded, and when that index was built; under the same conditions.
+func (v *Views) CachedCount(info dockerx.ContainerInfo) (n int, at time.Time, ok bool) {
+	_, b := v.cached(info)
+	if b == nil {
+		return 0, time.Time{}, false
+	}
+	return len(b.idx.entries) - 1, b.doneAt, true
+}
+
+func (v *Views) cached(info dockerx.ContainerInfo) (string, *build) {
+	if info.Running && info.Pid != 0 {
+		return "", nil // For would open procfs
+	}
+	key := info.ID + "\x00" + info.FinishedAt
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	b, ok := v.builds[key]
+	if !ok || !finished(b) || b.err != nil || b.idx == nil || !b.served {
+		return "", nil
+	}
+	return key, b
+}
+
 // Forget drops every index of container id (full ID): plan Explorateur 3
 // calls it after a write on a stopped container (spec §5.2 step 1).
 func (v *Views) Forget(id string) {

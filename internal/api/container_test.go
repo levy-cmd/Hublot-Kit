@@ -17,7 +17,7 @@ import (
 
 // The secrets of the fake "web" container: none may appear in a response
 // that has not revealed it.
-var radioSecrets = []string{"s3cr3t-env", "s3cr3t-url", "s3cr3t-cmd", "s3cr3t-ep", "s3cr3t-err", "s3cr3t-cs"}
+var radioSecrets = []string{"s3cr3t-env", "s3cr3t-url", "s3cr3t-cmd", "s3cr3t-ep", "s3cr3t-err", "s3cr3t-cs", "s3cr3t-label"}
 
 func radioFixture(t *testing.T, readOnly bool) (*fixture, *http.Cookie) {
 	t.Helper()

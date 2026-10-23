@@ -104,10 +104,15 @@ describe('xray (F7)', () => {
 		const raw = readFileSync(new URL('../../../internal/api/testdata/radio.golden.json', import.meta.url), 'utf8');
 		expect(raw).not.toContain('s3cr3t');
 		const r = JSON.parse(raw) as Radiography;
-		// Zero dates emptied by the agent: absent, not "0001-01-01".
-		expect(r.state.startedAt).toBeUndefined();
-		expect(r.state.finishedAt).toBeUndefined();
+		expect(r.state.finishedAt).toBe('2026-10-20T08:00:00.123456789Z');
+		expect(r.state.exitCode).toBe(137);
 		expect(isStopped(r.state)).toBe(true);
+		// Spec v0.2 §5.2: the label rule applied by the agent.
+		expect(r.labels).toEqual([
+			{ key: 'com.docker.compose.project', value: 'shop', masked: false },
+			{ key: 'com.docker.compose.x', value: null, masked: true },
+			{ key: 'traefik.http.middlewares.auth.basicauth.users', value: null, masked: true }
+		]);
 		expect(restartLabel(r.restartPolicy, r.restartCount)).toBe('on-failure (5) · 0');
 		expect(r.ports.map((p) => portLabel(p, '(auto)'))).toEqual(['[::1]:8080 → 80/tcp', '(auto) → 90/tcp', '9000/tcp']);
 		expect(r.env.map((v) => [v.name, envValue(v, {})])).toEqual([['DB_PASSWORD', null], ['PLAIN', 'visible']]);

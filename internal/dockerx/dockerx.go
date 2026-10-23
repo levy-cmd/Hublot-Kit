@@ -15,6 +15,8 @@ import (
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/network"
 	"github.com/moby/moby/client"
+
+	"github.com/levy-cmd/hublot-kit/internal/secrets"
 )
 
 type Port struct {
@@ -32,6 +34,19 @@ type Container struct {
 	Status  string    `json:"status"`
 	Created time.Time `json:"created"`
 	Ports   []Port    `json:"ports"`
+	// Project and Service: the Compose labels com.docker.compose.project and
+	// .service (spec v0.2 §5.1), the only labels the list exposes, "" outside
+	// Compose or when the label rule masks them (secrets.SafeLabel).
+	Project string `json:"project,omitempty"`
+	Service string `json:"service,omitempty"`
+}
+
+// ImageInfo is the part of GET /images/{id}/json the agent uses.
+type ImageInfo struct {
+	ID      string   // "sha256:…"
+	Tags    []string // RepoTags
+	Size    int64    // bytes, every layer
+	Created string
 }
 
 // ContainerInfo is the part of `docker inspect` the agent uses.
@@ -85,6 +100,9 @@ type Details struct {
 	Ports       []Port
 	NetworkMode string
 	Networks    []Network // sorted by name
+	// Labels: Config.Labels, raw. They leave the agent through
+	// secrets.Labels only (spec v0.2 §5.2).
+	Labels map[string]string
 }
 
 // Network is one network the container is attached to.
@@ -159,6 +177,12 @@ type Client interface {
 	// at most, then GET /version. Host is always set; on an error, Connected
 	// is false and the versions may be empty.
 	Info(ctx context.Context) (DaemonInfo, error)
+	// ContainerSize is Inspect with size=true (spec v0.2 §5.3): SizeRw (the
+	// writable layer) and SizeRootFs (the whole root filesystem), nil when
+	// Docker gives none. dockerd walks the writable layer: never for a list.
+	ContainerSize(ctx context.Context, id string) (rw, rootfs *int64, err error)
+	// ImageInspect is GET /images/{id}/json.
+	ImageInspect(ctx context.Context, id string) (ImageInfo, error)
 }
 
 // DaemonInfo is the Docker part of /api/meta. Host is raw: the API masks it.
@@ -262,7 +286,17 @@ func fromSummary(s container.Summary) Container {
 		Status:  s.Status,
 		Created: time.Unix(s.Created, 0).UTC(),
 		Ports:   ports,
+		Project: safeLabel(s.Labels, "com.docker.compose.project"),
+		Service: safeLabel(s.Labels, "com.docker.compose.service"),
 	}
+}
+
+// safeLabel: the value of label key if the label rule shows it, else "".
+func safeLabel(labels map[string]string, key string) string {
+	if v := labels[key]; secrets.SafeLabel(key, v) {
+		return v
+	}
+	return ""
 }
 
 func (e *engine) Inspect(ctx context.Context, id string) (ContainerInfo, error) {
@@ -311,6 +345,7 @@ func fromInspectDetails(c container.InspectResponse) Details {
 	var exposed network.PortSet
 	if cf := c.Config; cf != nil {
 		d.Image, d.Entrypoint, d.Cmd, d.WorkingDir, d.User, d.Env = cf.Image, cf.Entrypoint, cf.Cmd, cf.WorkingDir, cf.User, cf.Env
+		d.Labels = cf.Labels
 		exposed = cf.ExposedPorts
 	}
 	var bindings network.PortMap
@@ -422,6 +457,22 @@ func (e *engine) SizeRootFs(ctx context.Context, id string) (int64, error) {
 		return 0, nil
 	}
 	return *res.Container.SizeRootFs, nil
+}
+
+func (e *engine) ContainerSize(ctx context.Context, id string) (rw, rootfs *int64, err error) {
+	res, err := e.c.ContainerInspect(ctx, id, client.ContainerInspectOptions{Size: true})
+	if err != nil {
+		return nil, nil, wrap(err)
+	}
+	return res.Container.SizeRw, res.Container.SizeRootFs, nil
+}
+
+func (e *engine) ImageInspect(ctx context.Context, id string) (ImageInfo, error) {
+	res, err := e.c.ImageInspect(ctx, id)
+	if err != nil {
+		return ImageInfo{}, wrap(err)
+	}
+	return ImageInfo{ID: res.ID, Tags: res.RepoTags, Size: res.Size, Created: res.Created}, nil
 }
 
 func (e *engine) Changes(ctx context.Context, id string) ([]Change, error) {

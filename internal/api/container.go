@@ -64,6 +64,8 @@ type radioJSON struct {
 	Networks      []dockerx.Network `json:"networks"`
 	Mounts        []mountJSON       `json:"mounts"`
 	Tmpfs         []string          `json:"tmpfs"`
+	// Labels: by secrets.Labels only (spec v0.2 §5.2), never revealed.
+	Labels []secrets.Label `json:"labels"`
 }
 
 func toRadioJSON(c dockerx.ContainerInfo) radioJSON {
@@ -78,7 +80,7 @@ func toRadioJSON(c dockerx.ContainerInfo) radioJSON {
 		Entrypoint: nonNil(ep), Cmd: nonNil(cmd), CommandMasked: epMasked || cmdMasked,
 		WorkingDir: d.WorkingDir, User: d.User, Tty: c.Tty, LogDriver: c.LogDriver,
 		Env: secrets.Env(d.Env), Ports: nonNil(d.Ports), NetworkMode: d.NetworkMode,
-		Networks: nonNil(d.Networks), Mounts: []mountJSON{}, Tmpfs: nonNil(c.Tmpfs),
+		Networks: nonNil(d.Networks), Mounts: []mountJSON{}, Tmpfs: nonNil(c.Tmpfs), Labels: secrets.Labels(d.Labels),
 	}
 	for _, m := range c.Mounts {
 		out.Mounts = append(out.Mounts, mountJSON{Type: m.Type, Name: m.Name, Source: m.Source,

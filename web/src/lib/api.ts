@@ -45,6 +45,9 @@ export type Container = {
 	status: string;
 	created: string;
 	ports: Port[];
+	// Spec v0.2 §5.1: Compose labels, absent outside Compose or when masked.
+	project?: string;
+	service?: string;
 };
 // Spec v0.2 §5.10: host is masked by the agent (secrets.Line).
 export type DockerInfo = { host: string; connected: boolean; serverVersion: string; apiVersion: string };
@@ -191,9 +194,23 @@ export type Radiography = {
 	networks: Network[];
 	mounts: Mount[];
 	tmpfs: string[];
+	labels: Label[];
 };
 
+// Spec v0.2 §5.2: value null when masked, and no reveal for a label.
+export type Label = { key: string; value: string | null; masked: boolean };
+
 export const getContainer = (id: string) => api<Radiography>(`/containers/${encodeURIComponent(id)}`);
+
+// Spec v0.2 §5.3: loaded apart from the detail; a size Docker does not give
+// is null, files null without an index already built.
+export type Figures = {
+	sizeRw: number | null;
+	sizeRootFs: number | null;
+	imageSize: number | null;
+	files: { count: number; source: 'index' | 'snapshot' | 'count'; at: string } | null;
+};
+export const getFigures = (id: string) => api<Figures>(`/containers/${encodeURIComponent(id)}/figures`);
 
 // The agent journals the reveal (env.reveal) before it answers. The value is
 // only returned: never logged, never stored by the caller beyond its state.

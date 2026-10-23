@@ -652,3 +652,67 @@ func TestViewsServeReinspects(t *testing.T) {
 		t.Errorf("ÉVASION : %d GET /archive de /, attendu 2 (ancien index servi)", n)
 	}
 }
+
+// Spec v0.2 §5.3 (figures) and §5.7 (photo of the metadata): Cached and
+// CachedCount give the index already served to a request, under the key For
+// would use (full ID and FinishedAt), and never start a build.
+func TestViewsCachedNeverBuilds(t *testing.T) {
+	g := &gated{Fake: stoppedDocker(t), open: make(chan struct{})}
+	v := NewViews(g, Options{})
+	info := g.Infos["db"]
+	none := func(what string, info dockerx.ContainerInfo) {
+		t.Helper()
+		if fsys, ok := v.Cached(info); ok || fsys != nil {
+			t.Errorf("%s : Cached a servi un index", what)
+		}
+		if n, at, ok := v.CachedCount(info); ok || n != 0 || !at.IsZero() {
+			t.Errorf("%s : CachedCount = %d, %v, %v", what, n, at, ok)
+		}
+	}
+	none("aucun index", info)
+	if n := archiveCalls(g.Fake, vID, "/"); n != 0 || v.count() != 0 {
+		t.Fatalf("une construction lancée : %d GET /archive de /, %d index", n, v.count())
+	}
+	v.For(tctx, "db") // starts the build, held by the gate
+	none("construction en cours", info)
+	close(g.open)
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(time.Millisecond) {
+		v.mu.Lock()
+		b := v.builds[vID+"\x00"+info.FinishedAt]
+		done := b != nil && finished(b)
+		v.mu.Unlock()
+		if done {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("construction jamais finie")
+		}
+	}
+	none("index fini, jamais servi", info)
+	ready(t, v, "db")
+	start := time.Now()
+	fsys, ok := v.Cached(info)
+	if !ok {
+		t.Fatal("index servi, Cached refuse")
+	}
+	if _, _, err := fsys.List(tctx, "/etc"); err != nil {
+		t.Errorf("List : %v", err)
+	}
+	// image() of tarindex_test.go: 29 entries besides "/", /proc and /sys
+	// themselves kept, nothing under them.
+	n, at, ok := v.CachedCount(info)
+	if !ok || n != 29 || at.IsZero() || at.After(start) {
+		t.Errorf("CachedCount = %d, %v, %v ; attendu 29, l'heure de la construction", n, at, ok)
+	}
+	// Restarted and stopped since (new FinishedAt), or running now: the old
+	// index is not this container's state.
+	later := info
+	later.FinishedAt = "2026-10-09T11:00:00Z"
+	none("nouveau FinishedAt", later)
+	running := info
+	running.Running, running.Pid = true, 42
+	none("conteneur actif", running)
+	if n := archiveCalls(g.Fake, vID, "/"); n != 1 {
+		t.Errorf("%d GET /archive de /, attendu 1", n)
+	}
+}
