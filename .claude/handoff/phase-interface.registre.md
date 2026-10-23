@@ -50,3 +50,9 @@ Demande de l'utilisateur (2026-10-23) : « un front à la hauteur du produit ».
   - la colonne « Statut » remplacée par une durée traduite (et le code de sortie quand il est anormal) ;
   - plus de contraste entre la porte de la plaque et le fond en sombre.
 - Incident relevé par l'agent : vers 11 h, des conteneurs `hemera-*` ont été arrêtés par un `docker stop` normal. Ce n'était pas Hublot-Kit, qui était en lecture seule et n'a pas d'opération d'arrêt.
+- **v0.1.1 publiée (2026-10-23)** : PR #9 fusionnée (6b30eab), tag `v0.1.1`, run 39955979042 (`RELEASE OK : v0.1.1`).
+  - Étiquettes `0.1.1` et `0.1` ; celles de 0.1.0 intactes.
+  - Vérification anonyme : cosign OK et refus d'une autre identité, SBOM, `IMAGE OK`.
+  - Release publiée par l'utilisateur, marquée « latest ».
+  - Reste à faire : la doc d'installation donne encore `V=0.1.0` dans l'exemple de vérification ; à aligner dans la v0.2.
+- **Pivot de l'interface (décision de l'utilisateur, 2026-10-23)** : le thème « Quai » est abandonné au profit de « Graphite & Émeraude », sur la disposition de sa maquette. La suite se fait en v0.2, branche `phase/v0.2` (spec, plan et registre `phase-v0.2.registre.md`). La branche `phase/interface` est gardée, sans fusion : seules sa mécanique de thème et ses polices sont réutilisées.
