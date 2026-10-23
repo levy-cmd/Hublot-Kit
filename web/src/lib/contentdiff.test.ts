@@ -14,7 +14,6 @@ import {
 	sides,
 	type Side
 } from './contentdiff.ts';
-import { t } from './i18n/index.ts';
 
 const text = (s: string, utf8 = true): Preview => ({ kind: 'text', text: s, etag: 'e', utf8 });
 const binary: Preview = { kind: 'binary' };

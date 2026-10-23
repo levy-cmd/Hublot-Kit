@@ -60,7 +60,7 @@
 
 	function hrefFor(c: Container, p?: Panel): string {
 		if (narrow) return p ? `/c/${c.id}?tab=${p}` : `/c/${c.id}`;
-		return withParams(params, { c: c.id, panel: p ?? (c.id === chosenId ? panel : null), path: null, file: null, tab: null });
+		return withParams(params, { c: c.id, panel: p ?? (c.id === chosenId ? panel : null), path: null, file: null, diff: null, change: null, tab: null });
 	}
 
 	const stateHref = (s: string) => withParams(params, { state: s || null });
@@ -186,7 +186,7 @@
 						readOnly={readOnly()}
 						tabHref={(k) => withParams(params, { tab: k === 'overview' ? null : k })}
 						panelHref={(p) => withParams(params, { panel: p })}
-						closeHref={withParams(params, { c: null, panel: null, tab: null, path: null, file: null })}
+						closeHref={withParams(params, { c: null, panel: null, tab: null, path: null, file: null, diff: null, change: null })}
 					/>
 				</aside>
 			{/key}

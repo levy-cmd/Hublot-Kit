@@ -91,18 +91,79 @@ test('connexion, liste, panneaux fichiers et diff', async ({ page }) => {
 	await expect(page.locator('.preview')).toContainText('bonjour hublot');
 	await expect(page.getByRole('row', { name: /note\.txt/ }).locator('abbr.mark.added')).toBeVisible();
 
-	// Diff panel: the added file, and its link back to the file.
+	// Diff panel: the added file, its content alone (tranche 7), and its
+	// link back to the file.
 	const panels = page.getByRole('navigation', { name: 'Panneaux du conteneur' });
 	await panels.getByRole('link', { name: "Diff avec l'image" }).click();
 	await expect(page).toHaveURL(/panel=diff/);
 	await expect(page.getByRole('listitem').filter({ hasText: '/root/note.txt' })).toContainText('ajouté');
 	await page.getByRole('link', { name: '/root/note.txt', exact: true }).click();
+	await expect(page).toHaveURL(/diff=%2Froot%2Fnote\.txt/);
+	await expect(page).toHaveURL(/change=added/);
+	const content = page.locator('.p-content');
+	await expect(content).toContainText("seule la version du conteneur existe");
+	await expect(content.locator('.cm-content')).toHaveText('bonjour hublot');
+	await content.getByRole('link', { name: "Ouvrir dans l'explorateur" }).click();
 	await expect(page).toHaveURL(/file=%2Froot%2Fnote\.txt/);
 	await expect(page).toHaveURL(/panel=files/);
 	await expect(page.locator('.preview')).toContainText('bonjour hublot');
+	expect(new URL(page.url()).searchParams.get('c')).toBe(id);
+
+	// Content diff of a modified file (tranche 7, spec v0.2 §5.6):
+	// hublot-e2e-motd replaced the first line of /etc/motd and added one at
+	// the end, and the tag that started it
+	// was removed (scripts/e2e.sh, Review Focus 5): the image is read by its
+	// ID. The first answer of the image is a 202: its progress shows.
+	const motd = await page.evaluate(() =>
+		fetch('/api/containers')
+			.then((r) => r.json())
+			.then((l: { id: string; name: string }[]) => l.find((c) => c.name === 'hublot-e2e-motd')?.id)
+	);
+	expect(motd).toMatch(/^[0-9a-f]{64}$/);
+	const radio = await page.evaluate((id) => fetch(`/api/containers/${id}`).then((r) => r.json()), motd);
+	expect(radio.image).toBe('hublot-e2e-motd'); // a name Docker no longer knows
+	const imageCalls: string[] = [];
+	let faked = false;
+	const imageFile = /\/api\/images\/[^/]+\/fs\/file\?/;
+	await page.route(imageFile, (route) => {
+		imageCalls.push(new URL(route.request().url()).pathname);
+		if (faked) return route.continue();
+		faked = true;
+		return route.fulfill({
+			status: 202,
+			contentType: 'application/json',
+			body: JSON.stringify({ error: 'indexing', detail: 'extracting', progress: 0.42 })
+		});
+	});
+	await page.goto(`/?c=${motd}&panel=diff`);
+	await page.getByRole('link', { name: '/etc/motd', exact: true }).click();
+	await expect(content).toContainText("Lecture du fichier dans l'image : 42 %");
+	const added = content.locator('.cm-changedLine');
+	await expect(added).toHaveCount(2, { timeout: 30_000 });
+	await expect(added).toHaveText(['Bienvenue sur Hublot', 'ligne ajoutée par hublot']);
+	await expect(content.locator('.cm-deletedLine')).toHaveCount(1); // the image's first line
+	// Line numbers of each side: an added line has none in the image, the
+	// removed one none in the container.
+	const lines = await content.locator('.cm-content .cm-line').count();
+	const [imageNums, containerNums] = await content
+		.locator('.hk-num')
+		.evaluateAll((gs) => gs.map((g) => [...g.querySelectorAll('.cm-gutterElement')].map((e) => e.textContent).filter(Boolean)));
+	const top = (l: (string | null)[]) => Math.max(...l.map(Number).filter((n) => !Number.isNaN(n)));
+	expect(imageNums.filter((n) => n === '+')).toHaveLength(2);
+	expect(containerNums.filter((n) => n === '−')).toHaveLength(1);
+	expect(imageNums.slice(0, 3)).toContain('1'); // the removed line, above the first
+	expect(top(imageNums)).toBe(lines - 1);
+	expect(top(containerNums)).toBe(lines);
+	expect(imageCalls.length).toBeGreaterThanOrEqual(2);
+	for (const p of imageCalls) expect(p).toMatch(/^\/api\/images\/[0-9a-f]{64}\/fs\/file$/);
+	expect(imageCalls[0].split('/')[3]).toBe(radio.imageId.replace(/^sha256:/, ''));
+	await page.unroute(imageFile);
+
+	// Another container drops the diff shown.
+	const other = await page.getByRole('link', { name: 'hublot-e2e', exact: true }).first().getAttribute('href');
+	expect(other).not.toMatch(/[?&](diff|change)=/);
 
 	// The full page keeps working (links of v0.1, phone).
-	expect(new URL(page.url()).searchParams.get('c')).toBe(id);
 	await page.goto(`/c/${id}?tab=diff`);
 	await expect(page.getByRole('listitem').filter({ hasText: '/root/note.txt' })).toBeVisible();
 

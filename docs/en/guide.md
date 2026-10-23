@@ -70,8 +70,17 @@ Labels often hold secrets the masking does not recognise, for example `traefik.h
 From 90 rem wide, four panels side by side; below, tabs.
 
 1. **File system**: the explorer. "Explore" shows the whole folder, "Diff" only what changed since the image; in both, a letter marks an added (A) or modified (M) file. For a stopped container, the first opening builds an index, with its progress.
-2. **Diff with the image**: the counts of additions, changes and deletions, then the list; a path opens the file in the explorer.
-3. **File content**: the preview with its line numbers, the download and, when writes are allowed, editing.
+2. **Diff with the image**: the counts of additions, changes and deletions, then the list; a path opens its content diff in the next panel.
+3. **File content**: the preview with its line numbers, the download and, when writes are allowed, editing. Or the content diff of the path chosen in the Diff panel; the last one chosen wins.
+
+### The content diff
+
+For a **modified** file, the unified diff between its version in the container's image and its version in the container, read only. Two columns of numbers: left the line in the image, right in the container; `+` marks an added line (no number in the image), `−` a removed line (no number in the container). An **added** file shows the container version only, a **deleted** file the image version only. The folder icon opens the file in the explorer.
+
+- The image is read by its ID, without a container: the diff also works when the tag that started the container was removed or moved. The first read of a file of the image reads its export again up to the layer that holds it; a progress shows meanwhile, as in the image explorer. For a stopped container, the container's index is built the first time too.
+- No diff, and a message that says why, when one of the two versions is binary (a NUL byte in the first 8 KiB, or a PNG, JPEG, GIF or WebP picture), is over 2 MiB, is not a regular file (directory, link, device), or does not exist on that side.
+- When the text is the same, the panel says so: only the metadata changed, or only the line endings (CRLF and LF).
+- The diff shows nothing more than the two previews: what the container explorer and the image explorer would show for that path. A secrets file (`.env`, a key) reads in clear, as in the preview. It is computed in the browser.
 4. **Live logs**: the timestamp, the level and the message. The level is guessed from the text (`ERROR`, `WARN`, `INFO`, `DEBUG`, or a `level` field); it is a heuristic, and otherwise the stream it came from (`stdout` or `stderr`) is shown. "Auto-scroll" follows the end of the stream; turning it off does not pause the stream. "Pause" stops receiving, "Resume" catches up with the lines that arrived meanwhile.
 
 ## The Images page

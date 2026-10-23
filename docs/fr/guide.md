@@ -70,8 +70,17 @@ Les labels portent souvent des secrets que le masquage ne reconnaît pas, par ex
 À partir de 90 rem de large, quatre panneaux côte à côte ; en dessous, des onglets.
 
 1. **Système de fichiers** : l'explorateur. « Explorer » montre tout le dossier, « Diff » seulement ce qui a changé depuis l'image ; dans les deux cas, une lettre marque un fichier ajouté (A) ou modifié (M). Pour un conteneur arrêté, la première ouverture construit un index, avec sa progression.
-2. **Diff avec l'image** : les compteurs des ajouts, modifications et suppressions, puis la liste ; un chemin ouvre le fichier dans l'explorateur.
-3. **Contenu du fichier** : l'aperçu avec ses numéros de ligne, le téléchargement et, si l'écriture est permise, la modification.
+2. **Diff avec l'image** : les compteurs des ajouts, modifications et suppressions, puis la liste ; un chemin ouvre son diff de contenu dans le panneau suivant.
+3. **Contenu du fichier** : l'aperçu avec ses numéros de ligne, le téléchargement et, si l'écriture est permise, la modification. Ou bien le diff de contenu du chemin choisi dans le panneau Diff ; le dernier choisi l'emporte.
+
+### Le diff de contenu
+
+Pour un fichier **modifié**, le diff unifié entre sa version dans l'image du conteneur et sa version dans le conteneur, en lecture seule. Deux colonnes de numéros : à gauche la ligne dans l'image, à droite dans le conteneur ; `+` marque une ligne ajoutée (pas de numéro dans l'image), `−` une ligne retirée (pas de numéro dans le conteneur). Un fichier **ajouté** ne montre que la version du conteneur, un fichier **supprimé** que celle de l'image. L'icône de dossier ouvre le fichier dans l'explorateur.
+
+- L'image est lue par son ID, sans conteneur : le diff marche aussi quand l'étiquette qui a lancé le conteneur a été retirée ou déplacée. La première lecture d'un fichier de l'image relit son export jusqu'à la couche qui le porte ; une progression s'affiche pendant ce temps, comme dans l'explorateur des images. Pour un conteneur arrêté, l'index du conteneur se construit aussi la première fois.
+- Pas de diff, et un message qui dit pourquoi, si l'une des deux versions est binaire (octet nul dans les 8 premiers Kio, ou image PNG, JPEG, GIF, WebP), dépasse 2 Mio, n'est pas un fichier régulier (dossier, lien, périphérique), ou n'existe pas de ce côté.
+- Si le texte est le même, le panneau le dit : seules les métadonnées ont changé, ou seules les fins de ligne (CRLF et LF).
+- Le diff ne montre rien de plus que les deux aperçus : ce que l'explorateur du conteneur et celui de l'image afficheraient pour ce chemin. Un fichier de secrets (`.env`, clé) s'y lit en clair, comme dans l'aperçu. Il est calculé dans le navigateur.
 4. **Logs en direct** : l'horodatage, le niveau et le message. Le niveau est déduit du texte (`ERROR`, `WARN`, `INFO`, `DEBUG`, ou un champ `level`) ; c'est une heuristique, et à défaut le flux d'origine (`stdout` ou `stderr`) est affiché. « Suivi automatique » fait suivre la fin du flux ; le couper ne met pas le flux en pause. « Pause » arrête la réception, « Reprendre » rattrape les lignes arrivées entre-temps.
 
 ## La page Images

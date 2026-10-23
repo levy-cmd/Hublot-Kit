@@ -10,13 +10,22 @@ make web >/dev/null
 arch=$(docker version -f '{{.Server.Arch}}')
 CGO_ENABLED=0 GOOS=linux GOARCH="$arch" go build -o bin/hublot-linux ./cmd/hublot
 cleanup() {
-  docker rm -f hublot-e2e hublot-e2e-agent >/dev/null 2>&1 || true
+  docker rm -f hublot-e2e hublot-e2e-motd hublot-e2e-agent >/dev/null 2>&1 || true
+  docker rmi hublot-e2e-motd >/dev/null 2>&1 || true # l'étiquette seule, alpine:3 reste
   docker rmi -f hublot-e2e-img >/dev/null 2>&1 || true
   docker volume rm -f hublot-e2e-data >/dev/null 2>&1 || true
 }
 cleanup
 trap cleanup EXIT
 docker run --name hublot-e2e -e DB_PASSWORD=s3cr3t-e2e -e API_TOKEN=s3cr3t-1 -e API_TOKEN=s3cr3t-2 -e GREETING=bonjour alpine:3 sh -c 'echo "bonjour hublot" > /root/note.txt'
+# Diff de contenu (plan v0.2, tranche 7) : un conteneur arrêté qui remplace la
+# première ligne de /etc/motd et en ajoute une à la fin, lancé par une étiquette de test posée sur alpine:3. Puis
+# l'étiquette est retirée (Review Focus 5) : le nom du conteneur ne désigne
+# plus d'image, et le diff doit passer par l'ID. Rien d'autre n'est supprimé.
+docker tag alpine:3 hublot-e2e-motd
+docker run --name hublot-e2e-motd hublot-e2e-motd sh -c 'sed -i "1s/.*/Bienvenue sur Hublot/" /etc/motd && echo "ligne ajoutée par hublot" >> /etc/motd'
+docker rmi -f hublot-e2e-motd >/dev/null
+if docker image inspect hublot-e2e-motd >/dev/null 2>&1; then echo "l'étiquette hublot-e2e-motd existe encore" >&2; exit 1; fi
 # Image à secrets témoins (spec v0.2 §5.4) : un argument de construction dans
 # l'historique (RUN |1 GH_PAT=…), une variable et un label tiers dans la
 # configuration. Une couche de quelques octets sur alpine:3, supprimée à la fin.

@@ -4,12 +4,14 @@
 	import type { Entry } from '#lib/api.ts';
 	import { t } from '#lib/i18n/index.ts';
 	import Icon from '#lib/icons/Icon.svelte';
+	import { diffChange, diffHref } from '#lib/contentdiff.ts';
 	import { logsLive, mountedPanels, type Panel } from '#lib/panels.ts';
 	import { withParams } from '#lib/url.ts';
 	import ChangesList from './ChangesList.svelte';
 	import FileBrowser from './FileBrowser.svelte';
 	import FilePreview from './FilePreview.svelte';
 	import LogsView from './LogsView.svelte';
+	import UnifiedDiff from './UnifiedDiff.svelte';
 
 	// The bottom panels of the chosen container (spec v0.2 §3): side by side
 	// from 90 rem, tabs below (the file system tab then holds the content).
@@ -44,6 +46,12 @@
 	let mounted = $derived(mountedPanels(new Set(opened), panel, wide));
 
 	let file = $derived(page.url.searchParams.get('file'));
+	// The content panel shows a file's preview, or the content diff of a
+	// path of the diff panel (F17, spec v0.2 §5.6): the last one chosen (a
+	// diff link drops the file; a file chosen in the explorer wins).
+	let diff = $derived(file ? null : diffChange(page.url.searchParams));
+	// Below 90 rem the content goes with its panel: the explorer's, or the diff's.
+	let contentCurrent = $derived(panel === 'files' || (panel === 'diff' && diff !== null));
 	let entry = $state<Entry | undefined>();
 	const panelHref = (p: Panel) => withParams(page.url.searchParams, { panel: p });
 	// A path of the diff opens in the file system panel, folder and file.
@@ -56,7 +64,7 @@
 	];
 </script>
 
-<section class="panels" data-panel={panel} aria-label={t('panels.label')}>
+<section class="panels" data-panel={panel} data-content={contentCurrent ? '' : undefined} aria-label={t('panels.label')}>
 	<nav class="tabs switch" aria-label={t('panels.label')}>
 		{#each TABS as p (p.id)}
 			<a href={panelHref(p.id)} aria-current={panel === p.id ? 'page' : undefined}>
@@ -78,15 +86,21 @@
 		{#if mounted.has('diff')}
 			<section class="panel p-diff" class:current={panel === 'diff'} aria-labelledby="p-diff">
 				<h2 id="p-diff">{t('panels.diff')}</h2>
-				<div class="body"><ChangesList {id} {fileHref} /></div>
+				<div class="body">
+					<ChangesList {id} {fileHref} diffHref={(c) => diffHref(page.url.searchParams, c)} selected={diff?.path} />
+				</div>
 			</section>
 		{/if}
-		{#if mounted.has('files')}
-			<section class="panel p-content preview" class:current={panel === 'files'} aria-labelledby="p-content">
+		{#if mounted.has('files') || (mounted.has('diff') && diff)}
+			<section class="panel p-content preview" class:current={contentCurrent} aria-labelledby="p-content">
 				<h2 id="p-content" class="sr-only">{t('panels.content')}</h2>
 				<div class="body">
 					{#if file}
 						<FilePreview {id} {name} path={file} {entry} {stopped} {readOnly} />
+					{:else if diff}
+						{#key `${diff.kind}:${diff.path}`}
+							<UnifiedDiff {id} change={diff} {stopped} fileHref={fileHref(diff.path)} />
+						{/key}
 					{:else}
 						<p class="muted empty"><Icon name="file" size={20} /> {t('files.selectFile')}</p>
 					{/if}
@@ -161,12 +175,12 @@
 			clip-path: inset(50%);
 			white-space: nowrap;
 		}
-		.panels[data-panel='files'] .grid {
+		.panels[data-content] .grid {
 			grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
 		}
 	}
 	@media (max-width: 64rem) {
-		.panels[data-panel='files'] .grid {
+		.panels[data-content] .grid {
 			grid-template-columns: minmax(0, 1fr);
 		}
 	}
