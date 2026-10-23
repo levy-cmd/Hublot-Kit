@@ -101,7 +101,7 @@ The alternative to the container: the static binary, run as root by systemd. Che
 ([Verify the release](#verify-the-release)). Use `amd64` or `arm64`.
 
 ```sh
-V=0.1.0
+V=0.1.2
 ARCH=amd64
 curl -fLO "https://github.com/levy-cmd/Hublot-Kit/releases/download/v$V/hublot-kit_${V}_linux_${ARCH}.tar.gz"
 tar -xzf "hublot-kit_${V}_linux_${ARCH}.tar.gz"
@@ -250,7 +250,7 @@ The signature of `checksums.txt` followed by the checksum is enough; each archiv
 (`<archive>.sigstore.json`), an optional direct check with the same `cosign verify-blob` command.
 
 ```sh
-V=0.1.0
+V=0.1.2
 ARCH=amd64
 BASE="https://github.com/levy-cmd/Hublot-Kit/releases/download/v$V"
 curl -fLO "$BASE/hublot-kit_${V}_linux_${ARCH}.tar.gz"
