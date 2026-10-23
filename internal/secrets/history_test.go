@@ -31,7 +31,7 @@ func TestHistoryBuildArgs(t *testing.T) {
 		"RUN |0 /bin/sh -c apk add curl":   "RUN |0 /bin/sh -c apk add curl",
 		"|99999999999999999999 X=s3cr3t-i": "|99999999999999999999 ••••••",
 		// The first shell, sh or bash, ends the arguments; the rest is a shell line.
-		"|1 A=s3cr3t-j /bin/bash -c x /bin/sh -c y": "|1 A=•••••• /bin/bash -c x /bin/sh -c y",
+		"|1 A=s3cr3t-j /bin/bash -c x /bin/sh -c y": "|1 ••••••", // two shells: the cut is unsure (second review)
 		// A name that is not ASCII is not a name: part of the value.
 		"|2 X=a ÉCHO=s3cr3t-k /bin/sh -c y": "|2 •••••• /bin/sh -c y",
 		// Then Line, on the whole line: a secret of §7 in the command.
@@ -84,6 +84,26 @@ func TestHistoryArgAndLabel(t *testing.T) {
 // single value runs to the shell. An ARG has no count: "dXNl…==" is a
 // NAME= word too, so at most one assignment, its last word, after names
 // alone; else the whole part is masked.
+// Second review of tranche 5 (Codex): the cut was at the FIRST shell; a value
+// that holds a shell itself fooled it ("|1 X=p /bin/sh -c token /bin/sh -c
+// cmd": "token" went through Line only). After "|N", more than one shell,
+// spaced in any way, masks the whole rest.
+func TestHistoryTwoShells(t *testing.T) {
+	check(t, map[string]string{
+		"|1 X=préfixe /bin/sh -c s3cr3t-a /bin/sh -c vraie-commande": "|1 ••••••",
+		"RUN |1 X=p /bin/bash -c s3cr3t-b /bin/sh -c cmd # buildkit": "RUN |1 ••••••",
+		"|1 X=p /bin/sh -c s3cr3t-c /bin/bash -c cmd":                "|1 ••••••",
+		"|2 A=1 B=x/bin/sh -c s3cr3t-d /bin/sh -c cmd":               "|2 ••••••",
+		"|1 X=/bin/sh -c s3cr3t-e /bin/bash -c cmd":                  "|1 ••••••",
+		"|1 X=p /bin/sh  -c s3cr3t-f /bin/sh -c cmd":                 "|1 ••••••",
+		"|1 X=p\t/bin/bash\t-c s3cr3t-g /bin/sh -c cmd":              "|1 ••••••",
+		"RUN\t|2 A=1 B=p /bin/sh -c s3cr3t-h /bin/sh -c x":           "RUN\t|2 ••••••",
+		"|1 X=s3cr3t-i /bin/sh -c echo 'nested /bin/sh -c call'":     "|1 ••••••",
+		// One shell: the cut stays.
+		"|1 X=s3cr3t-j /bin/sh -c sh -c 'make'": "|1 X=•••••• /bin/sh -c sh -c 'make'",
+	})
+}
+
 func TestHistoryValueWithBlanks(t *testing.T) {
 	check(t, map[string]string{
 		"ARG NPM_AUTH=Basic s3cr3tbase64==":                              "ARG ••••••",

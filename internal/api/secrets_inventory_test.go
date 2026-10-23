@@ -485,6 +485,46 @@ func TestSecretsInventoryNameFromClearTextOnly(t *testing.T) {
 	}
 }
 
+// Second review of tranche 5: Docker runs the entrypoint and the command as
+// one argv; a secret flag that ends the entrypoint names the first argument
+// of the command. part and index name the field of origin, after the split.
+func TestSecretsInventoryCommandBoundary(t *testing.T) {
+	cases := []struct {
+		ep, cmd []string
+		want    []argRow
+	}{
+		{[]string{"redis-server", "--requirepass"}, []string{"s3cr3t-v", "--port", "6379"},
+			[]argRow{{Part: "cmd", Index: 0, Kind: "flag", Name: "--requirepass"}}},
+		{[]string{"app", "--password="}, []string{"s3cr3t-w"}, []argRow{{Part: "cmd", Index: 0, Kind: "flag", Name: "--password"}}},
+		{[]string{"sh", "-c"}, []string{"curl -H 'Authorization: Bearer s3cr3t-x' x"},
+			[]argRow{{Part: "cmd", Index: 0, Kind: "shell", Name: "sh -c"}}},
+		{[]string{"/entry.sh", "--token", "s3cr3t-y"}, []string{"run", "--secret", "s3cr3t-z"},
+			[]argRow{{Part: "entrypoint", Index: 2, Kind: "flag", Name: "--token"}, {Part: "cmd", Index: 2, Kind: "flag", Name: "--secret"}}},
+		// The name comes from clear text only, across the boundary too.
+		{[]string{"app", "--password="}, []string{"--token", "s3cr3t-u"},
+			[]argRow{{Part: "cmd", Index: 0, Kind: "flag", Name: "--password"}, {Part: "cmd", Index: 1, Kind: "other"}}},
+	}
+	fake := &dockerx.Fake{Infos: map[string]dockerx.ContainerInfo{}}
+	for n, tc := range cases {
+		id := hexID(700 + n)
+		name := fmt.Sprintf("b%d", n)
+		fake.Containers = append(fake.Containers, dockerx.Container{ID: id, Name: name, State: "running"})
+		fake.Infos[id] = dockerx.ContainerInfo{ID: id, Name: name, Running: true, Pid: 3,
+			Details: dockerx.Details{Entrypoint: tc.ep, Cmd: tc.cmd}}
+	}
+	f, c := inventoryFixture(t, fake, fake, false)
+	rec := f.do("GET", "/api/secrets", "", c)
+	if strings.Contains(rec.Body.String(), "s3cr3t") {
+		t.Errorf("valeur dans la réponse : %s", rec.Body)
+	}
+	got := decodeInventory(t, rec.Body.Bytes())
+	for n, tc := range cases {
+		if a := got[fmt.Sprintf("b%d", n)].Args; !reflect.DeepEqual(a, tc.want) {
+			t.Errorf("%q + %q :\n obtenu  %+v\n attendu %+v", tc.ep, tc.cmd, a, tc.want)
+		}
+	}
+}
+
 // Review of tranche 4 (relecteur, Important): Docker keeps two variables of
 // the same name (API_TOKEN=1, API_TOKEN=2); the inventory lists a name once.
 func TestSecretsInventoryDuplicateNames(t *testing.T) {
