@@ -19,8 +19,10 @@
 		formatMode,
 		formatSize,
 		fsErrorMessage,
+		imageFsErrorMessage,
 		indexingPercent,
 		joinPath,
+		listImageDir,
 		parentPath,
 		resolveLinkTarget,
 		sortEntries
@@ -35,6 +37,8 @@
 
 	// compact: the narrow bottom panel (name and date only); withPreview false:
 	// the preview is shown by another panel, told of the selected entry by onselect.
+	// source "image": the files of an image (spec v0.2 §5.5), id its 64 hex
+	// characters; read only: no Diff, no upload, no download (Q63).
 	let {
 		id,
 		name,
@@ -42,8 +46,9 @@
 		readOnly = true,
 		compact = false,
 		withPreview = true,
-		diffHref,
-		onselect
+		diffHref = '',
+		onselect,
+		source = 'container'
 	}: {
 		id: string;
 		name: string;
@@ -51,9 +56,11 @@
 		readOnly?: boolean;
 		compact?: boolean;
 		withPreview?: boolean;
-		diffHref: string;
+		diffHref?: string;
 		onselect?: (entry: Entry | undefined) => void;
+		source?: 'container' | 'image';
 	} = $props();
+	let image = $derived(source === 'image');
 
 	// The URL carries the state (?path=dir&file=selected): back button and links work.
 	let dir = $derived(page.url.searchParams.get('path') || '/');
@@ -118,7 +125,7 @@
 		loading = true;
 		error = '';
 		downloadError = '';
-		listDir(id, wanted)
+		(image ? listImageDir(id, wanted) : listDir(id, wanted))
 			.then((l) => {
 				if (!current) return;
 				indexing = null;
@@ -139,7 +146,8 @@
 					return;
 				}
 				indexing = null;
-				error = e instanceof ApiError ? fsErrorMessage(e.code, e.detail, stopped) : errorMessage('unknown');
+				if (!(e instanceof ApiError)) error = errorMessage('unknown');
+				else error = image ? imageFsErrorMessage(e.code, false) : fsErrorMessage(e.code, e.detail, stopped);
 			})
 			.finally(() => {
 				if (current) loading = false;
@@ -156,6 +164,7 @@
 		const wanted = id;
 		let current = true;
 		changes = [];
+		if (image) return; // an image has no changes
 		listChanges(wanted)
 			.then((l) => {
 				if (current) changes = l ?? [];
@@ -244,30 +253,34 @@
 
 <div class="browser" class:compact class:alone={!withPreview}>
 	<section class="listing">
-		<div class="bar">
-			<div class="seg" role="group" aria-label={t('files.mode')} title={t('files.modeHint')}>
-				<button type="button" aria-pressed={mode === 'explore'} onclick={() => (mode = 'explore')}>{t('files.mode.explore')}</button>
-				<button type="button" aria-pressed={mode === 'diff'} onclick={() => (mode = 'diff')}>{t('files.mode.diff')}</button>
-			</div>
-			<div class="tools">
-				<button type="button" class="icon-btn small" onclick={downloadDir} aria-label={t('files.downloadDir')} title={t('files.downloadDir')}>
-					<Icon name="download" />
-				</button>
-				{#if !readOnly}
-					<input type="file" bind:this={picker} onchange={picked} hidden />
-					<button
-						type="button"
-						class="icon-btn small"
-						disabled={uploading}
-						onclick={() => picker?.click()}
-						aria-label={uploading ? t('write.uploading') : t('write.upload')}
-						title={uploading ? t('write.uploading') : t('write.upload')}
-					>
-						<Icon name="upload" />
+		{#if image}
+			<p class="note">{t('imagefs.readOnly')}</p>
+		{:else}
+			<div class="bar">
+				<div class="seg" role="group" aria-label={t('files.mode')} title={t('files.modeHint')}>
+					<button type="button" aria-pressed={mode === 'explore'} onclick={() => (mode = 'explore')}>{t('files.mode.explore')}</button>
+					<button type="button" aria-pressed={mode === 'diff'} onclick={() => (mode = 'diff')}>{t('files.mode.diff')}</button>
+				</div>
+				<div class="tools">
+					<button type="button" class="icon-btn small" onclick={downloadDir} aria-label={t('files.downloadDir')} title={t('files.downloadDir')}>
+						<Icon name="download" />
 					</button>
-				{/if}
+					{#if !readOnly}
+						<input type="file" bind:this={picker} onchange={picked} hidden />
+						<button
+							type="button"
+							class="icon-btn small"
+							disabled={uploading}
+							onclick={() => picker?.click()}
+							aria-label={uploading ? t('write.uploading') : t('write.upload')}
+							title={uploading ? t('write.uploading') : t('write.upload')}
+						>
+							<Icon name="upload" />
+						</button>
+					{/if}
+				</div>
 			</div>
-		</div>
+		{/if}
 		<nav class="crumbs mono" aria-label={t('files.path')}>
 			{#each breadcrumbs(dir) as c, i (c.path)}
 				{#if i > 1}<span aria-hidden="true">/</span>{/if}
@@ -282,9 +295,9 @@
 
 		{#if indexing !== null}
 			<div class="state">
-				<p role="status">{t('files.indexing')} : {indexing} %</p>
+				<p role="status">{image ? t('imagefs.indexing') : t('files.indexing')} : {indexing} %</p>
 				<progress max="100" value={indexing}></progress>
-				<p class="note">{t('files.indexingHint')}</p>
+				<p class="note">{image ? t('imagefs.indexingHint') : t('files.indexingHint')}</p>
 			</div>
 		{:else if error}
 			<div class="state">
@@ -348,7 +361,7 @@
 	{#if withPreview}
 		<section class="preview">
 			{#if file}
-				<FilePreview {id} {name} path={file} entry={selected} {stopped} {readOnly} />
+				<FilePreview {id} {name} path={file} entry={selected} {stopped} {readOnly} {source} />
 			{:else}
 				<p class="muted">{t('files.selectFile')}</p>
 			{/if}

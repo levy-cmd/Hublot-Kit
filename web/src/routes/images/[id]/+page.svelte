@@ -4,10 +4,12 @@
 	import { ApiError } from '#lib/api.ts';
 	import { stateLabel, stateTone } from '#lib/containers.ts';
 	import CopyButton from '#lib/components/CopyButton.svelte';
+	import FileBrowser from '#lib/components/FileBrowser.svelte';
 	import { formatSize } from '#lib/files.ts';
 	import { errorMessage, lang, t, tf } from '#lib/i18n/index.ts';
 	import Icon from '#lib/icons/Icon.svelte';
-	import { getImage, imageName, layerCounts, platform, type ImageDetail } from '#lib/images.ts';
+	import { getImage, imageHex, imageName, layerCounts, platform, type ImageDetail } from '#lib/images.ts';
+	import { withParams } from '#lib/url.ts';
 	import { commandLine, splitLabels } from '#lib/xray.ts';
 
 	// Spec v0.2 §5.4: one image, by its full ID only (a name in the address
@@ -18,6 +20,12 @@
 	let error = $state('');
 	let reloads = $state(0);
 	let showEmpty = $state(false);
+	// Tabs (?tab=): the detail, or the files of the image (spec v0.2 §5.5),
+	// read from its layers on the first opening of the tab only (an export).
+	let tab = $derived(page.url.searchParams.get('tab') === 'files' ? 'files' : 'detail');
+	let hex = $derived(imageHex(id));
+	const tabHref = (k: 'detail' | 'files') =>
+		withParams(page.url.searchParams, { tab: k === 'files' ? 'files' : null, path: null, file: null });
 
 	$effect(() => {
 		const want = id;
@@ -96,108 +104,120 @@
 			</dl>
 		</section>
 
-		<section class="panel card" aria-labelledby="image-config">
-			<h2 id="image-config">{t('images.config')}</h2>
-			<h3>{t('images.command')}</h3>
-			{#if command}
-				<div class="with-copy">
-					<pre class="cmd mono">{command}</pre>
-					<CopyButton text={command} label={t('images.copyCommand')} />
-				</div>
-				{#if img.config.commandMasked}<p class="note small">{t('images.commandMasked')}</p>{/if}
-			{:else}
-				<p class="muted">{t('images.noCommand')}</p>
-			{/if}
+		<nav class="tabs" aria-label={t('imagefs.tabs')}>
+			<a href={tabHref('detail')} aria-current={tab === 'detail' ? 'page' : undefined}>{t('imagefs.tab.detail')}</a>
+			<a href={tabHref('files')} aria-current={tab === 'files' ? 'page' : undefined}>{t('imagefs.tab.files')}</a>
+		</nav>
 
-			<dl class="facts">
-				<dt>{t('images.workingDir')}</dt>
-				<dd class="mono">{img.config.workingDir || '—'}</dd>
-				<dt>{t('images.user')}</dt>
-				<dd class="mono">{img.config.user || '—'}</dd>
-				<dt>{t('images.ports')}</dt>
-				<dd class="mono">{img.config.exposedPorts.join(', ') || '—'}</dd>
-			</dl>
+		{#if tab === 'files' && hex}
+			<section class="panel card" aria-label={t('imagefs.tab.files')}>
+				<FileBrowser id={hex} name={imageName(img)} source="image" />
+			</section>
+		{:else}
 
-			<h3>{t('images.env')}</h3>
-			{#if img.config.env.length === 0}
-				<p class="muted">{t('images.noEnv')}</p>
-			{:else}
-				<ul class="env">
-					{#each img.config.env as v, i (i)}
-						<li>
-							<code class="vname">{v.name}</code>
-							{#if v.masked || v.value === null}
-								<span class="masked">••••••<span class="sr-only"> ({t('images.masked')})</span></span>
-							{:else}
-								<code class="value">{v.value}</code>
-							{/if}
-						</li>
-					{/each}
-				</ul>
-				{#if img.config.env.some((v) => v.masked)}<p class="note small">{t('images.envHint')}</p>{/if}
-			{/if}
+			<section class="panel card" aria-labelledby="image-config">
+				<h2 id="image-config">{t('images.config')}</h2>
+				<h3>{t('images.command')}</h3>
+				{#if command}
+					<div class="with-copy">
+						<pre class="cmd mono">{command}</pre>
+						<CopyButton text={command} label={t('images.copyCommand')} />
+					</div>
+					{#if img.config.commandMasked}<p class="note small">{t('images.commandMasked')}</p>{/if}
+				{:else}
+					<p class="muted">{t('images.noCommand')}</p>
+				{/if}
 
-			<h3>{t('images.labels')}</h3>
-			{#if labels.shown.length === 0 && labels.masked.length === 0}
-				<p class="muted">{t('images.noLabels')}</p>
-			{/if}
-			{#if labels.shown.length > 0}
-				<ul class="chips">
-					{#each labels.shown as l (l.key)}<li><span class="mono">{l.key}</span>=<span class="mono">{l.value}</span></li>{/each}
-				</ul>
-			{/if}
-			{#if labels.masked.length > 0}
-				{@const n = labels.masked.length}
-				{@const others = labels.shown.length > 0}
-				<details class="masked-labels">
-					<summary>{tf(`images.labelsMasked${others ? 'Other' : ''}.${n === 1 ? 'one' : 'other'}`, { n })}</summary>
-					<ul class="plain">
-						{#each labels.masked as k (k)}<li class="mono">{k}</li>{/each}
+				<dl class="facts">
+					<dt>{t('images.workingDir')}</dt>
+					<dd class="mono">{img.config.workingDir || '—'}</dd>
+					<dt>{t('images.user')}</dt>
+					<dd class="mono">{img.config.user || '—'}</dd>
+					<dt>{t('images.ports')}</dt>
+					<dd class="mono">{img.config.exposedPorts.join(', ') || '—'}</dd>
+				</dl>
+
+				<h3>{t('images.env')}</h3>
+				{#if img.config.env.length === 0}
+					<p class="muted">{t('images.noEnv')}</p>
+				{:else}
+					<ul class="env">
+						{#each img.config.env as v, i (i)}
+							<li>
+								<code class="vname">{v.name}</code>
+								{#if v.masked || v.value === null}
+									<span class="masked">••••••<span class="sr-only"> ({t('images.masked')})</span></span>
+								{:else}
+									<code class="value">{v.value}</code>
+								{/if}
+							</li>
+						{/each}
 					</ul>
-					<p class="note small">{t('images.labelsHint')}</p>
-				</details>
-			{/if}
-		</section>
+					{#if img.config.env.some((v) => v.masked)}<p class="note small">{t('images.envHint')}</p>{/if}
+				{/if}
 
-		<section class="panel card" aria-labelledby="image-layers">
-			<div class="row-head">
-				<h2 id="image-layers">{t('images.layers')}</h2>
-				<span class="muted small">{tf('images.layersSummary', counts)}</span>
-			</div>
-			<p class="note small">{t('images.layersHint')}</p>
-			<ol class="layers">
-				{#each layers as l (l.i)}
-					<li class:empty={l.empty}>
-						<pre class="mono by">{l.createdBy || '—'}</pre>
-						<span class="meta small">
-							{#if l.empty}<span class="muted">{t('images.layer.empty')}</span>{:else}{formatSize(l.size)}{/if}
-							· {when(l.created)}
-						</span>
-					</li>
-				{/each}
-			</ol>
-			{#if counts.empty > 0}
-				<button type="button" class="btn small" aria-expanded={showEmpty ? 'true' : 'false'} onclick={() => (showEmpty = !showEmpty)}>
-					{showEmpty ? t('images.emptyLayers.hide') : tf('images.emptyLayers.show', { n: counts.empty })}
-				</button>
-			{/if}
-		</section>
+				<h3>{t('images.labels')}</h3>
+				{#if labels.shown.length === 0 && labels.masked.length === 0}
+					<p class="muted">{t('images.noLabels')}</p>
+				{/if}
+				{#if labels.shown.length > 0}
+					<ul class="chips">
+						{#each labels.shown as l (l.key)}<li><span class="mono">{l.key}</span>=<span class="mono">{l.value}</span></li>{/each}
+					</ul>
+				{/if}
+				{#if labels.masked.length > 0}
+					{@const n = labels.masked.length}
+					{@const others = labels.shown.length > 0}
+					<details class="masked-labels">
+						<summary>{tf(`images.labelsMasked${others ? 'Other' : ''}.${n === 1 ? 'one' : 'other'}`, { n })}</summary>
+						<ul class="plain">
+							{#each labels.masked as k (k)}<li class="mono">{k}</li>{/each}
+						</ul>
+						<p class="note small">{t('images.labelsHint')}</p>
+					</details>
+				{/if}
+			</section>
 
-		<section class="panel card" aria-labelledby="image-ctrs">
-			<h2 id="image-ctrs">{t('images.containersTitle')}</h2>
-			{#if img.containers.length === 0}
-				<p class="muted">{t('images.noContainer')}</p>
-			{:else}
-				<ul class="ctrs">
-					{#each img.containers as c (c.id)}
-						<li>
-							<a href="/?c={c.id}" title={t('images.openContainer')}>{c.name}</a>
-							<span class="state tone-{stateTone(c.state)}"><span class="dot {stateTone(c.state)}"></span>{stateLabel(c.state)}</span>
+			<section class="panel card" aria-labelledby="image-layers">
+				<div class="row-head">
+					<h2 id="image-layers">{t('images.layers')}</h2>
+					<span class="muted small">{tf('images.layersSummary', counts)}</span>
+				</div>
+				<p class="note small">{t('images.layersHint')}</p>
+				<ol class="layers">
+					{#each layers as l (l.i)}
+						<li class:empty={l.empty}>
+							<pre class="mono by">{l.createdBy || '—'}</pre>
+							<span class="meta small">
+								{#if l.empty}<span class="muted">{t('images.layer.empty')}</span>{:else}{formatSize(l.size)}{/if}
+								· {when(l.created)}
+							</span>
 						</li>
 					{/each}
-				</ul>
-			{/if}
-		</section>
+				</ol>
+				{#if counts.empty > 0}
+					<button type="button" class="btn small" aria-expanded={showEmpty ? 'true' : 'false'} onclick={() => (showEmpty = !showEmpty)}>
+						{showEmpty ? t('images.emptyLayers.hide') : tf('images.emptyLayers.show', { n: counts.empty })}
+					</button>
+				{/if}
+			</section>
+
+			<section class="panel card" aria-labelledby="image-ctrs">
+				<h2 id="image-ctrs">{t('images.containersTitle')}</h2>
+				{#if img.containers.length === 0}
+					<p class="muted">{t('images.noContainer')}</p>
+				{:else}
+					<ul class="ctrs">
+						{#each img.containers as c (c.id)}
+							<li>
+								<a href="/?c={c.id}" title={t('images.openContainer')}>{c.name}</a>
+								<span class="state tone-{stateTone(c.state)}"><span class="dot {stateTone(c.state)}"></span>{stateLabel(c.state)}</span>
+							</li>
+						{/each}
+					</ul>
+				{/if}
+			</section>
+		{/if}
 	{/if}
 </div>
 

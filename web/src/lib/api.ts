@@ -95,8 +95,11 @@ async function get(url: string, signal?: AbortSignal): Promise<Response> {
 	return res;
 }
 
-export async function previewFile(id: string, path: string): Promise<Preview> {
-	const res = await get(`/api${fsPath(id, '/file', path)}`);
+export const previewFile = (id: string, path: string): Promise<Preview> => previewAt(`/api${fsPath(id, '/file', path)}`);
+
+/** The preview served at url: a container's file, or an image's (files.ts). */
+export async function previewAt(url: string): Promise<Preview> {
+	const res = await get(url);
 	const type = res.headers.get('Content-Type') ?? '';
 	const etag = res.headers.get('ETag') ?? '';
 	if (/^image\/(png|jpeg|gif|webp)$/.test(type)) return { kind: 'image', blob: await res.blob(), etag };

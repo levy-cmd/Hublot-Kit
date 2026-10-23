@@ -3,11 +3,15 @@
 	// of the top bar or the side bar entry open it; Escape closes it and the
 	// focus goes back where it was. The query lives here only: never stored,
 	// never in the page's URL; files are asked of the agent for the container
-	// open only, in its index already built (Q61).
+	// open only, in its index already built (Q61), or for the image open
+	// (/images/<ID>, spec v0.2 §5.5), in its index already built.
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import { ApiError } from '#lib/api.ts';
 	import { containerList } from '#lib/containerList.svelte.ts';
+	import { imageFileItems, searchImageFiles } from '#lib/files.ts';
+	import { imageList } from '#lib/imageList.svelte.ts';
+	import { imageName, imageShortId } from '#lib/images.ts';
 	import { errorMessage, t, tf } from '#lib/i18n/index.ts';
 	import Icon from '#lib/icons/Icon.svelte';
 	import type { IconName } from '#lib/icons/icons.ts';
@@ -35,13 +39,22 @@
 		fullId(containerList.items, page.url.searchParams.get('c') ?? (fullPage ? (page.params.id ?? null) : null))
 	);
 	let chosenName = $derived(containerList.items?.find((c) => c.id === chosen)?.name ?? '');
+	// Else the image open: its full ID, from the address of its page.
+	let chosenImage = $derived(chosen ? null : (/^\/images\/([0-9a-f]{64})\/?$/.exec(page.url.pathname)?.[1] ?? null));
+	let chosenImageName = $derived.by(() => {
+		if (!chosenImage) return '';
+		const img = imageList.items?.find((i) => i.id === `sha256:${chosenImage}`);
+		return img ? imageName(img) : imageShortId(chosenImage);
+	});
 
 	let files = $state<FileSearch | null>(null);
 	let filesBusy = $state(false);
 	let filesError = $state('');
 
 	let local = $derived(open ? rank(paletteItems(), q).slice(0, MAX_SHOWN) : []);
-	let fromFiles = $derived(files && chosen ? fileItems(files, chosen, fullPage) : []);
+	let fromFiles = $derived(
+		!files ? [] : chosen ? fileItems(files, chosen, fullPage) : chosenImage ? imageFileItems(files, chosenImage) : []
+	);
 	let groups = $derived(sections([...local, ...fromFiles.filter((i) => i.kind !== 'file')]));
 	let fileGroup = $derived(fromFiles.filter((i) => i.kind === 'file'));
 	// One flat list for the keyboard, in the order shown.
@@ -60,14 +73,15 @@
 	$effect(() => {
 		const query = q;
 		const id = chosen;
+		const img = chosenImage;
 		files = null;
 		filesError = '';
 		filesBusy = false;
-		if (!open || !id || !validQuery(query)) return;
+		if (!open || (!id && !img) || !validQuery(query)) return;
 		const ctl = new AbortController();
 		const timer = setTimeout(() => {
 			filesBusy = true;
-			searchFiles(id, query, ctl.signal)
+			(id ? searchFiles(id, query, ctl.signal) : searchImageFiles(img ?? '', query, ctl.signal))
 				.then((res) => {
 					if (!ctl.signal.aborted) files = res;
 				})
@@ -233,7 +247,7 @@
 			{/each}
 			{#if fileGroup.length}
 				<div role="group" aria-labelledby="palette-sec-files">
-					<div id="palette-sec-files" class="section">{tf('palette.section.file', { name: chosenName })}</div>
+					<div id="palette-sec-files" class="section">{tf('palette.section.file', { name: chosen ? chosenName : chosenImageName })}</div>
 					{#each fileGroup as it (it.href)}
 						{@render option(it)}
 					{/each}
@@ -256,7 +270,7 @@
 				{:else}
 					{tf('palette.count', { n: flat.length })}
 				{/if}
-				{#if validQuery(q) && !chosen}
+				{#if validQuery(q) && !chosen && !chosenImage}
 					<span class="note">{t('palette.noContainer')}</span>
 				{/if}
 			</p>

@@ -1,7 +1,18 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import { ApiError, checkDownload, downloadUrl, previewFile, saveFile, type Entry, type Preview } from '#lib/api.ts';
-	import { baseName, downloadErrorMessage, formatMode, formatSize, fsErrorMessage, indexingPercent } from '#lib/files.ts';
+	import {
+		baseName,
+		downloadErrorMessage,
+		formatMode,
+		formatSize,
+		fsErrorMessage,
+		imageFsErrorMessage,
+		indexingPercent,
+		pollDelay,
+		pollIndexing,
+		previewImageFile
+	} from '#lib/files.ts';
 	import { lang, t } from '#lib/i18n/index.ts';
 	import { latest, lock } from '#lib/guard.ts';
 	import Icon from '#lib/icons/Icon.svelte';
@@ -9,14 +20,27 @@
 	import ConfirmDialog from '#lib/components/ConfirmDialog.svelte';
 	import FileEditor from '#lib/components/FileEditor.svelte';
 
+	// source "image": a file of an image (spec v0.2 §5.5), id its 64 hex
+	// characters; read only, no download (Q63), extracted by the agent while
+	// the page asks again every pollDelay.
 	let {
 		id,
 		name,
 		path,
 		entry,
 		stopped = false,
-		readOnly = true
-	}: { id: string; name: string; path: string; entry?: Entry; stopped?: boolean; readOnly?: boolean } = $props();
+		readOnly = true,
+		source = 'container'
+	}: {
+		id: string;
+		name: string;
+		path: string;
+		entry?: Entry;
+		stopped?: boolean;
+		readOnly?: boolean;
+		source?: 'container' | 'image';
+	} = $props();
+	let image = $derived(source === 'image');
 
 	let preview = $state<Preview | null>(null);
 	let imageUrl = $state('');
@@ -42,11 +66,10 @@
 
 	$effect(() => {
 		const wanted = path;
-		void id;
+		const wantedId = id;
+		const fromImage = image;
 		void reloads; // dependency: the Reload button re-runs this effect
-		let current = true;
 		let url = '';
-		let retry: ReturnType<typeof setTimeout> | undefined;
 		preview = null;
 		imageUrl = '';
 		error = '';
@@ -57,37 +80,42 @@
 		writeError = '';
 		saved = false;
 		loading = true;
-		previewFile(id, wanted)
-			.then((p) => {
-				if (!current) return;
-				indexing = null;
-				preview = p;
-				if (p.kind === 'image') imageUrl = url = URL.createObjectURL(p.blob);
-			})
-			.catch((e) => {
-				if (!current) return;
-				if (e instanceof ApiError && e.status === 401) {
-					goto('/login').catch(() => {});
-					return;
+		indexing = null;
+		// Asked again while 202 (index of a stopped container, extraction of
+		// an image file); stopped as soon as another file is chosen.
+		const stop = pollIndexing(
+			() => (fromImage ? previewImageFile(wantedId, wanted) : previewFile(wantedId, wanted)),
+			{
+				indexing: (progress) => {
+					loading = false;
+					indexing = indexingPercent(progress);
+				},
+				result: (p) => {
+					loading = false;
+					indexing = null;
+					preview = p;
+					if (p.kind === 'image') imageUrl = url = URL.createObjectURL(p.blob);
+				},
+				error: (e) => {
+					loading = false;
+					if (e instanceof ApiError && e.status === 401) {
+						goto('/login').catch(() => {});
+						return;
+					}
+					indexing = null;
+					const code = e instanceof ApiError ? e.code : 'unknown';
+					if (fromImage) error = imageFsErrorMessage(code, true);
+					else
+						error =
+							code === 'too_large'
+								? t('files.tooLarge')
+								: fsErrorMessage(code, e instanceof ApiError ? e.detail : undefined, stopped);
 				}
-				if (e instanceof ApiError && e.code === 'indexing') {
-					indexing = indexingPercent(e.progress);
-					retry = setTimeout(() => reloads++, 1000); // ask again until the index is ready
-					return;
-				}
-				indexing = null;
-				const code = e instanceof ApiError ? e.code : 'unknown';
-				error =
-					code === 'too_large'
-						? t('files.tooLarge')
-						: fsErrorMessage(code, e instanceof ApiError ? e.detail : undefined, stopped);
-			})
-			.finally(() => {
-				if (current) loading = false;
-			});
+			},
+			fromImage ? pollDelay : 1000
+		);
 		return () => {
-			current = false;
-			clearTimeout(retry);
+			stop();
 			if (url) URL.revokeObjectURL(url);
 		};
 	});
@@ -162,7 +190,7 @@
 		<p class="path mono">{path}</p>
 	</div>
 	<div class="actions">
-		{#if !readOnly && editable && !editing}
+		{#if !image && !readOnly && editable && !editing}
 			<button
 				type="button"
 				class="btn small"
@@ -172,9 +200,11 @@
 				}}><Icon name="edit" /> {t('write.edit')}</button
 			>
 		{/if}
-		<button type="button" class="icon-btn small" onclick={download} aria-label={t('files.download')} title={t('files.download')}>
-			<Icon name="download" />
-		</button>
+		{#if !image}
+			<button type="button" class="icon-btn small" onclick={download} aria-label={t('files.download')} title={t('files.download')}>
+				<Icon name="download" />
+			</button>
+		{/if}
 	</div>
 </header>
 {#if entry}
@@ -189,9 +219,9 @@
 {#if saved}<p role="status" class="saved">{t('write.saved')}</p>{/if}
 
 {#if indexing !== null}
-	<p role="status">{t('files.indexing')} : {indexing} %</p>
+	<p role="status">{image ? t('imagefs.extracting') : t('files.indexing')} : {indexing} %</p>
 	<progress max="100" value={indexing}></progress>
-	<p class="note">{t('files.indexingHint')}</p>
+	<p class="note">{image ? t('imagefs.extractingHint') : t('files.indexingHint')}</p>
 {:else if loading}
 	<p class="muted">{t('files.loading')}</p>
 {:else if error}
@@ -218,7 +248,7 @@
 		<pre class="gutter" aria-hidden="true">{lineNumbers}</pre>
 		<pre class="text">{preview.text}</pre>
 	</div>
-	{#if !readOnly && !editable}<p class="note">{t('write.notEditable')}</p>{/if}
+	{#if !image && !readOnly && !editable}<p class="note">{t('write.notEditable')}</p>{/if}
 {:else if preview?.kind === 'image' && imageUrl}
 	<img src={imageUrl} alt={baseName(path)} />
 {:else if preview?.kind === 'binary'}

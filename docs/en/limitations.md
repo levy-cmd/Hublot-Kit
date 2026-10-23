@@ -91,6 +91,14 @@ The technical spec ([§13, in French](../superpowers/specs/2026-10-07-hublot-kit
 - The query of a file search goes in the body of a POST (`…/fs/search`), never in an address: the agent neither logs nor keeps it, and an ordinary access log of a reverse proxy does not see it. A proxy set to log request bodies would see it: a file name can be sensitive.
 - While a stopped container is exported (its index being built), Docker locks the container. The agent recognises that build by the container's full ID or name, never by a short ID: a direct API call with a short ID then waits for the lock, up to the route's deadline (10 s for files and search; the key figures wait for that lock whatever the ID, up to 30 s). The interface always sends the full ID.
 
+## Images (v0.2)
+
+- The files of an image are read from its export (`docker save`), without creating a container. A layer compressed with **zstd** is refused (`unsupported_image`): only gzip and uncompressed layers are read.
+- A **multi-platform** image with several platforms present locally is refused (`unsupported_image`): the manifest of the export then has several entries.
+- **Cost of a read**: the preview of a file reads the export again up to the end of the layer that holds it, earlier layers included; at worst, the whole export (a few seconds for an image of a gigabyte). The export keeps a core and Docker's disk busy for its duration, without locking any container. Two reads at most for the whole agent, one per image; beyond, the preview waits and asks again.
+- Caps of the index: 4 GiB read, 16 GiB decompressed, 1,000,000 entries, 4 KiB per name or link target, 256 MiB of names, 5 minutes; of a read: 4 GiB, 16 GiB decompressed, 2 minutes. Beyond, `too_large`.
+- No download of the files of an image, and a preview of 2 MiB at most.
+
 ## Secret masking
 
 The X-ray masks secrets by name and by known forms. Not recognised in v0.1, among others:

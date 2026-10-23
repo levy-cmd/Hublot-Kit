@@ -33,7 +33,7 @@ Sous 80 rem de large, la barre se réduit à ses icônes ; sous 48 rem, elle dev
 - Au clavier : les flèches choisissent, Entrée ouvre, Échap ferme et rend le focus là où il était ; Tab reste dans la palette.
 - Rien n'est gardé : ni historique, ni stockage du navigateur, ni requête dans l'adresse de la page. La requête des fichiers part dans le corps d'un appel POST à l'agent (`/api/containers/{id}/fs/search`), jamais dans une adresse ; l'agent ne la journalise pas (voir [les limites](limites.md)).
 
-Les images rejoindront la palette avec la page Images.
+Sur la page d'une image, la palette cherche les fichiers de cette image, de la même façon : seulement dans son index déjà construit par l'onglet Fichiers, sans jamais lancer d'export (`POST /api/images/{id}/fs/search`).
 
 ## La page Conteneurs
 
@@ -87,7 +87,16 @@ La page montre :
 - les couches, c'est-à-dire l'historique de construction, de la plus récente à la plus ancienne. Les entrées sans fichier (`ENV`, `CMD`, `LABEL`…) sont repliées. Les arguments de construction (`|2 GH_PAT=… /bin/sh -c …`, `ARG GH_PAT=…`) sont masqués quel que soit leur nom, et une ligne `LABEL` ne garde aucun texte : les labels se lisent dans la configuration, filtrés ;
 - les conteneurs de l'image, qui mènent à leur détail.
 
-La liste coûte deux demandes à Docker, quel que soit le nombre d'images (la liste des images et celle des conteneurs) ; deux onglets ouverts en même temps partagent la même lecture. Le détail en coûte trois. Si Docker ne répond pas en 10 s, la page le dit et « Actualiser » réessaie. Les fichiers d'une image ne sont pas encore explorables.
+La liste coûte deux demandes à Docker, quel que soit le nombre d'images (la liste des images et celle des conteneurs) ; deux onglets ouverts en même temps partagent la même lecture. Le détail en coûte trois. Si Docker ne répond pas en 10 s, la page le dit et « Actualiser » réessaie.
+
+### Les fichiers d'une image
+
+L'onglet **Fichiers** de la page d'une image explore son arborescence, en lecture seule, **sans créer de conteneur** : l'agent lit l'export de l'image (`docker save`, une lecture côté Docker) et en construit un index des couches, avec les mêmes règles que l'explorateur d'un conteneur arrêté. Les fichiers supprimés par une couche plus haute n'apparaissent pas ; un lien symbolique se résout dans l'image, jamais sur l'hôte.
+
+- **Première ouverture** : une barre de progression pendant la lecture des couches (0,2 s pour `alpine:3`, environ 2 s pour `postgres:16-alpine`, 4 s pour `golang:1.27` mesurés sur Docker Desktop). L'index reste en mémoire, dans les trois places partagées avec les conteneurs arrêtés.
+- **Aperçu d'un fichier** : l'agent relit l'export jusqu'à la fin de la couche qui porte ce fichier, vérifie son empreinte, puis montre le contenu (texte ou image, 2 Mio au plus). Pendant ce temps, l'aperçu montre sa progression et redemande toutes les 2 s ; changer de fichier arrête la demande, et l'agent abandonne une lecture que plus personne ne demande depuis 15 s. Le contenu reste une minute en mémoire.
+- Pas de bouton d'écriture, d'envoi ni de téléchargement : les fichiers d'une image se lisent seulement.
+- Une image dont l'agent ne sait pas lire les couches (zstd, plusieurs plateformes présentes, export altéré) est refusée avec un message ; voir [les limites](limites.md).
 
 ## La page Secrets
 

@@ -33,7 +33,7 @@ Under 80 rem wide, the bar shrinks to its icons; under 48 rem, it becomes a draw
 - Keyboard: the arrows choose, Enter opens, Escape closes and gives the focus back where it was; Tab stays in the palette.
 - Nothing is kept: no history, no browser storage, no query in the page's address. The file query goes in the body of a POST call to the agent (`/api/containers/{id}/fs/search`), never in an address; the agent does not log it (see [the limitations](limitations.md)).
 
-Images will join the palette with the Images page.
+On the page of an image, the palette searches the files of that image the same way: only in its index already built by the Files tab, never starting an export (`POST /api/images/{id}/fs/search`).
 
 ## The Containers page
 
@@ -87,7 +87,16 @@ The page shows:
 - the layers, that is the build history, newest first. The entries without files (`ENV`, `CMD`, `LABEL`…) are folded. The build arguments (`|2 GH_PAT=… /bin/sh -c …`, `ARG GH_PAT=…`) are masked whatever their name, and a `LABEL` line keeps none of its text: the labels are read in the configuration, filtered;
 - the containers of the image, which lead to their detail.
 
-The list costs two requests to Docker, whatever the number of images (the list of images and that of containers); two tabs open at the same time share the same read. The detail costs three. If Docker does not answer within 10 s, the page says so and "Refresh" tries again. The files of an image cannot be explored yet.
+The list costs two requests to Docker, whatever the number of images (the list of images and that of containers); two tabs open at the same time share the same read. The detail costs three. If Docker does not answer within 10 s, the page says so and "Refresh" tries again.
+
+### The files of an image
+
+The **Files** tab of an image's page explores its tree, read only, **without creating a container**: the agent reads the export of the image (`docker save`, a read for Docker) and builds an index of its layers, with the same rules as the explorer of a stopped container. Files deleted by a higher layer do not show; a symbolic link resolves inside the image, never on the host.
+
+- **First opening**: a progress bar while the layers are read (0.2 s for `alpine:3`, about 2 s for `postgres:16-alpine`, 4 s for `golang:1.27`, measured on Docker Desktop). The index stays in memory, in the three slots shared with stopped containers.
+- **Preview of a file**: the agent reads the export again up to the end of the layer that holds the file, checks its digest, then shows the content (text or image, 2 MiB at most). Meanwhile the preview shows its progress and asks again every 2 s; choosing another file stops asking, and the agent gives up a read nobody has asked for in 15 s. The content stays in memory for a minute.
+- No write, upload or download button: the files of an image are read only.
+- An image whose layers the agent cannot read (zstd, several platforms present, altered export) is refused with a message; see [the limitations](limitations.md).
 
 ## The Secrets page
 

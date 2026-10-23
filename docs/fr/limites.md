@@ -103,6 +103,14 @@ tous les détails.
 - La requête d'une recherche de fichiers part dans le corps d'un POST (`…/fs/search`), jamais dans une adresse : l'agent ne la journalise pas et ne la garde pas, et un journal d'accès ordinaire de reverse proxy ne la voit pas. Un proxy réglé pour journaliser les corps des requêtes la verrait : un nom de fichier peut être sensible.
 - Pendant l'export d'un conteneur arrêté (construction de son index), Docker verrouille le conteneur. L'agent reconnaît cette construction par l'ID complet ou le nom du conteneur, jamais par un ID court : un appel direct à l'API avec un ID court attend alors le verrou, jusqu'au délai de la route (10 s pour les fichiers et la recherche ; les chiffres clés, eux, attendent ce verrou quel que soit l’ID, jusqu’à 30 s, v0.2 §5.3). L'interface envoie toujours l'ID complet.
 
+## Images (v0.2)
+
+- Les fichiers d'une image se lisent dans son export (`docker save`), sans créer de conteneur. Une couche compressée en **zstd** est refusée (`unsupported_image`) : seules les couches gzip et non compressées sont lues.
+- Une image **multi-plateforme** dont plusieurs plateformes sont présentes en local est refusée (`unsupported_image`) : le manifeste de l'export a alors plusieurs entrées.
+- **Coût d'une lecture** : l'aperçu d'un fichier relit l'export jusqu'à la fin de la couche qui le porte, couches précédentes comprises ; au pire, l'export entier (quelques secondes pour une image d'un gigaoctet). L'export occupe un cœur et le disque de Docker pendant sa durée, sans verrouiller de conteneur. Deux lectures au plus pour tout l'agent, une par image ; au-delà, l'aperçu attend et redemande.
+- Plafonds de l'index : 4 Gio lus, 16 Gio décompressés, 1 000 000 d'entrées, 4 Kio par nom ou cible de lien, 256 Mio de noms, 5 minutes ; d'une lecture : 4 Gio, 16 Gio décompressés, 2 minutes. Au-delà, `too_large`.
+- Pas de téléchargement des fichiers d'une image, et un aperçu de 2 Mio au plus.
+
 ## Masquage des secrets
 
 La radiographie masque les secrets par leur nom et par des formes connues. Non reconnus en v0.1, entre autres :
