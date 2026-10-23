@@ -112,3 +112,15 @@
   - **Décision de la session principale (resserre Q60)** : les labels de Compose qui donnent des chemins de l'hôte (`com.docker.compose.project.config_files`, `.working_dir`, `.environment_file`) sont masqués comme un label hors liste blanche. Test témoin `TestLabelsHostPathsMasked` (`/home/alice/…`).
   - Retouches : les labels en clair en puces, les labels masqués repliés sur une ligne « N autres labels masqués » qui ne montre que leurs clés ; `getFigures` annulé au changement de conteneur ; l'e2e vérifie la reprise du flux avec `after=`.
   - Barre latérale : « Diff avec l'image » surligné sur la page Conteneurs n'était pas un survol. La détection marquait comme page courante toute entrée dont les paramètres étaient dans l'adresse (`?panel=diff`). Corrigé : une entrée de panneau (Diff, Logs) n'est jamais la page courante, Conteneurs l'est (`currentNav`, test dans `nav.test.ts`).
+- **Tranche 2 (projets, labels, chiffres clés)** : 9e2b362, 4500e64 (tests rouges), 364b960, ecb5695, f0b78bc (tests rouges), 2b26234. Validée par le relecteur et par Codex.
+  - Mesures : liste en 98 ms pour 40 conteneurs, sans tailles ; `figures` en 14 à 96 ms, puis 3 ms en cache.
+  - Correctif de revue :
+    - contrat `Cached(info)` consigné ;
+    - calculs `ContainerSize` regroupés par ID complet ;
+    - `getFigures` annulé au changement de conteneur ;
+    - l'e2e vérifie `after=` à la reprise des logs ;
+    - labels de la liste blanche en puces, les autres dans une ligne repliée (clés seules) ;
+    - page active de la barre latérale corrigée (défaut réel : `?panel=diff`).
+  - Ruling (session principale, resserre Q60) : les labels Compose qui portent des chemins de l'hôte (`project.config_files`, `project.working_dir`, `project.environment_file`) ont leur valeur masquée.
+  - À faire en tête de la tranche 3 : un test du regroupement sur DEUX conteneurs (une clé commune n'est détectée par aucun test).
+  - Minor reporté : une requête qui rejoint un calcul en cours reçoit 503 au lieu de 504 quand il expire.
