@@ -6,6 +6,9 @@ export const en: Record<Key, string> = {
 	'nav.servers': 'Servers',
 	'nav.logout': 'Log out',
 	'nav.readOnly': 'Read-only',
+	'nav.darkTheme': 'Dark theme',
+	'nav.server': 'Server',
+	'nav.main': 'Main navigation',
 	'login.title': 'Log in',
 	'login.token': 'Access token',
 	'login.hint': 'Shown once at first launch, or by “hublot reset-token”.',
@@ -37,6 +40,8 @@ export const en: Record<Key, string> = {
 	'container.tab.changes': 'Changes',
 	'container.tab.logs': 'Logs',
 	'container.tab.xray': 'X-ray',
+	'container.tabs': 'Container views',
+	'container.id': 'ID',
 	'files.indexing': 'Indexing the stopped container',
 	'files.indexingHint': 'First opening: the agent reads the headers of the container archive. Later ones are immediate.',
 	'files.stoppedUnavailable':

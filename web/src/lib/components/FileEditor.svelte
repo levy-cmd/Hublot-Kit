@@ -57,7 +57,7 @@
 <div class="editor" bind:this={host}></div>
 
 <style>
-	.editor { border: 1px solid #ddd; border-radius: 0.25rem; max-height: 70vh; overflow: auto; }
+	.editor { border: 1px solid var(--trait-fin); border-radius: var(--rayon); max-height: 70vh; overflow: auto; }
 	.editor :global(.cm-editor) { min-height: 12rem; }
-	[role='alert'] { color: #b00020; }
+	[role='alert'] { color: var(--rouille-texte); }
 </style>

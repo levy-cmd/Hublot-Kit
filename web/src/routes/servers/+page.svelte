@@ -11,20 +11,44 @@
 
 <main>
 	<h1>{t('servers.title')}</h1>
-	<ul>
-		<li class="server">
-			<strong>{t('servers.current')}</strong>
-			<span>{location.host}</span>
-			{#if meta}<span>{t('servers.version')} {meta.version}</span>{/if}
-		</li>
-	</ul>
+	<table>
+		<tbody>
+			<tr class="server">
+				<th scope="row">{t('servers.current')}</th>
+				<td class="mono">{location.host}</td>
+				<td>{#if meta}{t('servers.version')} <span class="mono">{meta.version}</span>{/if}</td>
+			</tr>
+		</tbody>
+	</table>
 	<button type="button" disabled title={t('servers.soon')}>
-		{t('servers.add')} — {t('servers.soon')}
+		{t('servers.add')} ({t('servers.soon')})
 	</button>
 </main>
 
 <style>
-	main { padding: 1rem; }
-	ul { list-style: none; padding: 0; }
-	.server { display: flex; gap: 1rem; padding: 0.75rem; border: 1px solid #ddd; border-radius: 0.5rem; margin-bottom: 1rem; flex-wrap: wrap; }
+	main {
+		padding: var(--e5) var(--gouttiere) var(--e7);
+	}
+	h1 {
+		font-size: 2.25rem;
+		font-stretch: 75%;
+		font-weight: 800;
+		margin-bottom: var(--e5);
+	}
+	table {
+		border-collapse: collapse;
+		margin-bottom: var(--e5);
+		font-size: var(--t-s);
+		border-top: 1px solid var(--encre);
+	}
+	th,
+	td {
+		text-align: left;
+		padding: var(--e2) var(--e5) var(--e2) var(--e3);
+		border-bottom: 1px solid var(--trait-fin);
+	}
+	th {
+		font-weight: 600;
+		border-left: 4px solid var(--vert);
+	}
 </style>

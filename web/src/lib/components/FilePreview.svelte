@@ -212,9 +212,9 @@
 	header { display: flex; flex-wrap: wrap; gap: 0.5rem 1rem; align-items: baseline; }
 	h2 { font-size: 1.1rem; margin: 0; word-break: break-all; }
 	.meta { margin: 0; opacity: 0.8; font-size: 0.9rem; }
-	pre { overflow: auto; max-height: 70vh; padding: 0.75rem; background: #f6f6f6; border-radius: 0.25rem; white-space: pre; }
+	pre { overflow: auto; max-height: 70vh; padding: 0.75rem; background: var(--fond-releve); border-radius: var(--rayon); font-family: var(--mono); font-size: var(--t-xs); white-space: pre; }
 	img { max-width: 100%; height: auto; }
 	.note { font-style: italic; }
 	.actions { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.5rem; }
-	[role='alert'] { color: #b00020; }
+	[role='alert'] { color: var(--rouille-texte); }
 </style>

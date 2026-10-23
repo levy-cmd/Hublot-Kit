@@ -4,6 +4,9 @@ export const fr = {
 	'nav.servers': 'Serveurs',
 	'nav.logout': 'Déconnexion',
 	'nav.readOnly': 'Lecture seule',
+	'nav.darkTheme': 'Thème sombre',
+	'nav.server': 'Serveur',
+	'nav.main': 'Navigation principale',
 	'login.title': 'Connexion',
 	'login.token': "Jeton d'accès",
 	'login.hint': 'Affiché une seule fois au premier lancement, ou par « hublot reset-token ».',
@@ -35,6 +38,8 @@ export const fr = {
 	'container.tab.changes': 'Changements',
 	'container.tab.logs': 'Logs',
 	'container.tab.xray': 'Radiographie',
+	'container.tabs': 'Vues du conteneur',
+	'container.id': 'Identifiant',
 	'files.indexing': 'Indexation du conteneur arrêté',
 	'files.indexingHint':
 		"Première ouverture : l'agent lit les en-têtes de l'archive du conteneur. Les suivantes sont immédiates.",

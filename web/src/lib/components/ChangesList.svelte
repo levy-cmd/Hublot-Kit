@@ -76,12 +76,12 @@
 
 <style>
 	ul { list-style: none; padding: 0; margin: 0; }
-	li { display: grid; grid-template-columns: 1.5rem 5.5rem minmax(0, 1fr); gap: 0.25rem; padding: 0.15rem 0; border-bottom: 1px solid #eee; }
+	li { display: grid; grid-template-columns: 1.5rem 5.5rem minmax(0, 1fr); gap: 0.25rem; padding: 0.15rem 0; border-bottom: 1px solid var(--trait-fin); }
 	.path { word-break: break-all; }
 	.note { font-style: italic; }
 	.mark { font-weight: 700; text-decoration: none; }
-	.added { color: #1b7f3b; }
-	.modified { color: #8a5a00; }
-	.deleted { color: #b00020; }
-	[role='alert'] { color: #b00020; }
+	.added { color: var(--vert-texte); }
+	.modified { color: var(--ambre-texte); }
+	.deleted { color: var(--rouille-texte); }
+	[role='alert'] { color: var(--rouille-texte); }
 </style>

@@ -150,12 +150,12 @@
 	ul { list-style: none; padding: 0; margin: 0; }
 	li { padding: 0.15rem 0; overflow-wrap: anywhere; }
 	code { overflow-wrap: anywhere; }
-	.env li { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: baseline; border-bottom: 1px solid #eee; }
+	.env li { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: baseline; border-bottom: 1px solid var(--trait-fin); }
 	.env .name { font-weight: 600; }
 	.env .value { min-width: 0; }
 	.masked { opacity: 0.7; }
 	.kind { display: inline-block; min-width: 4rem; opacity: 0.8; }
 	.note { font-style: italic; }
-	.bad, [role='alert'] { color: #b00020; }
+	.bad, [role='alert'] { color: var(--rouille-texte); }
 	@media (max-width: 480px) { dl { grid-template-columns: minmax(0, 1fr); } }
 </style>

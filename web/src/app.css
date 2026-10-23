@@ -1,0 +1,331 @@
+/* Hublot-Kit, système de design « Quai ».
+   Référence : docs/superpowers/specs/2026-10-23-interface-design.md */
+
+@font-face {
+	font-family: 'Archivo';
+	font-style: normal;
+	font-display: swap;
+	font-weight: 100 900;
+	font-stretch: 62% 125%;
+	src: url('/fonts/archivo-latin-wdth.woff2') format('woff2-variations');
+}
+
+@font-face {
+	font-family: 'JetBrains Mono';
+	font-style: normal;
+	font-display: swap;
+	font-weight: 100 800;
+	src: url('/fonts/jetbrains-mono-latin-wght.woff2') format('woff2-variations');
+}
+
+/* Quai (clair) */
+:root {
+	color-scheme: light;
+	--fond: #e3e6e4; /* béton */
+	--fond-releve: #eceeed; /* champs, blocs de code */
+	--survol: #d9dddb;
+	--encre: #1b2422;
+	--texte-doux: #56625f;
+	--trait: #6b7876; /* acier : bords qui doivent se voir (champs, boutons) */
+	--trait-fin: #c3c9c6; /* séparateurs de lignes */
+	--jaune: #f2c230; /* marquage au sol : sélection, focus */
+	--sur-jaune: #1b2422;
+	--cerne: #1b2422; /* bord du focus, le jaune seul ne tranche pas sur le béton */
+
+	/* peinture d'état (liserés, plaque) et texte d'état (AA sur le fond) */
+	--vert: #2e7d5b;
+	--vert-texte: #24654a;
+	--ambre: #c98a1b;
+	--ambre-texte: #7a520c;
+	--rouille: #9c3b26;
+	--rouille-texte: #9c3b26;
+	--acier: #6b7876;
+	--acier-texte: #56625f;
+
+	/* la plaque : la porte peinte, et le texte au pochoir */
+	--porte: #1b2422;
+	--porte-texte: #e3e6e4;
+	--porte-doux: #a9b3b0;
+	--porte-trait: #56625f;
+	--pochoir-ok: #ffffff; /* peinture blanche, comme les marquages ISO */
+	--pochoir-warn: #1b2422;
+	--pochoir-bad: #ffffff;
+	--pochoir-idle: #ffffff;
+
+	--sans: 'Archivo', system-ui, sans-serif;
+	--mono: 'JetBrains Mono', ui-monospace, monospace;
+
+	--t-xs: 0.8125rem;
+	--t-s: 0.875rem;
+	--t-m: 1rem;
+	--t-l: 1.25rem;
+	--t-xl: 1.75rem;
+
+	--e1: 0.25rem;
+	--e2: 0.5rem;
+	--e3: 0.75rem;
+	--e4: 1rem;
+	--e5: 1.5rem;
+	--e6: 2rem;
+	--e7: 3rem;
+
+	--rayon: 2px;
+	--gouttiere: clamp(1rem, 3vw, 2rem);
+	--largeur: 90rem;
+}
+
+/* Quai de nuit (sombre) : même jaune, états éclaircis */
+@media (prefers-color-scheme: dark) {
+	:root:not([data-theme='light']) {
+		color-scheme: dark;
+		--fond: #1e2624; /* asphalte */
+		--fond-releve: #26302e;
+		--survol: #26302e;
+		--encre: #dde3e0;
+		--texte-doux: #9aa6a3;
+		--trait: #6b7876;
+		--trait-fin: #34403d;
+		--cerne: transparent;
+		--vert: #5db88a;
+		--vert-texte: #5db88a;
+		--ambre: #e0a63a;
+		--ambre-texte: #e0a63a;
+		--rouille: #e3876b;
+		--rouille-texte: #e3876b;
+		--acier: #9aa6a3;
+		--acier-texte: #9aa6a3;
+		--porte: #2c3734;
+		--porte-texte: #e8ecea;
+		--porte-doux: #9aa6a3;
+		--porte-trait: #4a5653;
+		--pochoir-ok: #1e2624;
+		--pochoir-warn: #1e2624;
+		--pochoir-bad: #1e2624;
+		--pochoir-idle: #1e2624;
+	}
+}
+:root[data-theme='dark'] {
+	color-scheme: dark;
+	--fond: #1e2624;
+	--fond-releve: #26302e;
+	--survol: #26302e;
+	--encre: #dde3e0;
+	--texte-doux: #9aa6a3;
+	--trait: #6b7876;
+	--trait-fin: #34403d;
+	--cerne: transparent;
+	--vert: #5db88a;
+	--vert-texte: #5db88a;
+	--ambre: #e0a63a;
+	--ambre-texte: #e0a63a;
+	--rouille: #e3876b;
+	--rouille-texte: #e3876b;
+	--acier: #9aa6a3;
+	--acier-texte: #9aa6a3;
+	--porte: #2c3734;
+	--porte-texte: #e8ecea;
+	--porte-doux: #9aa6a3;
+	--porte-trait: #4a5653;
+	--pochoir-ok: #1e2624;
+	--pochoir-warn: #1e2624;
+	--pochoir-bad: #1e2624;
+	--pochoir-idle: #1e2624;
+}
+
+*,
+*::before,
+*::after {
+	box-sizing: border-box;
+}
+
+html {
+	background: var(--fond);
+	color: var(--encre);
+	font-family: var(--sans);
+	font-size: 100%;
+	line-height: 1.45;
+	-webkit-text-size-adjust: 100%;
+	text-size-adjust: 100%;
+}
+
+body {
+	margin: 0;
+	min-height: 100vh;
+	background: var(--fond);
+	font-variant-numeric: tabular-nums;
+}
+
+h1,
+h2,
+h3 {
+	line-height: 1.15;
+	font-weight: 700;
+	font-stretch: 87.5%;
+	margin: 0;
+}
+h1 {
+	font-size: var(--t-xl);
+}
+h2 {
+	font-size: var(--t-l);
+}
+
+p {
+	margin: 0 0 var(--e3);
+}
+
+a {
+	color: inherit;
+	text-decoration-line: underline;
+	text-decoration-thickness: 1px;
+	text-underline-offset: 0.2em;
+}
+a:hover {
+	text-decoration-thickness: 2px;
+}
+
+code,
+pre,
+kbd,
+samp,
+.mono {
+	font-family: var(--mono);
+	font-size: 0.92em;
+}
+
+/* Focus : bande jaune cernée d'encre, visible sur béton comme sur asphalte */
+:focus-visible {
+	outline: 3px solid var(--jaune);
+	outline-offset: 1px;
+	box-shadow: 0 0 0 5px var(--cerne);
+}
+:focus:not(:focus-visible) {
+	outline: none;
+}
+
+::selection {
+	background: var(--jaune);
+	color: var(--sur-jaune);
+}
+
+button,
+input,
+select,
+textarea {
+	font: inherit;
+	color: inherit;
+}
+
+button {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--e2);
+	min-height: 2.25rem;
+	padding: 0 var(--e3);
+	border: 1px solid var(--trait);
+	border-radius: var(--rayon);
+	background: transparent;
+	font-size: var(--t-s);
+	font-weight: 600;
+	cursor: pointer;
+}
+button:hover:not(:disabled) {
+	background: var(--survol);
+}
+button:disabled {
+	cursor: not-allowed;
+	color: var(--texte-doux);
+	border-style: dashed;
+}
+button.primaire {
+	background: var(--encre);
+	border-color: var(--encre);
+	color: var(--fond);
+}
+button.primaire:hover:not(:disabled) {
+	background: var(--encre);
+	text-decoration: underline;
+	text-underline-offset: 0.2em;
+}
+
+input[type='search'],
+input[type='text'],
+input[type='password'],
+select,
+textarea {
+	min-height: 2.25rem;
+	padding: 0 var(--e3);
+	border: 1px solid var(--trait);
+	border-radius: var(--rayon);
+	background: var(--fond-releve);
+}
+textarea {
+	padding: var(--e2) var(--e3);
+}
+input::placeholder {
+	color: var(--texte-doux);
+	opacity: 1;
+}
+
+input[type='checkbox'] {
+	width: 1rem;
+	height: 1rem;
+	margin: 0;
+	accent-color: var(--encre);
+}
+
+[role='alert'] {
+	color: var(--rouille-texte);
+}
+
+dialog {
+	color: var(--encre);
+	background: var(--fond);
+	border: 1px solid var(--trait);
+	border-radius: var(--rayon);
+	padding: var(--e5);
+}
+dialog::backdrop {
+	background: rgb(27 36 34 / 0.55);
+}
+
+/* le hublot de la marque : un anneau, seule forme ronde de l'interface */
+.hublot {
+	flex: none;
+	width: 0.875rem;
+	height: 0.875rem;
+	border: 3px solid currentColor;
+	border-radius: 50%;
+}
+
+.visuellement-cache {
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	margin: -1px;
+	padding: 0;
+	overflow: hidden;
+	clip: rect(0 0 0 0);
+	white-space: nowrap;
+	border: 0;
+}
+
+/* CodeMirror : curseur et sélection lisibles dans les deux thèmes */
+.cm-editor .cm-cursor {
+	border-left-color: var(--encre);
+}
+.cm-editor .cm-gutters {
+	background: var(--fond-releve);
+	color: var(--texte-doux);
+	border-right-color: var(--trait-fin);
+}
+
+@media (prefers-reduced-motion: reduce) {
+	*,
+	*::before,
+	*::after {
+		transition: none !important;
+		animation: none !important;
+		scroll-behavior: auto !important;
+	}
+}

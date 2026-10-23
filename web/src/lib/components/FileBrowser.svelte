@@ -305,13 +305,14 @@
 	.tools { margin: 0.5rem 0; }
 	.scroll { overflow-x: auto; }
 	table { border-collapse: collapse; width: 100%; }
-	th, td { text-align: left; padding: 0.3rem 0.5rem; border-bottom: 1px solid #eee; white-space: nowrap; }
+	th, td { text-align: left; padding: 0.3rem 0.5rem; border-bottom: 1px solid var(--trait-fin); white-space: nowrap; }
 	button.name { background: none; border: none; padding: 0; color: inherit; text-decoration: underline; cursor: pointer; font: inherit; }
 	.target { opacity: 0.7; margin-left: 0.4rem; }
-	tr.selected { background: #eef4ff; }
+	tr.selected { background: var(--jaune); color: var(--sur-jaune); }
+	tr.selected .mark { color: inherit; }
 	.note { font-style: italic; overflow-wrap: anywhere; }
 	.mark { font-weight: 700; text-decoration: none; margin-left: 0.4rem; }
-	.added { color: #1b7f3b; }
-	.modified { color: #8a5a00; }
-	[role='alert'] { color: #b00020; }
+	.added { color: var(--vert-texte); }
+	.modified { color: var(--ambre-texte); }
+	[role='alert'] { color: var(--rouille-texte); }
 </style>
