@@ -74,6 +74,7 @@ it.
 | `--read-only` | `HUBLOT_READ_ONLY` | `false`: with `true`, no write at all, and the write buttons disappear |
 | `--tls-cert`, `--tls-key` | `HUBLOT_TLS_CERT`, `HUBLOT_TLS_KEY` | empty: serve HTTPS directly with a certificate you provide |
 | `--public-origin` | `HUBLOT_PUBLIC_ORIGIN` | empty: the public URL behind a reverse proxy |
+| `--max-conns-per-ip` | `HUBLOT_MAX_CONNS_PER_IP` | `64`: connections open at once per source address (1 to 512) |
 
 `hublot --help` lists them; `hublot --version` prints the version.
 
@@ -88,6 +89,10 @@ The logs tab is a Server-Sent Events stream: the proxy must not buffer it (the a
 which nginx honours) and must allow long reads (the stream sends a ping every 15 seconds). The agent never trusts
 `X-Forwarded-*` headers.
 
+Behind a proxy every connection comes from the proxy's address, and the agent accepts at most 64 at once per
+address: enough for one or two users. For more, or a proxy that keeps a large pool of connections, raise it, for
+example `-e HUBLOT_MAX_CONNS_PER_IP=256` (512 at most, the cap for every address together).
+
 Without a proxy, `--tls-cert` and `--tls-key` serve HTTPS directly. v0.1 does not obtain certificates by itself.
 
 ## Binary and systemd
@@ -96,7 +101,7 @@ The alternative to the container: the static binary, run as root by systemd. Che
 ([Verify the release](#verify-the-release)). Use `amd64` or `arm64`.
 
 ```sh
-V=0.1.0
+V=0.1.2
 ARCH=amd64
 curl -fLO "https://github.com/levy-cmd/Hublot-Kit/releases/download/v$V/hublot-kit_${V}_linux_${ARCH}.tar.gz"
 tar -xzf "hublot-kit_${V}_linux_${ARCH}.tar.gz"
@@ -245,7 +250,7 @@ The signature of `checksums.txt` followed by the checksum is enough; each archiv
 (`<archive>.sigstore.json`), an optional direct check with the same `cosign verify-blob` command.
 
 ```sh
-V=0.1.0
+V=0.1.2
 ARCH=amd64
 BASE="https://github.com/levy-cmd/Hublot-Kit/releases/download/v$V"
 curl -fLO "$BASE/hublot-kit_${V}_linux_${ARCH}.tar.gz"

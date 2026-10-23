@@ -253,8 +253,10 @@ func New() (Client, error) {
 }
 
 func (e *engine) Ping(ctx context.Context) error {
-	_, err := e.c.Ping(ctx, client.PingOptions{})
-	return err
+	if _, err := e.c.Ping(ctx, client.PingOptions{}); err != nil {
+		return wrap(err)
+	}
+	return nil
 }
 
 func (e *engine) Info(ctx context.Context) (DaemonInfo, error) {
@@ -277,7 +279,7 @@ func (e *engine) Info(ctx context.Context) (DaemonInfo, error) {
 func (e *engine) ListContainers(ctx context.Context) ([]Container, error) {
 	res, err := e.c.ContainerList(ctx, client.ContainerListOptions{All: true})
 	if err != nil {
-		return nil, err
+		return nil, wrap(err)
 	}
 	out := make([]Container, 0, len(res.Items))
 	for _, s := range res.Items {
@@ -633,9 +635,9 @@ func (e *engine) PutArchive(ctx context.Context, id, dir string, content io.Read
 func wrapPut(err error) error {
 	if cerrdefs.IsInvalidArgument(err) {
 		if strings.Contains(err.Error(), "marked read-only") {
-			return fmt.Errorf("%w: %v", ErrRefused, err)
+			return fmt.Errorf("%w: %s", ErrRefused, masked(err))
 		}
-		return fmt.Errorf("%w: %v", ErrPutInvalid, err)
+		return fmt.Errorf("%w: %s", ErrPutInvalid, masked(err))
 	}
 	return wrap(err)
 }
@@ -643,7 +645,13 @@ func wrapPut(err error) error {
 // wrap classifies a daemon error for the API (not_found / docker_unavailable).
 func wrap(err error) error {
 	if cerrdefs.IsNotFound(err) {
-		return fmt.Errorf("%w: %v", ErrNotFound, err)
+		return fmt.Errorf("%w: %s", ErrNotFound, masked(err))
 	}
-	return fmt.Errorf("%w: %v", ErrUnavailable, err)
+	return fmt.Errorf("%w: %s", ErrUnavailable, masked(err))
 }
+
+// masked is the text of a client error, secrets masked (v0.1.2, audit): with
+// DOCKER_HOST=tcp://user:password@…, "Cannot connect to the Docker daemon
+// at …" names the password. The API never sends this text (fixed detail);
+// it may reach the agent's log.
+func masked(err error) string { return secrets.Line(err.Error()) }

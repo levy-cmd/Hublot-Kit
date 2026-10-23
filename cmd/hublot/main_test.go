@@ -1,13 +1,19 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
+	"errors"
+	"io"
 	"net"
+	"net/http"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/levy-cmd/hublot-kit/internal/fsview"
 )
@@ -341,4 +347,255 @@ func TestRunNoWarningOnHostCgroup(t *testing.T) {
 	if strings.Contains(errb.String(), "cgroupns") {
 		t.Fatalf("avertissement inattendu : %q", errb.String())
 	}
+}
+
+// v0.1.2 (audit, constat 2): the agent's server bounds the reading of a
+// request and idle connections, never the writing (logs stream, downloads).
+func TestNewServerTimeouts(t *testing.T) {
+	srv := newServer()
+	if srv.ReadHeaderTimeout <= 0 || srv.ReadTimeout <= 0 || srv.IdleTimeout <= 0 || srv.WriteTimeout != 0 {
+		t.Fatalf("délais : en-têtes %s, lecture %s, inactivité %s, écriture %s", srv.ReadHeaderTimeout, srv.ReadTimeout, srv.IdleTimeout, srv.WriteTimeout)
+	}
+}
+
+// closedSoon: the server closed conn (EOF or reset) within limit.
+func closedSoon(conn net.Conn, limit time.Duration) bool {
+	conn.SetReadDeadline(time.Now().Add(limit))
+	_, err := io.Copy(io.Discard, conn)
+	var ne net.Error
+	return !(errors.As(err, &ne) && ne.Timeout())
+}
+
+// v0.1.2 (counter-audit, constat 2): the cap of 512 was global; 2 000 mute
+// sockets of one address made three legitimate requests out of four time
+// out. Each source address (RemoteAddr) holds at most PerIP connections:
+// past that, a new one is closed at once.
+func TestLimitListenerPerIP(t *testing.T) {
+	inner, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ln := limitListener(inner, connLimits{Max: 10, PerIP: 2, FirstByte: time.Minute})
+	defer ln.Close()
+	accepted := make(chan net.Conn, 10)
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			accepted <- c
+		}
+	}()
+	dial := func(local string) net.Conn {
+		d := net.Dialer{}
+		if local != "" {
+			d.LocalAddr = &net.TCPAddr{IP: net.ParseIP(local)}
+		}
+		c, err := d.Dial("tcp", inner.Addr().String())
+		if err != nil {
+			return nil
+		}
+		t.Cleanup(func() { c.Close() })
+		return c
+	}
+	var got []net.Conn
+	for i := 0; i < 2; i++ {
+		dial("")
+		select {
+		case c := <-accepted:
+			got = append(got, c)
+		case <-time.After(2 * time.Second):
+			t.Fatal("connexion sous la limite par adresse non acceptée")
+		}
+	}
+	extra := dial("")
+	if !closedSoon(extra, 2*time.Second) {
+		t.Fatal("3e connexion de la même adresse gardée ouverte")
+	}
+	select {
+	case <-accepted:
+		t.Fatal("3e connexion de la même adresse remise au serveur")
+	default:
+	}
+	if other := dial("127.0.0.2"); other != nil { // Linux: all of 127/8 is local
+		select {
+		case c := <-accepted:
+			c.Close()
+		case <-time.After(2 * time.Second):
+			t.Fatal("une autre adresse est refusée")
+		}
+	}
+	got[0].Close()
+	dial("")
+	select {
+	case c := <-accepted:
+		c.Close()
+	case <-time.After(2 * time.Second):
+		t.Fatal("place rendue à l'adresse non reprise")
+	}
+	got[1].Close()
+}
+
+// fakeListener hands out one end of a pipe per remote address given.
+type fakeListener struct{ conns chan net.Conn }
+
+func (l fakeListener) Accept() (net.Conn, error) {
+	c, ok := <-l.conns
+	if !ok {
+		return nil, net.ErrClosed
+	}
+	return c, nil
+}
+func (l fakeListener) Close() error   { return nil }
+func (l fakeListener) Addr() net.Addr { return &net.TCPAddr{} }
+
+type remoteConn struct {
+	net.Conn
+	remote net.Addr
+}
+
+func (c remoteConn) RemoteAddr() net.Addr { return c.remote }
+
+// v0.1.2 (counter-audit): counted per address, one IPv6 host with its /64
+// filled the 512 connections. The cap counts an IPv6 /64 as one address, and
+// an IPv4 address mapped in IPv6 as that IPv4 address.
+func TestLimitListenerGroupsAddresses(t *testing.T) {
+	fl := fakeListener{conns: make(chan net.Conn, 16)}
+	ln := limitListener(fl, connLimits{Max: 20, PerIP: 2, FirstByte: time.Minute})
+	accepted := make(chan net.Conn, 16)
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			accepted <- c
+		}
+	}()
+	try := func(remote string) (ok bool, peer net.Conn) {
+		srvEnd, cliEnd := net.Pipe()
+		t.Cleanup(func() { srvEnd.Close(); cliEnd.Close() })
+		ap, err := netip.ParseAddrPort(remote)
+		if err != nil {
+			t.Fatal(err)
+		}
+		fl.conns <- remoteConn{srvEnd, net.TCPAddrFromAddrPort(ap)}
+		select {
+		case c := <-accepted:
+			return true, c
+		case <-time.After(300 * time.Millisecond):
+			return false, nil // closed at once; Accept waits for the next one
+		}
+	}
+	feed := func(want bool, remotes ...string) {
+		t.Helper()
+		for _, r := range remotes {
+			if ok, _ := try(r); ok != want {
+				t.Errorf("%s : acceptée %v, attendu %v", r, ok, want)
+			}
+		}
+	}
+	feed(true, "[2001:db8:1:2::1]:1", "[2001:db8:1:2::2]:1")
+	feed(false, "[2001:db8:1:2:ffff::3]:1") // same /64
+	feed(true, "[2001:db8:1:3::1]:1")       // another /64
+	feed(true, "192.0.2.1:1", "[::ffff:192.0.2.1]:2")
+	feed(false, "[::ffff:192.0.2.1]:3", "192.0.2.1:4")
+	feed(true, "192.0.2.2:1")
+	close(fl.conns)
+}
+
+// A connection that sends no byte is closed after FirstByte, well before
+// ReadHeaderTimeout; once a byte came, the server's own delays apply.
+func TestMuteConnectionClosedFast(t *testing.T) {
+	inner, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ln := limitListener(inner, connLimits{Max: 10, PerIP: 10, FirstByte: 200 * time.Millisecond})
+	srv := newServer()
+	srv.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "ok") })
+	go srv.Serve(ln)
+	defer srv.Close()
+	mute, err := net.Dial("tcp", inner.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mute.Close()
+	start := time.Now()
+	if !closedSoon(mute, 3*time.Second) || time.Since(start) > 2*time.Second {
+		t.Fatalf("connexion muette encore ouverte après %s", time.Since(start))
+	}
+	slow, err := net.Dial("tcp", inner.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer slow.Close()
+	slow.Write([]byte("G"))
+	time.Sleep(400 * time.Millisecond) // past FirstByte, within ReadHeaderTimeout
+	slow.Write([]byte("ET / HTTP/1.1\r\nHost: x\r\n\r\n"))
+	slow.SetReadDeadline(time.Now().Add(3 * time.Second))
+	resp, err := http.ReadResponse(bufio.NewReader(slow), nil)
+	if err != nil || resp.StatusCode != http.StatusOK {
+		t.Fatalf("requête lente mais commencée : %v %v", resp, err)
+	}
+}
+
+// At most n connections at once: the next one waits until one closes.
+func TestLimitListener(t *testing.T) {
+	inner, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ln := limitListener(inner, connLimits{Max: 2, PerIP: 10, FirstByte: time.Minute})
+	defer ln.Close()
+	accepted := make(chan net.Conn, 3)
+	stopped := make(chan struct{})
+	go func() {
+		defer close(stopped)
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			accepted <- c
+		}
+	}()
+	for i := 0; i < 3; i++ {
+		c, err := net.Dial("tcp", inner.Addr().String())
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer c.Close()
+	}
+	var got []net.Conn
+	for len(got) < 2 {
+		select {
+		case c := <-accepted:
+			got = append(got, c)
+		case <-time.After(2 * time.Second):
+			t.Fatalf("%d connexions acceptées, attendu 2", len(got))
+		}
+	}
+	select {
+	case <-accepted:
+		t.Fatal("3e connexion acceptée au-delà de la limite")
+	case <-time.After(300 * time.Millisecond):
+	}
+	got[0].Close()
+	got[0].Close() // a second Close frees nothing more
+	select {
+	case c := <-accepted:
+		c.Close()
+	case <-time.After(2 * time.Second):
+		t.Fatal("3e connexion jamais acceptée après une fermeture")
+	}
+	// Every slot taken, Accept waits: Close ends it (Shutdown waits for Serve).
+	ln.Close()
+	select {
+	case <-stopped:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Accept toujours bloqué après Close")
+	}
+	got[1].Close()
 }

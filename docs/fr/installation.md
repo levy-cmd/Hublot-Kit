@@ -76,6 +76,7 @@ variables avec `-e` avant lui.
 | `--read-only` | `HUBLOT_READ_ONLY` | `false` : avec `true`, aucune écriture, et les boutons d'écriture disparaissent |
 | `--tls-cert`, `--tls-key` | `HUBLOT_TLS_CERT`, `HUBLOT_TLS_KEY` | vides : servir directement en HTTPS avec un certificat que vous fournissez |
 | `--public-origin` | `HUBLOT_PUBLIC_ORIGIN` | vide : l'URL publique derrière un reverse proxy |
+| `--max-conns-per-ip` | `HUBLOT_MAX_CONNS_PER_IP` | `64` : connexions ouvertes en même temps par adresse source (1 à 512) |
 
 `hublot --help` les liste ; `hublot --version` affiche la version.
 
@@ -90,6 +91,11 @@ L'onglet Logs est un flux Server-Sent Events : le proxy ne doit pas le mettre en
 `X-Accel-Buffering: no`, que nginx respecte) et doit accepter les lectures longues (le flux envoie un battement toutes
 les 15 secondes). L'agent ne croit jamais les en-têtes `X-Forwarded-*`.
 
+Derrière un proxy, toutes les connexions viennent de l'adresse du proxy, et l'agent en accepte au plus 64 en même
+temps par adresse : assez pour un ou deux utilisateurs. Pour plus, ou pour un proxy qui garde un grand groupe de
+connexions, augmentez-la, par exemple `-e HUBLOT_MAX_CONNS_PER_IP=256` (512 au plus, le plafond pour toutes les
+adresses ensemble).
+
 Sans proxy, `--tls-cert` et `--tls-key` servent directement en HTTPS. La v0.1 n'obtient pas de certificat elle-même.
 
 ## Binaire et systemd
@@ -98,7 +104,7 @@ L'alternative au conteneur : le binaire statique, lancé en root par systemd. V�
 ([Vérifier la release](#vérifier-la-release)). Utilisez `amd64` ou `arm64`.
 
 ```sh
-V=0.1.0
+V=0.1.2
 ARCH=amd64
 curl -fLO "https://github.com/levy-cmd/Hublot-Kit/releases/download/v$V/hublot-kit_${V}_linux_${ARCH}.tar.gz"
 tar -xzf "hublot-kit_${V}_linux_${ARCH}.tar.gz"
@@ -250,7 +256,7 @@ La signature de `checksums.txt` suivie de la somme suffit ; chaque archive a aus
 (`<archive>.sigstore.json`), contrôle direct facultatif par la même commande `cosign verify-blob`.
 
 ```sh
-V=0.1.0
+V=0.1.2
 ARCH=amd64
 BASE="https://github.com/levy-cmd/Hublot-Kit/releases/download/v$V"
 curl -fLO "$BASE/hublot-kit_${V}_linux_${ARCH}.tar.gz"

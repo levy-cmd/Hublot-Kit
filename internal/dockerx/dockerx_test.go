@@ -240,6 +240,47 @@ func TestWrapPut(t *testing.T) {
 	}
 }
 
+// v0.1.2 (audit, constat 4): with DOCKER_HOST=tcp://user:password@…, the
+// daemon's errors name the host with its credentials. No error of the
+// client carries them, whatever the call; every one is classified.
+func TestErrorsHideDockerHostCredentials(t *testing.T) {
+	t.Setenv("DOCKER_HOST", "tcp://alice:s3cr3t-pw@127.0.0.1:1")
+	c, err := New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_, errList := c.ListContainers(ctx)
+	_, errInspect := c.Inspect(ctx, "web")
+	_, errArchive := c.GetArchive(ctx, "web", "/")
+	_, errLogs := c.Logs(ctx, "web", LogsOptions{Tail: "all"})
+	for name, err := range map[string]error{
+		"Ping": c.Ping(ctx), "ListContainers": errList, "Inspect": errInspect, "GetArchive": errArchive,
+		"PutArchive": c.PutArchive(ctx, "web", "/", strings.NewReader("")), "Logs": errLogs,
+	} {
+		if err == nil {
+			t.Errorf("%s : pas d'erreur sur un démon injoignable", name)
+			continue
+		}
+		if strings.Contains(err.Error(), "s3cr3t-pw") {
+			t.Errorf("%s : %q montre le mot de passe de DOCKER_HOST", name, err)
+		}
+		if name != "Ping" && !errors.Is(err, ErrUnavailable) {
+			t.Errorf("%s : %v, attendu ErrUnavailable", name, err)
+		}
+	}
+	for _, err := range []error{
+		wrap(errors.New("Cannot connect to the Docker daemon at tcp://alice:s3cr3t-pw@h:2375. Is the docker daemon running?")),
+		wrapPut(fmt.Errorf("daemon at tcp://alice:s3cr3t-pw@h:2375: %w", cerrdefs.ErrInvalidArgument)),
+		wrap(fmt.Errorf("daemon at tcp://alice:s3cr3t-pw@h:2375: %w", cerrdefs.ErrNotFound)),
+	} {
+		if strings.Contains(err.Error(), "s3cr3t-pw") {
+			t.Errorf("%q montre le mot de passe", err)
+		}
+	}
+}
+
 // Q21: the --tmpfs destinations (HostConfig.Tmpfs), sorted.
 func TestFromInspectTmpfs(t *testing.T) {
 	got := fromInspect(container.InspectResponse{ID: "x", HostConfig: &container.HostConfig{Tmpfs: map[string]string{"/tmp": "", "/run": "size=1m"}}})

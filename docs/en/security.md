@@ -20,14 +20,21 @@ Treat the access token like the root password of the server.
 
 - The token is 32 random bytes, printed once. Only its SHA-256 hash is stored (`token.sha256`), and it is compared in
   constant time. `hublot reset-token` replaces it.
-- 5 failed logins per minute and per IP address, then `rate_limited`. Every failure is written to the audit log.
+- 5 failed logins per minute and per IP address, then `rate_limited`. Each attempt is counted before its token is
+  read, so a burst of requests gets no more. Failures are written to the audit log, at most 10 lines a minute per
+  address (an IPv6 address counts for its whole /64); past that, one `suppressed` line for that address, and a minute
+  later one line per address counts the failures that were not written, even if they stopped.
+- A connection must send its first byte within 5 seconds, a request must be read within 15 seconds (headers within
+  10), an edit or upload once logged in within 10 minutes; an idle connection is closed after a minute. The agent
+  keeps at most 512 connections open, 64 per address (`--max-conns-per-ip`). A download or a logs stream whose
+  client stops reading for 30 seconds is ended.
 - The session lives in memory for 12 hours. Its cookie is `HttpOnly`, `SameSite=Strict`, and `Secure` with TLS or an
   `https` public origin.
 - Every request other than GET or HEAD must carry an `Origin` header equal to the trusted origin (`--public-origin`,
   or the `Host` of the request). `X-Forwarded-*` headers are never trusted.
 - DNS rebinding: without `--public-origin`, the trusted origin comes from `Host`, so a rebound name passes the
   `Origin` check; the `SameSite=Strict` cookie and the token are then what protect you, and a rebound page can use
-  up the login attempts of `127.0.0.1` for a minute. Exposed beyond `127.0.0.1`, set `--public-origin`.
+  up the login attempts of `127.0.0.1` for a minute, or hold its 64 connections. Exposed beyond `127.0.0.1`, set `--public-origin`.
 
 ## Content of the containers
 

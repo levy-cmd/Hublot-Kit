@@ -2,10 +2,14 @@ package api
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -102,9 +106,16 @@ func (f *fixture) do(method, path, body string, cookie *http.Cookie) *httptest.R
 		r.AddCookie(cookie)
 	}
 	rec := httptest.NewRecorder()
-	f.h.ServeHTTP(rec, r)
+	f.h.ServeHTTP(deadlineRecorder{rec}, r)
 	return rec
 }
+
+// deadlineRecorder is a recorder that accepts write deadlines, as the
+// agent's server does: streams and downloads refuse a writer without them
+// (v0.1.2, Codex).
+type deadlineRecorder struct{ *httptest.ResponseRecorder }
+
+func (deadlineRecorder) SetWriteDeadline(time.Time) error { return nil }
 
 func (f *fixture) login(t *testing.T, token string) (*httptest.ResponseRecorder, *http.Cookie) {
 	t.Helper()
@@ -469,4 +480,447 @@ func TestThrottleLogSweepsAtMostOncePerWindow(t *testing.T) {
 	if _, ok := tl.last["b0"]; ok {
 		t.Fatal("b0 should have been swept one window later")
 	}
+}
+
+// v0.1.2 (audit, constat 3): the attempt is taken before the body is read,
+// atomically. 40 logins of one IP in one burst, their bodies held back:
+// 35 get rate_limited at once, only 5 tokens are ever checked.
+func TestLoginReservesAttemptBeforeReadingBody(t *testing.T) {
+	f := newFixture(t, false)
+	const n = 40
+	done := make(chan int, n)
+	var bodies []*io.PipeWriter
+	t.Cleanup(func() {
+		for _, pw := range bodies {
+			pw.CloseWithError(io.ErrClosedPipe)
+		}
+	})
+	for i := 0; i < n; i++ {
+		pr, pw := io.Pipe()
+		bodies = append(bodies, pw)
+		r := httptest.NewRequest("POST", "http://example.com/api/login", pr)
+		r.RemoteAddr = "192.0.2.9:40000"
+		r.Header.Set("Origin", "http://example.com")
+		go func() {
+			rec := httptest.NewRecorder()
+			f.h.ServeHTTP(rec, r)
+			done <- rec.Code
+		}()
+	}
+	codes := map[int]int{}
+	timeout := time.After(3 * time.Second)
+wait:
+	for codes[http.StatusTooManyRequests] < n-5 {
+		select {
+		case c := <-done:
+			codes[c]++
+		case <-timeout:
+			break wait
+		}
+	}
+	if codes[http.StatusTooManyRequests] != n-5 || len(codes) != 1 {
+		t.Fatalf("avant tout corps : %v, attendu %d rate_limited (5 tentatives réservées)", codes, n-5)
+	}
+	for _, pw := range bodies {
+		go func() { pw.Write([]byte(`{"token":"mauvais"}`)); pw.Close() }()
+	}
+	for i := 0; i < 5; i++ {
+		select {
+		case c := <-done:
+			codes[c]++
+		case <-time.After(3 * time.Second):
+			t.Fatalf("les 5 tentatives réservées ne répondent pas : %v", codes)
+		}
+	}
+	if codes[http.StatusUnauthorized] != 5 {
+		t.Fatalf("%v, attendu 5 unauthorized", codes)
+	}
+	data, _ := os.ReadFile(f.auditP)
+	if got := strings.Count(string(data), `"result":"refused"`); got != 5 {
+		t.Fatalf("%d lignes refused, attendu 5", got)
+	}
+}
+
+// The attempt taken by a good token is given back: it does not eat into the
+// limit of the IP.
+func TestLoginSuccessGivesAttemptBack(t *testing.T) {
+	f := newFixture(t, false)
+	for i := 0; i < 4; i++ {
+		f.login(t, "mauvais")
+	}
+	if rec, c := f.login(t, f.token); rec.Code != http.StatusOK || c == nil {
+		t.Fatalf("bon jeton après 4 échecs : %d", rec.Code)
+	}
+	if rec, _ := f.login(t, "mauvais"); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("5e échec : %d, attendu 401 (la tentative réussie est rendue)", rec.Code)
+	}
+	if rec, _ := f.login(t, "mauvais"); rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("6e échec : %d, attendu 429", rec.Code)
+	}
+}
+
+// v0.1.2 (audit, constat 3, counter-audit): the login.fail lines are bounded
+// per address block (an IPv4 address, an IPv6 /64), never for every IP
+// together: one attacker cannot hide the failures of another. Past the
+// budget, one "suppressed" line for the block; the next minute, one line
+// counts what was not written.
+func TestLoginFailLogPerBlock(t *testing.T) {
+	now := time.Now()
+	logClock = func() time.Time { return now }
+	oldDelay := loginSummaryDelay
+	loginSummaryDelay = 300 * time.Millisecond
+	t.Cleanup(func() { logClock, loginSummaryDelay = time.Now, oldDelay })
+	f := newFixture(t, false)
+	fail := func(remote string) {
+		r := httptest.NewRequest("POST", "http://example.com/api/login", strings.NewReader(`{"token":"mauvais"}`))
+		r.RemoteAddr = remote
+		r.Header.Set("Origin", "http://example.com")
+		f.h.ServeHTTP(httptest.NewRecorder(), r)
+	}
+	for i := 1; i <= 200; i++ { // 200 addresses of one /64: each gets its own 5 attempts
+		fail(fmt.Sprintf("[2001:db8:1:2::%x]:1", i))
+	}
+	fail("192.0.2.77:1") // another attacker, or a user who mistyped
+	lines := func() []audit.Event {
+		data, _ := os.ReadFile(f.auditP)
+		var out []audit.Event
+		for _, l := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+			var e audit.Event
+			if json.Unmarshal([]byte(l), &e) == nil && e.Action == "login.fail" {
+				out = append(out, e)
+			}
+		}
+		return out
+	}
+	block, suppressed, other := 0, 0, 0
+	for _, e := range lines() {
+		switch {
+		case e.Result == "suppressed" && strings.HasPrefix(e.Error, "over "):
+			suppressed++
+		case e.Result == "suppressed":
+		case strings.HasPrefix(e.Remote, "2001:db8:1:2:"):
+			block++
+		case e.Remote == "192.0.2.77":
+			other++
+		}
+	}
+	if block != loginLogPerBlock || suppressed != 1 || other != 1 {
+		t.Fatalf("bloc %d lignes (attendu %d), suppressed %d (attendu 1), autre IP %d (attendu 1)", block, loginLogPerBlock, suppressed, other)
+	}
+	// v0.1.2 (Codex): the failures stop; the summary still comes, by a
+	// timer, and names the block.
+	want := fmt.Sprintf("%d failed logins", 200-loginLogPerBlock)
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		var summary *audit.Event
+		for _, e := range lines() {
+			if e.Result == "suppressed" && strings.HasPrefix(e.Error, want) {
+				summary = &e
+			}
+		}
+		if summary != nil {
+			if summary.Remote != "2001:db8:1:2::/64" {
+				t.Fatalf("synthèse : %+v, attendu le bloc 2001:db8:1:2::/64", summary)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("synthèse jamais écrite sans nouvel échec : %v", lines())
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// One grouping for the login.fail budget and the connection cap: an IPv4
+// address (mapped in IPv6 or not), or the /64 of an IPv6 address.
+func TestAddressBlock(t *testing.T) {
+	for in, want := range map[string]string{
+		"192.0.2.1": "192.0.2.1", "::ffff:192.0.2.1": "192.0.2.1", "2001:db8:1:2::5": "2001:db8:1:2::/64",
+		"2001:db8:1:2:ffff::1": "2001:db8:1:2::/64", "::1": "::/64", "pas une ip": "pas une ip",
+	} {
+		if got := AddressBlock(in); got != want {
+			t.Errorf("AddressBlock(%q) = %q, attendu %q", in, got, want)
+		}
+	}
+}
+
+// v0.1.2 (audit, constat 4): with DOCKER_HOST=tcp://user:password@…, the
+// daemon's error names the password. It never reaches a response (fixed
+// detail) nor the agent's log.
+func TestDockerErrorsGiveFixedDetail(t *testing.T) {
+	var logs bytes.Buffer
+	old := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(old) })
+	const secret = "s3cr3t-pw"
+	msg := "Cannot connect to the Docker daemon at tcp://alice:" + secret + "@10.0.0.1:2375. Is the docker daemon running?"
+	f := newFixture(t, false)
+	c := f.session(t)
+	check := func(what string, rec *httptest.ResponseRecorder) {
+		t.Helper()
+		if b := rec.Body.String(); strings.Contains(b, secret) || strings.Contains(b, "tcp://") {
+			t.Errorf("%s : %d %s", what, rec.Code, b)
+		}
+	}
+	f.docker.Err = errors.New(msg) // as the client gives it
+	check("/api/containers (erreur brute)", f.do("GET", "/api/containers", "", c))
+	for _, err := range []error{
+		fmt.Errorf("%w: %s", dockerx.ErrUnavailable, msg),
+		fmt.Errorf("%w: %s", dockerx.ErrRefused, msg),
+		fmt.Errorf("%w: %s", dockerx.ErrPutInvalid, msg),
+		fmt.Errorf("%w: %s", dockerx.ErrNoLogs, msg),
+	} {
+		f.docker.Err = err
+		for _, p := range []string{"/api/containers", "/api/containers/web", "/api/containers/web/logs",
+			"/api/containers/web/logs/download", "/api/containers/web/changes"} {
+			check(p, f.do("GET", p, "", c))
+		}
+		check("env/reveal", f.do("POST", "/api/containers/web/env/reveal", `{"name":"X"}`, c))
+	}
+	// Past the first byte the reader of the logs fails: the stream reports it.
+	f.docker.Err = nil
+	f.docker.LogsErr = fmt.Errorf("%w: %s", dockerx.ErrUnavailable, msg)
+	check("logs (Logs)", f.do("GET", "/api/containers/web/logs", "", c))
+	check("logs/download (Logs)", f.do("GET", "/api/containers/web/logs/download", "", c))
+	if strings.Contains(logs.String(), secret) {
+		t.Errorf("journal de l'agent : %s", logs.String())
+	}
+}
+
+// v0.1.2 (audit, constat 2): only ReadHeaderTimeout was set. The agent's
+// server (ConfigureServer) bounds the reading of a body and the idle
+// keep-alive, never the writing (logs stream, long downloads).
+func TestConfigureServer(t *testing.T) {
+	var srv http.Server
+	ConfigureServer(&srv)
+	if srv.ReadHeaderTimeout <= 0 || srv.ReadTimeout <= 0 || srv.IdleTimeout <= 0 || srv.WriteTimeout != 0 {
+		t.Fatalf("délais : en-têtes %s, lecture %s, inactivité %s, écriture %s", srv.ReadHeaderTimeout, srv.ReadTimeout, srv.IdleTimeout, srv.WriteTimeout)
+	}
+}
+
+// serve starts f.h on a real server configured by ConfigureServer, with
+// short delays.
+func (f *fixture) serve(t *testing.T, read time.Duration) string {
+	t.Helper()
+	oldRead, oldIdle := readTimeout, idleTimeout
+	readTimeout, idleTimeout = read, read
+	t.Cleanup(func() { readTimeout, idleTimeout = oldRead, oldIdle })
+	ts := httptest.NewUnstartedServer(f.h)
+	ConfigureServer(ts.Config)
+	ts.Start()
+	t.Cleanup(ts.Close)
+	return ts.Listener.Addr().String()
+}
+
+// closedWithin: the server closes conn (EOF or reset) within limit.
+func closedWithin(conn net.Conn, limit time.Duration) bool {
+	conn.SetReadDeadline(time.Now().Add(limit))
+	_, err := io.Copy(io.Discard, conn)
+	var ne net.Error
+	return !(errors.As(err, &ne) && ne.Timeout())
+}
+
+// A body that never comes (the audit held 1 000 connections for 25 s with
+// POST /api/login and Content-Length: 100), an idle keep-alive: the
+// connection is closed.
+func TestSlowClientsAreCut(t *testing.T) {
+	f := newFixture(t, false)
+	addr := f.serve(t, 300*time.Millisecond)
+	for _, head := range []string{
+		"POST /api/login HTTP/1.1\r\nHost: example.com\r\nOrigin: http://example.com\r\nContent-Type: application/json\r\nContent-Length: 100\r\n\r\n",
+		// Without a session, the upload routes keep the short delay.
+		"PUT /api/containers/web/fs/file?path=/x HTTP/1.1\r\nHost: example.com\r\nOrigin: http://example.com\r\nContent-Length: 100\r\n\r\n",
+		"POST /api/containers/web/fs/upload?dir=/ HTTP/1.1\r\nHost: example.com\r\nOrigin: http://example.com\r\nContent-Length: 100\r\n\r\n",
+		"GET /api/meta HTTP/1.1\r\nHost: example.com\r\nContent-Length: 100\r\n\r\n",
+		"GET /api/meta HTTP/1.1\r\nHost: example.com\r\n\r\n", // answered, then idle
+	} {
+		conn, err := net.Dial("tcp", addr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		conn.Write([]byte(head))
+		if !closedWithin(conn, 3*time.Second) {
+			t.Errorf("connexion encore ouverte après 3 s : %q", strings.SplitN(head, "\r\n", 2)[0])
+		}
+		conn.Close()
+	}
+}
+
+// The read delay ends with the request's reading: a logs stream lives past
+// it (net/http lifts it for its background read; guard against a delay set
+// by hand, which would cancel the stream's context).
+func TestLogsStreamOutlivesReadTimeout(t *testing.T) {
+	f := newFixture(t, false)
+	f.docker.LogStreams = map[string][]byte{webID: nil}
+	f.docker.LogsGate = make(chan struct{})
+	c := f.session(t)
+	addr := f.serve(t, 200*time.Millisecond)
+	req, _ := http.NewRequest("GET", "http://"+addr+"/api/containers/web/logs", nil)
+	req.AddCookie(c)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ended := make(chan error, 1)
+	go func() { _, err := io.Copy(io.Discard, resp.Body); ended <- err }()
+	select {
+	case err := <-ended:
+		t.Fatalf("flux terminé avant 1 s (%v) : le délai de lecture l'a coupé", err)
+	case <-time.After(time.Second):
+	}
+	resp.Body.Close()
+}
+
+// A logged-in edit whose body comes slowly is read whole: the session
+// extends the delay of the upload routes.
+func TestSlowEditWithSessionIsRead(t *testing.T) {
+	f, c := writeFixture(t, false)
+	tag := f.do("GET", "/api/containers/web/fs/file?path=/etc/app.conf", "", c).Header().Get("ETag")
+	addr := f.serve(t, 300*time.Millisecond)
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	body := "10.0.0.1\n"
+	fmt.Fprintf(conn, "PUT /api/containers/web/fs/file?path=/etc/app.conf HTTP/1.1\r\nHost: example.com\r\nOrigin: http://example.com\r\n"+
+		"Cookie: %s=%s\r\nIf-Match: %s\r\nContent-Length: %d\r\n\r\n", c.Name, c.Value, tag, len(body))
+	for _, part := range []string{body[:3], body[3:6], body[6:]} {
+		time.Sleep(250 * time.Millisecond) // 750 ms in all, past the 300 ms delay
+		conn.Write([]byte(part))
+	}
+	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+	if err != nil {
+		t.Fatalf("pas de réponse : %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("édition lente : %d %s", resp.StatusCode, b)
+	}
+}
+
+// stallWrites shortens writeStallTimeout for one test.
+func stallWrites(t *testing.T, d time.Duration) {
+	t.Helper()
+	old := writeStallTimeout
+	writeStallTimeout = d
+	t.Cleanup(func() { writeStallTimeout = old })
+}
+
+// stalledGet sends a GET with the session cookie, reads the first bytes of
+// the answer, then never reads again (a download paused in the browser). The
+// small receive buffer fills fast.
+func stalledGet(t *testing.T, addr, target string, c *http.Cookie) net.Conn {
+	t.Helper()
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { conn.Close() })
+	conn.(*net.TCPConn).SetReadBuffer(4096)
+	fmt.Fprintf(conn, "GET %s HTTP/1.1\r\nHost: example.com\r\nCookie: %s=%s\r\n\r\n", target, c.Name, c.Value)
+	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	if _, err := io.ReadFull(conn, make([]byte, 512)); err != nil {
+		t.Fatalf("%s : %v", target, err)
+	}
+	return conn
+}
+
+// v0.1.2 (counter-audit, constat 1): io.Copy of a download had no write
+// deadline. Four downloads whose client stopped reading held the four slots
+// of the container, and the listing answered 503 (on a stopped container,
+// dockerd's lock stayed taken). A write that makes no progress for
+// writeStallTimeout ends the download and frees its slot.
+func TestStalledDownloadsFreeTheirSlots(t *testing.T) {
+	stallWrites(t, 300*time.Millisecond)
+	f, c := writeFixture(t, false)
+	f.fs.AddFile("/big", bytes.Repeat([]byte("x"), 64<<20))
+	addr := f.serve(t, 5*time.Second)
+	for i := 0; i < fsMaxPerContainer; i++ {
+		stalledGet(t, addr, "/api/containers/web/fs/download?path=/big", c)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		rec := f.do("GET", "/api/containers/web/fs?path=/", "", c)
+		if rec.Code == http.StatusOK {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("créneaux jamais rendus : %d %s", rec.Code, rec.Body)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+// v0.1.2 (Codex): a writer on which no write deadline can be set ends the
+// download or the stream before sending anything (fail closed), never goes
+// on without protection. A plain recorder has no deadline.
+func TestNoWriteDeadlineNoTransfer(t *testing.T) {
+	f, c := writeFixture(t, false)
+	f.docker.LogStreams = map[string][]byte{webID: bigLogs(10, 100)}
+	f.docker.LogsGate = make(chan struct{})
+	t.Cleanup(func() { close(f.docker.LogsGate) })
+	serve := func(target string) (body string, aborted bool) {
+		r := httptest.NewRequest("GET", "http://example.com"+target, nil)
+		r.AddCookie(c)
+		rec := httptest.NewRecorder()
+		done := make(chan bool, 1)
+		go func() {
+			defer func() { done <- recover() == http.ErrAbortHandler }()
+			f.h.ServeHTTP(rec, r)
+		}()
+		select {
+		case aborted = <-done:
+		case <-time.After(3 * time.Second):
+			t.Fatalf("%s : toujours en cours sans délai d'écriture", target)
+		}
+		return rec.Body.String(), aborted
+	}
+	if body, _ := serve("/api/containers/web/fs/download?path=/etc/app.conf"); strings.Contains(body, "port=80") {
+		t.Errorf("téléchargement envoyé sans délai d'écriture : %q", body)
+	}
+	if body, _ := serve("/api/containers/web/logs/download"); strings.Contains(body, "lll") {
+		t.Errorf("logs téléchargés sans délai d'écriture : %q", body)
+	}
+	if body, _ := serve("/api/containers/web/logs"); strings.Contains(body, "lll") {
+		t.Errorf("flux SSE sans délai d'écriture : %q", body)
+	}
+}
+
+// waitCloses waits until Docker's logs stream was closed n times.
+func waitCloses(t *testing.T, f *fixture, n int32, what string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for f.docker.LogsCloses.Load() < n {
+		if time.Now().After(deadline) {
+			t.Fatalf("%s : flux de Docker jamais fermé (%d fermetures)", what, f.docker.LogsCloses.Load())
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// bigLogs: n lines of size bytes, in Docker's multiplexed frames (stdout).
+func bigLogs(n, size int) []byte {
+	line := append([]byte("2026-10-23T10:00:00.000000000Z "), bytes.Repeat([]byte("l"), size)...)
+	line = append(line, '\n')
+	frame := append([]byte{1, 0, 0, 0, byte(len(line) >> 24), byte(len(line) >> 16), byte(len(line) >> 8), byte(len(line))}, line...)
+	return bytes.Repeat(frame, n)
+}
+
+// The logs download and the live stream: a client that stops reading keeps
+// neither a slot nor Docker's stream (the gate holds the stream open, as a
+// container that keeps running).
+func TestStalledLogsEnd(t *testing.T) {
+	stallWrites(t, 300*time.Millisecond)
+	f := newFixture(t, false)
+	f.docker.LogStreams = map[string][]byte{webID: bigLogs(4000, 16000)}
+	f.docker.LogsGate = make(chan struct{})
+	t.Cleanup(func() { close(f.docker.LogsGate) })
+	c := f.session(t)
+	addr := f.serve(t, 5*time.Second)
+	stalledGet(t, addr, "/api/containers/web/logs/download", c)
+	waitCloses(t, f, 1, "téléchargement des logs")
+	stalledGet(t, addr, "/api/containers/web/logs", c)
+	waitCloses(t, f, 2, "flux SSE")
 }

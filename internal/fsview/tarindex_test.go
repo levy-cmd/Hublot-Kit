@@ -548,6 +548,43 @@ func TestBuildIndexLimits(t *testing.T) {
 	}
 }
 
+// v0.1.2 (audit, constat 1): the bytes of names and link targets are capped
+// together, like the entries: 50 000 entries of 4 KiB paths and targets held
+// ~624 MB of heap, ~5.4 GiB at the 4 GiB cap, three indexes in the cache.
+func TestBuildIndexNameBytesCap(t *testing.T) {
+	if DefaultIndexLimits.MaxNameBytes != 256<<20 {
+		t.Errorf("MaxNameBytes par défaut = %d, attendu 256 Mio", DefaultIndexLimits.MaxNameBytes)
+	}
+	long := strings.Repeat("n", 1000)
+	var hs []hdr
+	for i := 0; i < 300; i++ { // ~300 × (1 000 + 1 000) octets de noms et de cibles
+		hs = append(hs, tlink(fmt.Sprintf("/d/%s%d", long, i), "/"+long))
+	}
+	b := mkTar(t, hs...)
+	lim := DefaultIndexLimits
+	lim.MaxNameBytes = 256 << 10
+	if _, err := buildIndex(tctx, bytes.NewReader(b), lim, new(atomic.Int64)); !errors.Is(err, ErrTooLarge) || errors.Is(err, errTooSlow) {
+		t.Errorf("plafond des noms : %v, attendu ErrTooLarge (définitif, pas errTooSlow)", err)
+	}
+	// Names alone count too (no target).
+	var files []hdr
+	for i := 0; i < 300; i++ {
+		files = append(files, tfile(fmt.Sprintf("/f/%s%d", long, i), ""))
+	}
+	if _, err := buildIndex(tctx, bytes.NewReader(mkTar(t, files...)), lim, new(atomic.Int64)); !errors.Is(err, ErrTooLarge) {
+		t.Errorf("plafond des noms sans cible : %v", err)
+	}
+	// Control: under the cap, and a zero cap (Options of Views) takes the default.
+	lim.MaxNameBytes = 1 << 20
+	if _, err := buildIndex(tctx, bytes.NewReader(b), lim, new(atomic.Int64)); err != nil {
+		t.Errorf("sous le plafond : %v", err)
+	}
+	lim.MaxNameBytes = 0
+	if _, err := buildIndex(tctx, bytes.NewReader(b), lim, new(atomic.Int64)); err != nil {
+		t.Errorf("plafond nul (défaut) : %v", err)
+	}
+}
+
 func TestProgress(t *testing.T) {
 	for _, c := range []struct {
 		read, total int64

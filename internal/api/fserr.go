@@ -5,11 +5,13 @@ import (
 	"io/fs"
 	"log/slog"
 	"net/http"
+	"strings"
 	"syscall"
 
 	"github.com/levy-cmd/hublot-kit/internal/dockerx"
 	"github.com/levy-cmd/hublot-kit/internal/files"
 	"github.com/levy-cmd/hublot-kit/internal/fsview"
+	"github.com/levy-cmd/hublot-kit/internal/secrets"
 )
 
 // indexingJSON is the 202 of spec §6: the error body plus the progress.
@@ -27,13 +29,41 @@ func writeFSError(w http.ResponseWriter, err error) {
 	}
 	status, code := fsErrorStatus(err)
 	if status >= 500 {
-		slog.Warn("file route error", "code", code, "status", status, "err", err)
+		slog.Warn("file route error", "code", code, "status", status, "err", secrets.Line(err.Error()))
 	}
-	detail := err.Error()
+	writeError(w, status, code, errorDetail(status, err))
+}
+
+// errorDetail is the detail of an error response: fixed for a 404 and for
+// an error of the Docker daemon (dockerDetail), the error's text otherwise.
+func errorDetail(status int, err error) string {
 	if status == http.StatusNotFound {
-		detail = notFoundDetail(err)
+		return notFoundDetail(err)
 	}
-	writeError(w, status, code, detail)
+	if d := dockerDetail(err); d != "" {
+		return d
+	}
+	return err.Error()
+}
+
+// dockerDetail is the detail of an error of the Docker daemon (v0.1.2,
+// audit): a fixed text, never the daemon's, which names the password of
+// DOCKER_HOST=tcp://user:password@…. "" if err is not one.
+func dockerDetail(err error) string {
+	switch {
+	case errors.Is(err, dockerx.ErrNoLogs):
+		return "Docker cannot read back the logs of this log driver"
+	case errors.Is(err, dockerx.ErrRefused): // the two measured messages (Q15), named by a fixed text
+		if strings.Contains(err.Error(), "rootfs") {
+			return "refused by Docker: the container's root filesystem (rootfs) is read-only"
+		}
+		return "refused by Docker: read-only volume or file system"
+	case errors.Is(err, dockerx.ErrPutInvalid):
+		return "refused by Docker: the path changed"
+	case errors.Is(err, dockerx.ErrUnavailable):
+		return "Docker did not answer, or failed (see the agent's log)"
+	}
+	return ""
 }
 
 // reservedStatus: codes of spec v0.2 §6 reserved by tranche 1, so that the

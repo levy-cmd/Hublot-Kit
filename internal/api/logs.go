@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/levy-cmd/hublot-kit/internal/dockerx"
+	"github.com/levy-cmd/hublot-kit/internal/secrets"
 )
 
 // logLimits of F6 (plan Observation, Q31 to Q33, Q37). Tests shrink them through
@@ -41,9 +42,11 @@ const maxDownloadLine = 1 << 20
 // downloads, which are never evicted.
 var errTooManyStreams = errors.New("too many open log streams")
 
-// sseWriteTimeout bounds each write of a stream (review I4): a client
-// that no longer reads cannot hold the goroutine.
-const sseWriteTimeout = 30 * time.Second
+// writeStallTimeout bounds each write of a stream (review I4), of a logs
+// download and of a file download (v0.1.2, counter-audit): a client that no
+// longer reads holds neither the goroutine nor the slot. Renewed by each
+// write, so a slow client that reads goes on. A variable: tests shorten it.
+var writeStallTimeout = 30 * time.Second
 
 // lineID is the SSE ID of a line: its timestamp, its stream, and its rank
 // among the lines of that stream with that same timestamp. Within one
@@ -188,9 +191,14 @@ type sse struct {
 	f *http.ResponseController
 }
 
-// deadline: every write of a stream ends within sseWriteTimeout (a writer
-// that cannot set one, in tests, writes without).
-func (e sse) deadline() { e.f.SetWriteDeadline(time.Now().Add(sseWriteTimeout)) }
+// deadline: every write of a stream ends within writeStallTimeout. A writer
+// that cannot set one ends the stream (v0.1.2, Codex: fail closed).
+func (e sse) deadline() error {
+	if err := e.f.SetWriteDeadline(time.Now().Add(writeStallTimeout)); err != nil {
+		return fmt.Errorf("write deadline: %w", err)
+	}
+	return nil
+}
 
 func (e sse) event(name, id string, data any) error {
 	b, err := json.Marshal(data)
@@ -207,7 +215,9 @@ func (e sse) event(name, id string, data any) error {
 	sb.WriteString("data: ")
 	sb.Write(b)
 	sb.WriteString("\n\n")
-	e.deadline()
+	if err := e.deadline(); err != nil {
+		return err
+	}
 	if _, err := e.w.Write([]byte(sb.String())); err != nil {
 		return err
 	}
@@ -215,7 +225,9 @@ func (e sse) event(name, id string, data any) error {
 }
 
 func (e sse) comment(text string) error {
-	e.deadline()
+	if err := e.deadline(); err != nil {
+		return err
+	}
 	if _, err := e.w.Write([]byte(": " + text + "\n\n")); err != nil {
 		return err
 	}
@@ -224,11 +236,11 @@ func (e sse) comment(text string) error {
 
 // failure reports err in the stream with the code of spec §6.
 func (e sse) failure(err error) {
-	_, code := fsErrorStatus(err)
+	status, code := fsErrorStatus(err)
 	if code == "internal" || code == "docker_unavailable" {
-		slog.Warn("logs stream error", "code", code, "err", err)
+		slog.Warn("logs stream error", "code", code, "err", secrets.Line(err.Error()))
 	}
-	e.event("failure", "", apiError{Error: code, Detail: err.Error()})
+	e.event("failure", "", apiError{Error: code, Detail: errorDetail(status, err)})
 }
 
 type logJSON struct {
@@ -264,7 +276,9 @@ func (s *server) logsStream(w http.ResponseWriter, r *http.Request) {
 	h.Set("X-Accel-Buffering", "no") // nginx: no buffering of the stream
 	w.WriteHeader(http.StatusOK)
 	out := sse{w: w, f: http.NewResponseController(w)}
-	out.deadline()
+	if out.deadline() != nil {
+		return
+	}
 	out.f.Flush()
 	lim := s.logLimits
 
@@ -422,8 +436,19 @@ type timedWriter struct {
 	n *int // bytes that reached the client
 }
 
+// canTimeWrites: a write deadline can be set on w. Checked before a download
+// asks Docker anything: without one, nothing is sent (v0.1.2, Codex).
+func canTimeWrites(w http.ResponseWriter) error {
+	if err := http.NewResponseController(w).SetWriteDeadline(time.Now().Add(writeStallTimeout)); err != nil {
+		return fmt.Errorf("write deadline: %w", err)
+	}
+	return nil
+}
+
 func (t timedWriter) Write(p []byte) (int, error) {
-	t.c.SetWriteDeadline(time.Now().Add(sseWriteTimeout))
+	if err := t.c.SetWriteDeadline(time.Now().Add(writeStallTimeout)); err != nil {
+		return 0, fmt.Errorf("write deadline: %w", err) // fail closed (v0.1.2, Codex)
+	}
 	n, err := t.w.Write(p)
 	*t.n += n
 	return n, err
@@ -442,6 +467,10 @@ var unsafeName = regexp.MustCompile(`[^A-Za-z0-9_.-]`)
 // "<ts> <stream> <line>" per line, as an attachment (spec §7). Errors before
 // the first byte are API errors; after it, the file is cut short.
 func (s *server) logsDownload(w http.ResponseWriter, r *http.Request) {
+	if err := canTimeWrites(w); err != nil {
+		writeFSError(w, err)
+		return
+	}
 	info, err := s.inspectByRef(r)
 	if err != nil {
 		writeFSError(w, err)
@@ -484,7 +513,7 @@ func (s *server) logsDownload(w http.ResponseWriter, r *http.Request) {
 		err = bw.Flush()
 	}
 	if err != nil && r.Context().Err() == nil {
-		slog.Warn("logs download cut", "container", info.ID, "err", err)
+		slog.Warn("logs download cut", "container", info.ID, "err", secrets.Line(err.Error()))
 		if written == 0 {
 			h.Del("Content-Disposition")
 			writeFSError(w, err)
