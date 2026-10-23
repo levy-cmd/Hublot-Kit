@@ -15,7 +15,7 @@ cleanup() {
 }
 cleanup
 trap cleanup EXIT
-docker run --name hublot-e2e -e DB_PASSWORD=s3cr3t-e2e -e GREETING=bonjour alpine:3 sh -c 'echo "bonjour hublot" > /root/note.txt'
+docker run --name hublot-e2e -e DB_PASSWORD=s3cr3t-e2e -e API_TOKEN=s3cr3t-1 -e API_TOKEN=s3cr3t-2 -e GREETING=bonjour alpine:3 sh -c 'echo "bonjour hublot" > /root/note.txt'
 tok=$(docker run --rm -v hublot-e2e-data:/data -v "$PWD/bin/hublot-linux:/hublot:ro" alpine:3 \
   /hublot reset-token --data-dir /data | sed -n 's/^New access token (shown only once): //p')
 test -n "$tok"

@@ -79,7 +79,7 @@ From 90 rem wide, four panels side by side; below, tabs.
 The Secrets page takes the inventory of what the agent masks, across every container at once. It shows **names** only, never a value:
 
 - the environment variables the X-ray masks;
-- the arguments of the command and the entrypoint that hold a masked part, in the form the Overview tab shows;
+- the arguments of the command and the entrypoint where the agent found a secret, by their place and what was detected ("Command, argument 3: value of --requirepass"), never by their text: a partial mask could leave a rest of the value visible;
 - the names of the masked labels. Every label outside `com.docker.compose.*` and `org.opencontainers.image.*` is masked as a precaution, whether it holds a secret or not: they are counted apart.
 
 Containers are sorted by number of detected secrets (variables and arguments), then by number of masked labels; the "Project" list filters by Compose project, as on the Containers page. A row unfolds on its variables; "Reveal" goes through the same request as the Secrets tab of the detail, journaled by the agent, and allowed in read-only mode. The command and the labels cannot be revealed.

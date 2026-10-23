@@ -3,7 +3,8 @@ import { expect, test } from '@playwright/test';
 // Plan v0.2, tranche 4: the Secrets page (spec v0.2 §5.9). The inventory
 // gives names only; one value is revealed by POST /env/reveal, by full ID,
 // and forgotten on leaving the page; nothing goes to a browser store.
-// scripts/e2e.sh gives hublot-e2e DB_PASSWORD=s3cr3t-e2e and GREETING=bonjour.
+// scripts/e2e.sh gives hublot-e2e DB_PASSWORD=s3cr3t-e2e, API_TOKEN twice
+// (Docker keeps both: the page lists it once) and GREETING=bonjour.
 test('secrets : inventaire sans valeurs, révélation unitaire oubliée', async ({ page }) => {
 	const token = process.env.HUBLOT_TOKEN;
 	if (!token) throw new Error('HUBLOT_TOKEN absent : lancer par scripts/e2e.sh');
@@ -36,12 +37,14 @@ test('secrets : inventaire sans valeurs, révélation unitaire oubliée', async 
 	await fold.click();
 	await expect(fold).toHaveAttribute('aria-expanded', 'true');
 	const row = page.locator('li.row', { has: fold });
-	await expect(row.locator('code.vname')).toHaveText(['DB_PASSWORD']);
+	await expect(row.locator('code.vname')).toHaveCount(2);
+	expect((await row.locator('code.vname').allTextContents()).sort()).toEqual(['API_TOKEN', 'DB_PASSWORD']);
+	const db = row.locator('li', { has: page.locator('code.vname', { hasText: 'DB_PASSWORD' }) });
 	await expect(row).toContainText('••••••');
 	await expect(page.locator('body')).not.toContainText('s3cr3t');
 
 	// Reveal: by full ID, journaled by the agent; Hide forgets it.
-	await row.getByRole('button', { name: 'Révéler' }).click();
+	await db.getByRole('button', { name: 'Révéler' }).click();
 	await expect(row.locator('code.value')).toHaveText('s3cr3t-e2e');
 	expect(reveals).toHaveLength(1);
 	expect(reveals[0]).toMatch(/^POST \/api\/containers\/[0-9a-f]{64}\/env\/reveal$/);
@@ -51,12 +54,12 @@ test('secrets : inventaire sans valeurs, révélation unitaire oubliée', async 
 	await expect(row.locator('code.value')).toHaveCount(0);
 
 	// Folding the row, then leaving the page, forget the value.
-	await row.getByRole('button', { name: 'Révéler' }).click();
+	await db.getByRole('button', { name: 'Révéler' }).click();
 	await expect(row.locator('code.value')).toHaveText('s3cr3t-e2e');
 	await fold.click();
 	await fold.click();
 	await expect(row.locator('code.value')).toHaveCount(0);
-	await row.getByRole('button', { name: 'Révéler' }).click();
+	await db.getByRole('button', { name: 'Révéler' }).click();
 	await expect(row.locator('code.value')).toHaveText('s3cr3t-e2e');
 	await page.getByRole('navigation', { name: 'Navigation principale' }).getByRole('link', { name: 'Conteneurs' }).click();
 	await expect(page.getByRole('heading', { level: 1 })).toHaveText('Conteneurs');

@@ -7,8 +7,8 @@
 	import { errorMessage, t, tf } from '#lib/i18n/index.ts';
 	import Icon from '#lib/icons/Icon.svelte';
 	import {
-		addInvReveal, askInv, dropInvContainer, filterRows, forgetInv, getSecrets, invRevealed, noInvReveals,
-		projectsOfRows, removeInvReveal, secretCount, sortRows, type SecretRow
+		addInvReveal, argText, askInv, dropInvContainer, filterRows, forgetInv, getSecrets, invRevealed, noInvReveals,
+		projectsOfRows, removeInvReveal, secretCount, sortRows, uniqueNames, type SecretRow
 	} from '#lib/inventory.ts';
 	import { withParams } from '#lib/url.ts';
 
@@ -191,7 +191,7 @@
 								{#if r.env.length}
 									<h2>{t('secrets.env')}</h2>
 									<ul class="env">
-										{#each r.env as name (name)}
+										{#each uniqueNames(r.env) as name, i (i)}
 											{@const value = invRevealed(reveals, r.id, name)}
 											<li>
 												<code class="vname">{name}</code>
@@ -213,14 +213,14 @@
 								{#if r.args.length}
 									<h2>{t('secrets.args')}</h2>
 									<ul class="plain">
-										{#each r.args as a, i (i)}<li><code>{a}</code></li>{/each}
+										{#each r.args as a, i (i)}<li>{argText(a)}</li>{/each}
 									</ul>
 									<p class="note small">{t('secrets.argsHint')}</p>
 								{/if}
 								{#if r.labels.length}
 									<h2>{t('secrets.labels')}</h2>
 									<ul class="chips">
-										{#each r.labels as k (k)}<li><code>{k}</code></li>{/each}
+										{#each r.labels as k, i (i)}<li><code>{k}</code></li>{/each}
 									</ul>
 									<p class="note small">{t('secrets.labelsHint')}</p>
 								{/if}

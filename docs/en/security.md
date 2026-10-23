@@ -69,8 +69,8 @@ Treat the access token like the root password of the server.
   be revealed: a Traefik `basicauth.users` label holds a password hash the rules above do not recognise.
 - A masked value is revealed one at a time, and each reveal is written to the audit log (the name, never the value)
   before the value is sent.
-- The Secrets page (`GET /api/secrets`) returns names only: masked variables, arguments in their masked form, keys of
-  the masked labels. It has no reveal of its own: a value goes through the same journaled request as the X-ray, one
+- The Secrets page (`GET /api/secrets`) returns names only: masked variables, arguments by their place and what was detected in them (never their text,
+  which a partial mask could let through), keys of the masked labels. It has no reveal of its own: a value goes through the same journaled request as the X-ray, one
   variable at a time, under the `Origin` check. Like every answer of the API, it is not cached
   (`Cache-Control: no-store`), and the interface writes no value to the browser's storage. Its cost is bounded: four
   `docker inspect` at a time for the whole agent, 3 s each, 15 s and 1,000 containers per inventory; past that, a

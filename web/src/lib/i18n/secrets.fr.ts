@@ -21,7 +21,17 @@ export default {
 	'secrets.count.labels.other': '{n} labels masqués',
 	'secrets.env': 'Variables',
 	'secrets.args': 'Arguments masqués',
-	'secrets.argsHint': 'La commande ne se révèle pas : elle est montrée telle que la radiographie la masque.',
+	'secrets.argsHint':
+		"La commande ne se révèle pas. Seuls la place de l'argument et ce qui y a été détecté sont montrés, jamais son texte.",
+	'secrets.arg': '{part}, argument {n} : {what}',
+	'secrets.arg.part.entrypoint': "Point d'entrée",
+	'secrets.arg.part.cmd': 'Commande',
+	'secrets.arg.kind.flag': 'valeur de {name}',
+	'secrets.arg.kind.assignment': 'valeur de {name}=',
+	'secrets.arg.kind.shell': 'ligne de commande {name}',
+	'secrets.arg.kind.url': 'URL à identifiants',
+	'secrets.arg.kind.authorization': "en-tête d'autorisation",
+	'secrets.arg.kind.other': 'valeur reconnue comme secrète',
 	'secrets.labels': 'Labels masqués',
 	'secrets.labelsHint':
 		'Tout label hors de com.docker.compose.* et org.opencontainers.image.* est masqué par précaution, secret ou non. Les labels ne se révèlent pas.',

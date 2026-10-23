@@ -79,7 +79,7 @@ Les labels portent souvent des secrets que le masquage ne reconnaît pas, par ex
 La page Secrets fait l'inventaire de ce que l'agent masque, sur tous les conteneurs à la fois. Elle ne montre que des **noms**, jamais une valeur :
 
 - les variables d'environnement que la radiographie masque ;
-- les arguments de la commande et du point d'entrée qui contiennent une partie masquée, sous la forme que montre l'onglet Aperçu ;
+- les arguments de la commande et du point d'entrée où l'agent a trouvé un secret, par leur place et par ce qui a été détecté (« Commande, argument 3 : valeur de --requirepass »), jamais par leur texte : un masque partiel pourrait laisser voir un reste de la valeur ;
 - les noms des labels masqués. Tout label hors de `com.docker.compose.*` et `org.opencontainers.image.*` est masqué par précaution, qu'il porte un secret ou non : ils sont comptés à part.
 
 Les conteneurs sont triés par nombre de secrets détectés (variables et arguments), puis par nombre de labels masqués ; la liste « Projet » filtre par projet Compose, comme sur la page Conteneurs. Une ligne se déplie sur ses variables ; « Révéler » passe par la même demande que l'onglet Secrets du détail, journalisée par l'agent, et permise en lecture seule. La commande et les labels ne se révèlent pas.

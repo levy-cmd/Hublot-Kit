@@ -1,10 +1,7 @@
 package api
 
 import (
-	"encoding/json"
-	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 
@@ -118,12 +115,9 @@ func (s *server) revealEnv(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Name string `json:"name"`
 	}
-	dec := json.NewDecoder(io.LimitReader(r.Body, 4096))
-	err := dec.Decode(&body)
-	if err == nil && dec.Decode(&struct{}{}) != io.EOF {
-		err = errors.New("data after the JSON object")
-	}
-	if err != nil {
+	// One JSON object of 4 KiB at most, nothing after it but blanks, even
+	// past the 4 KiB (review of tranche 4, decodeOne).
+	if err := decodeOne(r.Body, 4096, &body); err != nil {
 		writeFSError(w, fmt.Errorf("%w (%v)", errNoVariable, err))
 		return
 	}

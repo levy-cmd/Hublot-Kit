@@ -21,7 +21,17 @@ export default {
 	'secrets.count.labels.other': '{n} masked labels',
 	'secrets.env': 'Variables',
 	'secrets.args': 'Masked arguments',
-	'secrets.argsHint': 'The command is not revealed: it is shown as the radiography masks it.',
+	'secrets.argsHint':
+		'The command is not revealed. Only the place of the argument and what was detected in it are shown, never its text.',
+	'secrets.arg': '{part}, argument {n}: {what}',
+	'secrets.arg.part.entrypoint': 'Entrypoint',
+	'secrets.arg.part.cmd': 'Command',
+	'secrets.arg.kind.flag': 'value of {name}',
+	'secrets.arg.kind.assignment': 'value of {name}=',
+	'secrets.arg.kind.shell': '{name} command line',
+	'secrets.arg.kind.url': 'URL with credentials',
+	'secrets.arg.kind.authorization': 'authorization header',
+	'secrets.arg.kind.other': 'value recognised as secret',
 	'secrets.labels': 'Masked labels',
 	'secrets.labelsHint':
 		'Every label outside com.docker.compose.* and org.opencontainers.image.* is masked as a precaution, secret or not. Labels are not revealed.',

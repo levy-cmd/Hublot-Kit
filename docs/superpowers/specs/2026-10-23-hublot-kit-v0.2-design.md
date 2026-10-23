@@ -414,16 +414,16 @@ Ouverte par Ctrl+K (Cmd+K sur macOS ; `preventDefault`, car Firefox y place sa p
 
 ### 5.9 Inventaire des secrets (F19)
 
-`GET /api/secrets` : pour chaque conteneur, `{id, name, project, service, state, env: [noms], args: [arguments masqués], labels: [clés], unavailable}`.
-- `env` : les **noms** des variables que `secrets.Masked` masque ;
-- `args` : les arguments de la commande et du point d'entrée dans leur forme masquée par `secrets.Args` (ceux qui contiennent `••••••`), comme dans la radiographie ;
+`GET /api/secrets` : pour chaque conteneur, `{id, name, project, service, state, env: [noms], args: [{part, index, kind, name?}], labels: [clés], unavailable}`.
+- `env` : les **noms** des variables que `secrets.Masked` masque, chacun une fois (Docker peut garder deux variables du même nom) ;
+- `args` : les arguments de la commande et du point d'entrée que `secrets.Args` change, par leur **position** (`part` : `entrypoint` ou `cmd`, `index` à partir de 0) et par **ce qui a été détecté** (`kind`), **jamais leur texte** (revue de la tranche 4) : un masque partiel de §13 (`Password=••••••(üü)`, `--token ••••••"s3cr3t"}`) laisserait sortir un reste de la valeur. `kind` vaut `flag` (valeur après un drapeau secret, `name` : `--requirepass`), `assignment` (`NOM=valeur` à nom secret, `name` : `PGPASSWORD`), `shell` (ligne de `sh -c`, `name` : `sh -c`), `url` (URL à identifiants), `authorization` (`Authorization: Bearer …`) ou `other`. `name` n'est tiré que d'un drapeau ou d'une clé faits de `[A-Za-z0-9_.-]`, ou du shell et de son drapeau ;
 - `labels` : les clés des labels masqués par `secrets.Labels` ;
 - `unavailable: true` quand l'`Inspect` n'a pas répondu dans les 3 s (conteneur verrouillé par un export, par exemple).
 
 Règles :
 - **Jamais de valeur dans la réponse.** Un test donne des valeurs témoins (`s3cr3t-…`) dans l'environnement, la commande et les labels, et vérifie qu'aucune n'apparaît dans le corps.
 - Révélation par la route existante seulement (`POST /api/containers/{id}/env/reveal`), journalisée (`env.reveal`), permise en lecture seule (Q28) ; la commande et les labels ne se révèlent pas. Côté interface, une valeur révélée est oubliée dans les mêmes cas que dans la radiographie (§7).
-- Coût : un `Inspect` par conteneur, 4 en parallèle au plus, 3 s chacun. Mesuré : 2 à 9 ms par `Inspect`, soit environ 0,1 s pour 39 conteneurs. Pas de cache : la page se recharge à la demande.
+- Coût : un seul parcours à la fois pour l'agent (les inventaires simultanés attendent celui en cours, chacun avec son délai), un `Inspect` par conteneur, 4 en parallèle au plus, 3 s chacun ; 15 s et 1 000 conteneurs par parcours, au-delà le reste est `unavailable` sans `Inspect`. Mesuré : 66 à 114 ms pour 42 conteneurs ; un conteneur verrouillé rend la réponse en 3,1 s. Pas de cache : la page se recharge à la demande. Une erreur de Docker donne `503 docker_unavailable` avec un détail fixe (l'adresse de Docker peut porter des identifiants).
 - La page montre les conteneurs triés par nombre de secrets, avec un filtre par projet. Une ligne se déplie sur ses variables ; chacune a son bouton « Révéler ».
 
 ### 5.10 `/api/meta`
