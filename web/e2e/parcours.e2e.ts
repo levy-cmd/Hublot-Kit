@@ -7,6 +7,20 @@ import { expect, test } from '@playwright/test';
 test('connexion, liste, panneaux fichiers et diff', async ({ page }) => {
 	const token = process.env.HUBLOT_TOKEN;
 	if (!token) throw new Error('HUBLOT_TOKEN absent : lancer par scripts/e2e.sh');
+	// Every EventSource of the page, to count the open log streams.
+	await page.addInitScript(() => {
+		const Native = window.EventSource;
+		const all: EventSource[] = [];
+		(window as unknown as { openStreams: () => number }).openStreams = () =>
+			all.filter((s) => s.readyState !== Native.CLOSED).length;
+		window.EventSource = class extends Native {
+			constructor(url: string | URL, init?: EventSourceInit) {
+				super(url, init);
+				all.push(this);
+			}
+		};
+	});
+	const openStreams = () => page.evaluate(() => (window as unknown as { openStreams: () => number }).openStreams());
 	await page.goto('/login');
 	await page.locator('#token').fill(token);
 	await page.locator('button[type=submit]').click();
@@ -33,6 +47,27 @@ test('connexion, liste, panneaux fichiers et diff', async ({ page }) => {
 	await expect(page.getByRole('log')).toBeVisible();
 	await page.waitForTimeout(2000);
 	expect(fsCalls).toEqual([]);
+
+	// Review of tranche 1 (Codex): under 90 rem, a logs panel opened then
+	// hidden stays mounted, but closes its stream; shown again, it reopens it.
+	// On the running agent, whose stream stays open (a stopped container's
+	// ends by itself).
+	const agentId = await page.evaluate(() =>
+		fetch('/api/containers')
+			.then((r) => r.json())
+			.then((l: { id: string; name: string }[]) => l.find((c) => c.name === 'hublot-e2e-agent')?.id)
+	);
+	expect(agentId).toMatch(/^[0-9a-f]{64}$/);
+	await page.goto(`/?c=${agentId}&panel=logs`);
+	await expect(page.getByRole('log')).toBeVisible();
+	await expect.poll(openStreams).toBe(1);
+	const bottom = page.getByRole('navigation', { name: 'Panneaux du conteneur' });
+	await bottom.getByRole('link', { name: "Diff avec l'image" }).click();
+	await expect(page).toHaveURL(/panel=diff/);
+	await expect(page.getByRole('log')).toBeHidden(); // mounted, out of sight
+	await expect.poll(openStreams).toBe(0);
+	await bottom.getByRole('link', { name: 'Logs en direct' }).click();
+	await expect.poll(openStreams).toBe(1);
 	await page.goto('/');
 
 	// hublot-e2e is stopped: the "Stopped" tab lists it (?state=stopped).

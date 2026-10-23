@@ -4,7 +4,7 @@
 	import type { Entry } from '#lib/api.ts';
 	import { t } from '#lib/i18n/index.ts';
 	import Icon from '#lib/icons/Icon.svelte';
-	import { mountedPanels, type Panel } from '#lib/panels.ts';
+	import { logsLive, mountedPanels, type Panel } from '#lib/panels.ts';
 	import { withParams } from '#lib/url.ts';
 	import ChangesList from './ChangesList.svelte';
 	import FileBrowser from './FileBrowser.svelte';
@@ -15,6 +15,7 @@
 	// from 90 rem, tabs below (the file system tab then holds the content).
 	// Below 90 rem a panel is mounted when first opened, never before: a
 	// hidden file system panel would export a stopped container for nothing.
+	// A logs panel opened, then hidden, stays mounted with its stream closed.
 
 	let {
 		id,
@@ -95,7 +96,7 @@
 		{#if mounted.has('logs')}
 			<section class="panel p-logs" class:current={panel === 'logs'} aria-labelledby="p-logs">
 				<h2 id="p-logs">{t('panels.logs')}</h2>
-				<div class="body logs-body"><LogsView {id} /></div>
+				<div class="body logs-body"><LogsView {id} live={logsLive(panel, wide)} /></div>
 			</section>
 		{/if}
 	</div>

@@ -7,7 +7,10 @@
 		appendLines, enqueue, filterLines, formatTs, levelOf, parseCount, parseLine, streamEnd, type ShownLine
 	} from '#lib/logs.ts';
 
-	let { id }: { id: string } = $props();
+	// live false: the view is mounted but out of sight (a hidden bottom
+	// panel). Its stream is closed, its lines kept; it resumes after the last
+	// line received when live again.
+	let { id, live = true }: { id: string; live?: boolean } = $props();
 
 	type Status = 'connecting' | 'live' | 'reconnecting' | 'paused' | 'ended' | 'error';
 	let status = $state<Status>('connecting');
@@ -50,7 +53,7 @@
 			dropped = 0;
 			removed = 0;
 		}
-		if (paused) {
+		if (paused || !live) {
 			status = 'paused'; // the stream is closed; lastId keeps the place
 			return;
 		}
