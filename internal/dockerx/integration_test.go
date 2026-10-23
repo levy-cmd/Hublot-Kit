@@ -346,3 +346,79 @@ func TestLogsRealDocker(t *testing.T) {
 		t.Fatalf("--log-driver none : %v, attendu ErrNoLogs", err)
 	}
 }
+
+// Spec v0.2 §5.4 on a real daemon: alpine:3 is listed by its full ID with
+// its tag, inspected and its history read by that ID; a container of it
+// carries its ImageID; a name is a reference Docker resolves, never asked
+// by the API (api.imageID), and an unknown full ID is ErrNotFound.
+func TestImagesRealDocker(t *testing.T) {
+	name := "hublot-it-images"
+	exec.Command("docker", "rm", "-f", name).Run()
+	if out, err := exec.Command("docker", "run", "-d", "--name", name, "alpine:3", "sleep", "300").CombinedOutput(); err != nil {
+		t.Fatalf("docker run: %v %s", err, out)
+	}
+	t.Cleanup(func() { exec.Command("docker", "rm", "-f", name).Run() })
+	c, err := New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	list, err := c.ImageList(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var alpine ImageSummary
+	for _, s := range list {
+		if slices.Contains(s.Tags, "alpine:3") {
+			alpine = s
+		}
+		if s.Tags == nil || slices.Contains(s.Tags, "<none>:<none>") {
+			t.Errorf("étiquettes : %+v", s)
+		}
+	}
+	if !strings.HasPrefix(alpine.ID, "sha256:") || len(alpine.ID) != 71 || alpine.Size <= 0 || alpine.Created.IsZero() {
+		t.Fatalf("alpine:3 : %+v", alpine)
+	}
+	info, err := c.ImageInspect(ctx, alpine.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.ID != alpine.ID || info.OS != "linux" || info.Architecture == "" || !slices.Contains(info.Tags, "alpine:3") ||
+		!slices.Equal(info.Cmd, []string{"/bin/sh"}) {
+		t.Fatalf("inspect : %+v", info)
+	}
+	hist, err := c.ImageHistory(ctx, alpine.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	real := 0
+	for _, l := range hist {
+		if !l.Empty {
+			real++
+		}
+	}
+	if len(hist) == 0 || real == 0 {
+		t.Fatalf("historique : %+v", hist)
+	}
+	ctrs, err := c.ListContainers(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, ct := range ctrs {
+		if ct.Name == name {
+			found = ct.ImageID == alpine.ID
+		}
+	}
+	if !found {
+		t.Errorf("%s ne porte pas l'ID de son image", name)
+	}
+	unknown := "sha256:" + strings.Repeat("0", 64)
+	if _, err := c.ImageInspect(ctx, unknown); !errors.Is(err, ErrNotFound) {
+		t.Errorf("ImageInspect inconnue : %v", err)
+	}
+	if _, err := c.ImageHistory(ctx, unknown); !errors.Is(err, ErrNotFound) {
+		t.Errorf("ImageHistory inconnue : %v", err)
+	}
+}

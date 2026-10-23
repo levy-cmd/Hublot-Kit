@@ -15,6 +15,7 @@ import (
 
 	cerrdefs "github.com/containerd/errdefs"
 	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/image"
 	"github.com/moby/moby/api/types/network"
 )
 
@@ -354,5 +355,99 @@ func TestFromInspectDetails(t *testing.T) {
 	}
 	if d := fromInspect(container.InspectResponse{ID: "x"}).Details; !reflect.DeepEqual(d, Details{}) {
 		t.Errorf("Inspect vide : %+v", d)
+	}
+}
+
+// Spec v0.2 §5.4: the configuration of an image, raw (package secrets masks
+// it), its tags without "<none>:<none>", its exposed ports sorted.
+func TestFromImageInspect(t *testing.T) {
+	var res image.InspectResponse
+	if err := json.Unmarshal([]byte(`{"Id":"sha256:abc","RepoTags":["<none>:<none>","app:1"],"Size":42,
+		"Created":"2026-10-01T12:00:00Z","Os":"linux","Architecture":"arm64","Variant":"v8",
+		"Config":{"Env":["A=1"],"Cmd":["run"],"Entrypoint":["/e"],"WorkingDir":"/w","User":"u",
+		"ExposedPorts":{"8080/tcp":{},"53/udp":{}},"Labels":{"k":"v"}}}`), &res); err != nil {
+		t.Fatal(err)
+	}
+	got := fromImageInspect(res)
+	want := ImageInfo{ID: "sha256:abc", Tags: []string{"app:1"}, Size: 42, Created: "2026-10-01T12:00:00Z",
+		OS: "linux", Architecture: "arm64", Variant: "v8", Env: []string{"A=1"}, Cmd: []string{"run"},
+		Entrypoint: []string{"/e"}, WorkingDir: "/w", User: "u", ExposedPorts: []string{"53/udp", "8080/tcp"},
+		Labels: map[string]string{"k": "v"}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("\n obtenu  %+v\n attendu %+v", got, want)
+	}
+	if got := fromImageInspect(image.InspectResponse{ID: "sha256:x"}); got.Tags == nil || len(got.Tags) != 0 || got.Env != nil {
+		t.Fatalf("sans configuration : %+v", got)
+	}
+}
+
+func TestFromImageSummaries(t *testing.T) {
+	got := fromImageSummaries([]image.Summary{
+		{ID: "sha256:a", RepoTags: []string{"a:1"}, Size: 7, Created: 1_760_000_000},
+		{ID: "sha256:b", RepoTags: []string{"<none>:<none>"}},
+		{ID: "sha256:c"},
+	})
+	if len(got) != 3 || !reflect.DeepEqual(got[0], ImageSummary{ID: "sha256:a", Tags: []string{"a:1"}, Size: 7, Created: time.Unix(1_760_000_000, 0).UTC()}) {
+		t.Fatalf("%+v", got)
+	}
+	for _, s := range got[1:] {
+		if s.Tags == nil || len(s.Tags) != 0 {
+			t.Errorf("sans étiquette : %+v", s)
+		}
+	}
+}
+
+func TestFromHistory(t *testing.T) {
+	got := fromHistory([]image.HistoryResponseItem{
+		{CreatedBy: `CMD ["sh"]`, Created: 1_760_000_000},
+		{CreatedBy: "ADD rootfs", Created: 0, Size: 9},
+	})
+	want := []ImageLayer{
+		{CreatedBy: `CMD ["sh"]`, Created: time.Unix(1_760_000_000, 0).UTC(), Empty: true},
+		{CreatedBy: "ADD rootfs", Size: 9},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("%+v", got)
+	}
+	if got := fromHistory(nil); got == nil {
+		t.Fatal("jamais nil")
+	}
+}
+
+// The image ID of a container is for the Images page only: the container
+// list of the API does not change.
+func TestContainerImageIDNotInJSON(t *testing.T) {
+	c := fromSummary(container.Summary{ID: "x", ImageID: "sha256:abc"})
+	if c.ImageID != "sha256:abc" {
+		t.Fatalf("ImageID = %q", c.ImageID)
+	}
+	b, _ := json.Marshal(c)
+	if strings.Contains(string(b), "sha256:abc") {
+		t.Fatalf("ImageID dans le JSON : %s", b)
+	}
+}
+
+func TestFakeImages(t *testing.T) {
+	f := &Fake{
+		ImageSummaries: []ImageSummary{{ID: "sha256:a", Tags: []string{"<none>:<none>"}}},
+		Images:         map[string]ImageInfo{"sha256:a": {ID: "sha256:a"}, "sha256:b": {ID: "sha256:b"}},
+		Histories:      map[string][]ImageLayer{"sha256:a": {{CreatedBy: "x"}}},
+	}
+	ctx := context.Background()
+	if l, err := f.ImageList(ctx); err != nil || len(l) != 1 || l[0].Tags == nil || len(l[0].Tags) != 0 {
+		t.Fatalf("ImageList : %+v %v", l, err)
+	}
+	if h, err := f.ImageHistory(ctx, "sha256:a"); err != nil || len(h) != 1 {
+		t.Fatalf("ImageHistory : %+v %v", h, err)
+	}
+	if h, err := f.ImageHistory(ctx, "sha256:b"); err != nil || h == nil || len(h) != 0 {
+		t.Fatalf("sans historique : %+v %v", h, err)
+	}
+	if _, err := f.ImageHistory(ctx, "sha256:z"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("inconnue : %v", err)
+	}
+	f.Err = ErrUnavailable
+	if _, err := f.ImageList(ctx); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("Err : %v", err)
 	}
 }

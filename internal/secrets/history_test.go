@@ -27,6 +27,7 @@ func TestHistoryBuildArgs(t *testing.T) {
 		"|1 s3cr3t-g X=1 /bin/sh -c make":  "|1 •••••• /bin/sh -c make",
 		"RUN |1 X=s3cr3t-h":                "RUN |1 ••••••",
 		"|0 /bin/sh -c apk add curl":       "|0 /bin/sh -c apk add curl",
+		"|0 X=s3cr3t-n /bin/sh -c y":       "|0 •••••• /bin/sh -c y",
 		"RUN |0 /bin/sh -c apk add curl":   "RUN |0 /bin/sh -c apk add curl",
 		"|99999999999999999999 X=s3cr3t-i": "|99999999999999999999 ••••••",
 		// The first shell, sh or bash, ends the arguments; the rest is a shell line.

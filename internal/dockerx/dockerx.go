@@ -13,6 +13,7 @@ import (
 
 	cerrdefs "github.com/containerd/errdefs"
 	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/image"
 	"github.com/moby/moby/api/types/network"
 	"github.com/moby/moby/client"
 
@@ -39,14 +40,48 @@ type Container struct {
 	// Compose or when the label rule masks them (secrets.SafeLabel).
 	Project string `json:"project,omitempty"`
 	Service string `json:"service,omitempty"`
+	// ImageID: "sha256:…", the image the container runs, for the Images
+	// page (spec v0.2 §5.4). Not in the container list of the API.
+	ImageID string `json:"-"`
 }
 
-// ImageInfo is the part of GET /images/{id}/json the agent uses.
+// ImageInfo is the part of GET /images/{id}/json the agent uses. Env, Cmd,
+// Entrypoint and Labels are raw: package secrets masks them before they
+// leave the agent (spec v0.2 §5.4).
 type ImageInfo struct {
+	ID           string   // "sha256:…"
+	Tags         []string // RepoTags, without "<none>:<none>"
+	Size         int64    // bytes, every layer
+	Created      string
+	OS           string
+	Architecture string
+	Variant      string
+	Env          []string // "NAME=value", raw
+	Cmd          []string
+	Entrypoint   []string
+	WorkingDir   string
+	User         string
+	ExposedPorts []string // "80/tcp", sorted
+	Labels       map[string]string
+}
+
+// ImageSummary is one image of GET /images/json (spec v0.2 §5.4).
+type ImageSummary struct {
 	ID      string   // "sha256:…"
-	Tags    []string // RepoTags
-	Size    int64    // bytes, every layer
-	Created string
+	Tags    []string // RepoTags, without "<none>:<none>": empty for an untagged image
+	Size    int64
+	Created time.Time
+}
+
+// ImageLayer is one entry of GET /images/{id}/history, newest first, as
+// Docker gives them. CreatedBy is raw: secrets.History masks it.
+type ImageLayer struct {
+	CreatedBy string
+	Created   time.Time // zero when Docker gives none
+	Size      int64
+	// Empty: no file changed (ENV, CMD, LABEL…). The history of the API
+	// does not say it; an entry of size 0 is counted as empty.
+	Empty bool
 }
 
 // ContainerInfo is the part of `docker inspect` the agent uses.
@@ -183,6 +218,11 @@ type Client interface {
 	ContainerSize(ctx context.Context, id string) (rw, rootfs *int64, err error)
 	// ImageInspect is GET /images/{id}/json.
 	ImageInspect(ctx context.Context, id string) (ImageInfo, error)
+	// ImageList is GET /images/json without the intermediate images; the
+	// untagged ones are kept (spec v0.2 §5.4).
+	ImageList(ctx context.Context) ([]ImageSummary, error)
+	// ImageHistory is GET /images/{id}/history: never nil.
+	ImageHistory(ctx context.Context, id string) ([]ImageLayer, error)
 }
 
 // DaemonInfo is the Docker part of /api/meta. Host is raw: the API masks it.
@@ -288,6 +328,7 @@ func fromSummary(s container.Summary) Container {
 		Ports:   ports,
 		Project: safeLabel(s.Labels, "com.docker.compose.project"),
 		Service: safeLabel(s.Labels, "com.docker.compose.service"),
+		ImageID: s.ImageID,
 	}
 }
 
@@ -472,7 +513,70 @@ func (e *engine) ImageInspect(ctx context.Context, id string) (ImageInfo, error)
 	if err != nil {
 		return ImageInfo{}, wrap(err)
 	}
-	return ImageInfo{ID: res.ID, Tags: res.RepoTags, Size: res.Size, Created: res.Created}, nil
+	return fromImageInspect(res.InspectResponse), nil
+}
+
+func fromImageInspect(res image.InspectResponse) ImageInfo {
+	info := ImageInfo{ID: res.ID, Tags: realTags(res.RepoTags), Size: res.Size, Created: res.Created,
+		OS: res.Os, Architecture: res.Architecture, Variant: res.Variant}
+	if c := res.Config; c != nil {
+		info.Env, info.Cmd, info.Entrypoint, info.WorkingDir, info.User, info.Labels =
+			c.Env, c.Cmd, c.Entrypoint, c.WorkingDir, c.User, c.Labels
+		for p := range c.ExposedPorts {
+			info.ExposedPorts = append(info.ExposedPorts, p)
+		}
+		sort.Strings(info.ExposedPorts)
+	}
+	return info
+}
+
+// realTags: the tags without "<none>:<none>" (an untagged image, as older
+// daemons and the classic store say it), never nil.
+func realTags(tags []string) []string {
+	out := []string{}
+	for _, t := range tags {
+		if t != "" && t != "<none>:<none>" {
+			out = append(out, t)
+		}
+	}
+	return out
+}
+
+func (e *engine) ImageList(ctx context.Context) ([]ImageSummary, error) {
+	// All: false leaves out the intermediate images of the classic builder.
+	res, err := e.c.ImageList(ctx, client.ImageListOptions{})
+	if err != nil {
+		return nil, wrap(err)
+	}
+	return fromImageSummaries(res.Items), nil
+}
+
+func fromImageSummaries(items []image.Summary) []ImageSummary {
+	out := make([]ImageSummary, 0, len(items))
+	for _, s := range items {
+		out = append(out, ImageSummary{ID: s.ID, Tags: realTags(s.RepoTags), Size: s.Size, Created: time.Unix(s.Created, 0).UTC()})
+	}
+	return out
+}
+
+func (e *engine) ImageHistory(ctx context.Context, id string) ([]ImageLayer, error) {
+	res, err := e.c.ImageHistory(ctx, id)
+	if err != nil {
+		return nil, wrap(err)
+	}
+	return fromHistory(res.Items), nil
+}
+
+func fromHistory(items []image.HistoryResponseItem) []ImageLayer {
+	out := make([]ImageLayer, 0, len(items))
+	for _, h := range items {
+		l := ImageLayer{CreatedBy: h.CreatedBy, Size: h.Size, Empty: h.Size == 0}
+		if h.Created > 0 {
+			l.Created = time.Unix(h.Created, 0).UTC()
+		}
+		out = append(out, l)
+	}
+	return out
 }
 
 func (e *engine) Changes(ctx context.Context, id string) ([]Change, error) {

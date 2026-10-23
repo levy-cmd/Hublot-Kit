@@ -58,10 +58,15 @@ type Fake struct {
 	ContainerSizes map[string]SizePair
 	SizeGate       chan struct{}
 	SizeCalls      atomic.Int32
-	// Images answers ImageInspect, by id as given (absent: ErrNotFound).
+	// Images answers ImageInspect, by id as given (absent: ErrNotFound);
+	// ImageCalls counts the calls of ImageInspect and ImageHistory.
 	Images     map[string]ImageInfo
 	ImageCalls atomic.Int32
-	Err        error
+	// ImageSummaries answers ImageList; Histories answers ImageHistory, by
+	// id as given (absent: ErrNotFound).
+	ImageSummaries []ImageSummary
+	Histories      map[string][]ImageLayer
+	Err            error
 }
 
 // SizePair is what ContainerSize answers.
@@ -95,6 +100,32 @@ func (f *Fake) ImageInspect(_ context.Context, id string) (ImageInfo, error) {
 		return img, nil
 	}
 	return ImageInfo{}, fmt.Errorf("%w: image %s", ErrNotFound, id)
+}
+
+func (f *Fake) ImageList(context.Context) ([]ImageSummary, error) {
+	if f.Err != nil {
+		return nil, f.Err
+	}
+	out := make([]ImageSummary, len(f.ImageSummaries))
+	for i, s := range f.ImageSummaries {
+		s.Tags = realTags(s.Tags) // as the engine
+		out[i] = s
+	}
+	return out, nil
+}
+
+func (f *Fake) ImageHistory(_ context.Context, id string) ([]ImageLayer, error) {
+	f.ImageCalls.Add(1)
+	if f.Err != nil {
+		return nil, f.Err
+	}
+	if h, ok := f.Histories[id]; ok {
+		return append([]ImageLayer{}, h...), nil
+	}
+	if _, ok := f.Images[id]; ok {
+		return []ImageLayer{}, nil
+	}
+	return nil, fmt.Errorf("%w: image %s", ErrNotFound, id)
 }
 
 func (f *Fake) Info(context.Context) (DaemonInfo, error) {
