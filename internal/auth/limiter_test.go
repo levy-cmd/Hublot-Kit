@@ -2,6 +2,8 @@ package auth
 
 import (
 	"fmt"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -126,5 +128,57 @@ func TestLimiterSweepsAtMostOncePerWindow(t *testing.T) {
 	add("e", 1)
 	if _, ok := l.fails["b0"]; ok {
 		t.Fatal("b0 should have been swept one window later")
+	}
+}
+
+// v0.1.2 (audit, constat 3): Take checks and counts in one step, so a burst
+// never gets more than max attempts; Refund gives one back.
+func TestLimiterTakeIsAtomic(t *testing.T) {
+	l := NewLimiter(5, time.Minute, time.Now)
+	var wg sync.WaitGroup
+	var taken atomic.Int32
+	for i := 0; i < 100; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, ok := l.Take("192.0.2.1"); ok {
+				taken.Add(1)
+			}
+		}()
+	}
+	wg.Wait()
+	if n := taken.Load(); n != 5 {
+		t.Fatalf("%d tentatives prises en salve, attendu 5", n)
+	}
+	if _, ok := l.Take("192.0.2.2"); !ok {
+		t.Fatal("une autre IP n'est pas concernée")
+	}
+}
+
+func TestLimiterRefund(t *testing.T) {
+	c := newClock()
+	l := NewLimiter(5, time.Minute, c.now)
+	var last time.Time
+	for i := 0; i < 5; i++ {
+		at, ok := l.Take("k")
+		if !ok {
+			t.Fatalf("tentative %d refusée", i+1)
+		}
+		last = at
+		c.add(time.Second)
+	}
+	if _, ok := l.Take("k"); ok {
+		t.Fatal("6e tentative prise")
+	}
+	l.Refund("k", last)
+	if _, ok := l.Take("k"); !ok {
+		t.Fatal("tentative rendue non reprise")
+	}
+	if _, ok := l.Take("k"); ok {
+		t.Fatal("Refund a rendu plus d'une tentative")
+	}
+	l.Refund("absent", last) // nothing to give back: no panic, nothing created
+	if _, ok := l.fails["absent"]; ok {
+		t.Fatal("Refund d'une clé absente l'a créée")
 	}
 }

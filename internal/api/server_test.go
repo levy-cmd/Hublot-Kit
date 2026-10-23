@@ -2,10 +2,14 @@ package api
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -383,5 +387,280 @@ func TestThrottleLogSweepsAtMostOncePerWindow(t *testing.T) {
 	add("e", 1)
 	if _, ok := tl.last["b0"]; ok {
 		t.Fatal("b0 should have been swept one window later")
+	}
+}
+
+// v0.1.2 (audit, constat 3): the attempt is taken before the body is read,
+// atomically. 40 logins of one IP in one burst, their bodies held back:
+// 35 get rate_limited at once, only 5 tokens are ever checked.
+func TestLoginReservesAttemptBeforeReadingBody(t *testing.T) {
+	f := newFixture(t, false)
+	const n = 40
+	done := make(chan int, n)
+	var bodies []*io.PipeWriter
+	t.Cleanup(func() {
+		for _, pw := range bodies {
+			pw.CloseWithError(io.ErrClosedPipe)
+		}
+	})
+	for i := 0; i < n; i++ {
+		pr, pw := io.Pipe()
+		bodies = append(bodies, pw)
+		r := httptest.NewRequest("POST", "http://example.com/api/login", pr)
+		r.RemoteAddr = "192.0.2.9:40000"
+		r.Header.Set("Origin", "http://example.com")
+		go func() {
+			rec := httptest.NewRecorder()
+			f.h.ServeHTTP(rec, r)
+			done <- rec.Code
+		}()
+	}
+	codes := map[int]int{}
+	timeout := time.After(3 * time.Second)
+wait:
+	for codes[http.StatusTooManyRequests] < n-5 {
+		select {
+		case c := <-done:
+			codes[c]++
+		case <-timeout:
+			break wait
+		}
+	}
+	if codes[http.StatusTooManyRequests] != n-5 || len(codes) != 1 {
+		t.Fatalf("avant tout corps : %v, attendu %d rate_limited (5 tentatives réservées)", codes, n-5)
+	}
+	for _, pw := range bodies {
+		go func() { pw.Write([]byte(`{"token":"mauvais"}`)); pw.Close() }()
+	}
+	for i := 0; i < 5; i++ {
+		select {
+		case c := <-done:
+			codes[c]++
+		case <-time.After(3 * time.Second):
+			t.Fatalf("les 5 tentatives réservées ne répondent pas : %v", codes)
+		}
+	}
+	if codes[http.StatusUnauthorized] != 5 {
+		t.Fatalf("%v, attendu 5 unauthorized", codes)
+	}
+	data, _ := os.ReadFile(f.auditP)
+	if got := strings.Count(string(data), `"result":"refused"`); got != 5 {
+		t.Fatalf("%d lignes refused, attendu 5", got)
+	}
+}
+
+// The attempt taken by a good token is given back: it does not eat into the
+// limit of the IP.
+func TestLoginSuccessGivesAttemptBack(t *testing.T) {
+	f := newFixture(t, false)
+	for i := 0; i < 4; i++ {
+		f.login(t, "mauvais")
+	}
+	if rec, c := f.login(t, f.token); rec.Code != http.StatusOK || c == nil {
+		t.Fatalf("bon jeton après 4 échecs : %d", rec.Code)
+	}
+	if rec, _ := f.login(t, "mauvais"); rec.Code != http.StatusUnauthorized {
+		t.Fatalf("5e échec : %d, attendu 401 (la tentative réussie est rendue)", rec.Code)
+	}
+	if rec, _ := f.login(t, "mauvais"); rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("6e échec : %d, attendu 429", rec.Code)
+	}
+}
+
+// v0.1.2 (audit, constat 3): 1 040 login.fail lines in 2 minutes. Across
+// every IP, at most loginLogMax lines a minute, then one line says the rest
+// is not written.
+func TestLoginFailLogIsBounded(t *testing.T) {
+	now := time.Now()
+	logClock = func() time.Time { return now }
+	t.Cleanup(func() { logClock = time.Now })
+	f := newFixture(t, false)
+	fail := func(ip string) {
+		r := httptest.NewRequest("POST", "http://example.com/api/login", strings.NewReader(`{"token":"mauvais"}`))
+		r.RemoteAddr = ip + ":1"
+		r.Header.Set("Origin", "http://example.com")
+		f.h.ServeHTTP(httptest.NewRecorder(), r)
+	}
+	for i := 0; i < 300; i++ {
+		fail(fmt.Sprintf("10.0.%d.%d", i/200, i%200))
+	}
+	for i := 0; i < 10; i++ {
+		fail("10.9.9.9") // rate_limited after 5
+	}
+	count := func() (lines, suppressed int) {
+		data, _ := os.ReadFile(f.auditP)
+		for _, l := range strings.Split(strings.TrimSpace(string(data)), "\n") {
+			if strings.Contains(l, `"action":"login.fail"`) {
+				lines++
+				if strings.Contains(l, `"result":"suppressed"`) {
+					suppressed++
+				}
+			}
+		}
+		return
+	}
+	lines, suppressed := count()
+	if lines != loginLogMax+1 || suppressed != 1 {
+		t.Fatalf("%d lignes login.fail dont %d suppressed, attendu %d + 1", lines, suppressed, loginLogMax)
+	}
+	now = now.Add(61 * time.Second)
+	fail("10.8.8.8")
+	if l, s := count(); l != lines+1 || s != 1 {
+		t.Fatalf("minute suivante : %d lignes (%d suppressed), attendu %d", l, s, lines+1)
+	}
+}
+
+// v0.1.2 (audit, constat 4): with DOCKER_HOST=tcp://user:password@…, the
+// daemon's error names the password. It never reaches a response (fixed
+// detail) nor the agent's log.
+func TestDockerErrorsGiveFixedDetail(t *testing.T) {
+	var logs bytes.Buffer
+	old := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(old) })
+	const secret = "s3cr3t-pw"
+	msg := "Cannot connect to the Docker daemon at tcp://alice:" + secret + "@10.0.0.1:2375. Is the docker daemon running?"
+	f := newFixture(t, false)
+	c := f.session(t)
+	check := func(what string, rec *httptest.ResponseRecorder) {
+		t.Helper()
+		if b := rec.Body.String(); strings.Contains(b, secret) || strings.Contains(b, "tcp://") {
+			t.Errorf("%s : %d %s", what, rec.Code, b)
+		}
+	}
+	f.docker.Err = errors.New(msg) // as the client gives it
+	check("/api/containers (erreur brute)", f.do("GET", "/api/containers", "", c))
+	for _, err := range []error{
+		fmt.Errorf("%w: %s", dockerx.ErrUnavailable, msg),
+		fmt.Errorf("%w: %s", dockerx.ErrRefused, msg),
+		fmt.Errorf("%w: %s", dockerx.ErrPutInvalid, msg),
+		fmt.Errorf("%w: %s", dockerx.ErrNoLogs, msg),
+	} {
+		f.docker.Err = err
+		for _, p := range []string{"/api/containers", "/api/containers/web", "/api/containers/web/logs",
+			"/api/containers/web/logs/download", "/api/containers/web/changes"} {
+			check(p, f.do("GET", p, "", c))
+		}
+		check("env/reveal", f.do("POST", "/api/containers/web/env/reveal", `{"name":"X"}`, c))
+	}
+	// Past the first byte the reader of the logs fails: the stream reports it.
+	f.docker.Err = nil
+	f.docker.LogsErr = fmt.Errorf("%w: %s", dockerx.ErrUnavailable, msg)
+	check("logs (Logs)", f.do("GET", "/api/containers/web/logs", "", c))
+	check("logs/download (Logs)", f.do("GET", "/api/containers/web/logs/download", "", c))
+	if strings.Contains(logs.String(), secret) {
+		t.Errorf("journal de l'agent : %s", logs.String())
+	}
+}
+
+// v0.1.2 (audit, constat 2): only ReadHeaderTimeout was set. The agent's
+// server (ConfigureServer) bounds the reading of a body and the idle
+// keep-alive, never the writing (logs stream, long downloads).
+func TestConfigureServer(t *testing.T) {
+	var srv http.Server
+	ConfigureServer(&srv)
+	if srv.ReadHeaderTimeout <= 0 || srv.ReadTimeout <= 0 || srv.IdleTimeout <= 0 || srv.WriteTimeout != 0 {
+		t.Fatalf("délais : en-têtes %s, lecture %s, inactivité %s, écriture %s", srv.ReadHeaderTimeout, srv.ReadTimeout, srv.IdleTimeout, srv.WriteTimeout)
+	}
+}
+
+// serve starts f.h on a real server configured by ConfigureServer, with
+// short delays.
+func (f *fixture) serve(t *testing.T, read time.Duration) string {
+	t.Helper()
+	oldRead, oldIdle := readTimeout, idleTimeout
+	readTimeout, idleTimeout = read, read
+	t.Cleanup(func() { readTimeout, idleTimeout = oldRead, oldIdle })
+	ts := httptest.NewUnstartedServer(f.h)
+	ConfigureServer(ts.Config)
+	ts.Start()
+	t.Cleanup(ts.Close)
+	return ts.Listener.Addr().String()
+}
+
+// closedWithin: the server closes conn (EOF or reset) within limit.
+func closedWithin(conn net.Conn, limit time.Duration) bool {
+	conn.SetReadDeadline(time.Now().Add(limit))
+	_, err := io.Copy(io.Discard, conn)
+	var ne net.Error
+	return !(errors.As(err, &ne) && ne.Timeout())
+}
+
+// A body that never comes (the audit held 1 000 connections for 25 s with
+// POST /api/login and Content-Length: 100), an idle keep-alive: the
+// connection is closed.
+func TestSlowClientsAreCut(t *testing.T) {
+	f := newFixture(t, false)
+	addr := f.serve(t, 300*time.Millisecond)
+	for _, head := range []string{
+		"POST /api/login HTTP/1.1\r\nHost: example.com\r\nOrigin: http://example.com\r\nContent-Type: application/json\r\nContent-Length: 100\r\n\r\n",
+		// Without a session, the upload routes keep the short delay.
+		"PUT /api/containers/web/fs/file?path=/x HTTP/1.1\r\nHost: example.com\r\nOrigin: http://example.com\r\nContent-Length: 100\r\n\r\n",
+		"POST /api/containers/web/fs/upload?dir=/ HTTP/1.1\r\nHost: example.com\r\nOrigin: http://example.com\r\nContent-Length: 100\r\n\r\n",
+		"GET /api/meta HTTP/1.1\r\nHost: example.com\r\nContent-Length: 100\r\n\r\n",
+		"GET /api/meta HTTP/1.1\r\nHost: example.com\r\n\r\n", // answered, then idle
+	} {
+		conn, err := net.Dial("tcp", addr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		conn.Write([]byte(head))
+		if !closedWithin(conn, 3*time.Second) {
+			t.Errorf("connexion encore ouverte après 3 s : %q", strings.SplitN(head, "\r\n", 2)[0])
+		}
+		conn.Close()
+	}
+}
+
+// A request without a body has no read delay: a logs stream lives past it
+// (the server's background read would otherwise cancel its context).
+func TestLogsStreamOutlivesReadTimeout(t *testing.T) {
+	f := newFixture(t, false)
+	f.docker.LogStreams = map[string][]byte{webID: nil}
+	f.docker.LogsGate = make(chan struct{})
+	c := f.session(t)
+	addr := f.serve(t, 200*time.Millisecond)
+	req, _ := http.NewRequest("GET", "http://"+addr+"/api/containers/web/logs", nil)
+	req.AddCookie(c)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ended := make(chan error, 1)
+	go func() { _, err := io.Copy(io.Discard, resp.Body); ended <- err }()
+	select {
+	case err := <-ended:
+		t.Fatalf("flux terminé avant 1 s (%v) : le délai de lecture l'a coupé", err)
+	case <-time.After(time.Second):
+	}
+	resp.Body.Close()
+}
+
+// A logged-in edit whose body comes slowly is read whole: the session
+// extends the delay of the upload routes.
+func TestSlowEditWithSessionIsRead(t *testing.T) {
+	f, c := writeFixture(t, false)
+	tag := f.do("GET", "/api/containers/web/fs/file?path=/etc/app.conf", "", c).Header().Get("ETag")
+	addr := f.serve(t, 300*time.Millisecond)
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	body := "10.0.0.1\n"
+	fmt.Fprintf(conn, "PUT /api/containers/web/fs/file?path=/etc/app.conf HTTP/1.1\r\nHost: example.com\r\nOrigin: http://example.com\r\n"+
+		"Cookie: %s=%s\r\nIf-Match: %s\r\nContent-Length: %d\r\n\r\n", c.Name, c.Value, tag, len(body))
+	for _, part := range []string{body[:3], body[3:6], body[6:]} {
+		time.Sleep(250 * time.Millisecond) // 750 ms in all, past the 300 ms delay
+		conn.Write([]byte(part))
+	}
+	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
+	resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+	if err != nil {
+		t.Fatalf("pas de réponse : %v", err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("édition lente : %d %s", resp.StatusCode, b)
 	}
 }

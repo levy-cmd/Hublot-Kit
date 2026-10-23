@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/levy-cmd/hublot-kit/internal/fsview"
 )
@@ -341,4 +342,63 @@ func TestRunNoWarningOnHostCgroup(t *testing.T) {
 	if strings.Contains(errb.String(), "cgroupns") {
 		t.Fatalf("avertissement inattendu : %q", errb.String())
 	}
+}
+
+// v0.1.2 (audit, constat 2): the agent's server bounds the reading of a
+// request and idle connections, never the writing (logs stream, downloads).
+func TestNewServerTimeouts(t *testing.T) {
+	srv := newServer()
+	if srv.ReadHeaderTimeout <= 0 || srv.ReadTimeout <= 0 || srv.IdleTimeout <= 0 || srv.WriteTimeout != 0 {
+		t.Fatalf("délais : en-têtes %s, lecture %s, inactivité %s, écriture %s", srv.ReadHeaderTimeout, srv.ReadTimeout, srv.IdleTimeout, srv.WriteTimeout)
+	}
+}
+
+// At most n connections at once: the next one waits until one closes.
+func TestLimitListener(t *testing.T) {
+	inner, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ln := limitListener(inner, 2)
+	defer ln.Close()
+	accepted := make(chan net.Conn, 3)
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			accepted <- c
+		}
+	}()
+	for i := 0; i < 3; i++ {
+		c, err := net.Dial("tcp", inner.Addr().String())
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer c.Close()
+	}
+	var got []net.Conn
+	for len(got) < 2 {
+		select {
+		case c := <-accepted:
+			got = append(got, c)
+		case <-time.After(2 * time.Second):
+			t.Fatalf("%d connexions acceptées, attendu 2", len(got))
+		}
+	}
+	select {
+	case <-accepted:
+		t.Fatal("3e connexion acceptée au-delà de la limite")
+	case <-time.After(300 * time.Millisecond):
+	}
+	got[0].Close()
+	got[0].Close() // a second Close frees nothing more
+	select {
+	case c := <-accepted:
+		c.Close()
+	case <-time.After(2 * time.Second):
+		t.Fatal("3e connexion jamais acceptée après une fermeture")
+	}
+	got[1].Close()
 }
