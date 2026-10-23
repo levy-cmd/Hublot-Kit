@@ -169,3 +169,19 @@
   - Second correctif (relecteur, critique) : `name` reprenait l'argument précédent sans vérifier que le masquage l'avait laissé intact (`["app","--password=","--Tok3n_SECRET_xyz","x"]` donnait `name:"--Tok3n_SECRET_xyz"`). Désormais un nom ne vient que d'un texte resté en clair : drapeau précédent intact, shell et son drapeau intacts, clé `NOM=` présente dans le texte masqué. 3355bd2 (test rouge), 1262582, 9ebf7a6 (témoin `clear(0)` : `["API_TOKEN=hunter/sh","-c",…]`).
   - Mutations : retrait de chacune des quatre gardes (drapeau précédent, shell, `clear(0)`, préfixe de clé), toutes tuées.
 - **Tranche 4 (page Secrets)** : validée par le relecteur et par Codex. CI de la PR brouillon #10 verte sur 9ebf7a6 (run 40001838524).
+- **Tranche 5 (Images, liste et détail)** : 132dd14, f74eeb4, af588b5, ae04691, b2db5ee, cb079dc ; correctifs de revue : f146848 (tests rouges), e047718, c850b07 (tests rouges), 8939d9c. Validée par le relecteur et par Codex (risque résiduel accepté, ci-dessous). CI de la PR brouillon #10 verte sur 8939d9c (run 40011643314).
+  - Mesures (Docker Desktop, 61 images, 76 étiquettes) : `GET /api/images` en 165 à 199 ms, 16 Kio ; six listes simultanées en 246 ms sur une seule lecture de Docker ; détail en 58 à 68 ms.
+  - **Révision du plan** (session principale) : l'onglet « Images » de la page Conteneurs, avec son compteur (spec v0.2 §3), n'était attribué à aucune tranche. Il est livré dans la tranche 5.
+  - Écarts au plan :
+    - fichiers hors liste : `imageList.svelte.ts`, `nav.test.ts`, `scripts/e2e.sh`, `web/e2e/images.e2e.ts`, `container.go` (`maskCommand`), `routes/+page.svelte` (onglet), `secrets_inventory.go` (frontière) ;
+    - `dockerx.Container.ImageID` ajouté avec `json:"-"` (aucune route existante ne l'expose) ;
+    - e2e indépendant du pilote de stockage : sous overlay2, le RUN témoin pèse 0 octet et sa couche était repliée.
+  - Ruling (session principale, resserre la spec v0.2 §5.4) : `secrets.History` va au-delà des deux règles de la spec. Codex et le relecteur jugent ce surcroît juste.
+    - BuildKit garde `ARG NOM=<valeur>` et `LABEL k=v` en clair : les valeurs d'`ARG` sont masquées, une ligne `LABEL` l'est en entier (y compris `ONBUILD`, tabulation, casse).
+    - `ARG` n'accepte qu'une affectation, en dernier mot ; `|N` exige exactement N mots `NOM=`. Sinon, tout est masqué (relecteur : une valeur à blanc faisait passer `dXNl…==` pour un nom).
+    - Après `|N`, deux marqueurs de shell ou plus masquent toute la ligne (Codex : une valeur contenant ` /bin/sh -c ` trompait le compte).
+  - Correctif de revue :
+    - `entrypoint` + `cmd` masqués bout à bout par `secrets.Args`, puis redécoupés (Codex : `--requirepass` en fin d'entrypoint laissait sortir le premier élément de cmd). Même défaut fermé dans la radiographie d'un conteneur (`maskCommand`) et dans l'inventaire des secrets (`part` et `index` restent ceux du champ d'origine) ;
+    - page de détail : nom du conteneur, lien par l'ID complet.
+  - Arbitrage (relecteur : validé ; Codex : correctif requis) : la fuite des deux marqueurs a été corrigée (Codex). **Risque résiduel accepté** : une valeur d'`ARG` qui contient ` /bin/sh -c `, suivie d'une commande en forme exec ou d'un `SHELL` autre que sh ou bash, ne laisse qu'un marqueur, et la suite passe par `Line` seul. L'historique ne permet pas de distinguer la valeur de la commande. Les deux revues jugent le cas très peu probable. À écrire dans les limites de la spec à la clôture (tranche 10).
+  - Mutations : 12 + 10 + 6, toutes tuées (relecteur : 3 + 2, Codex : lecture seule).
