@@ -13,6 +13,8 @@ export type NavItem = {
 	count?: () => number | null;
 	/** The entry opens a panel of the chosen container: the link carries ?c=. */
 	panel?: boolean;
+	/** The entry opens the global search instead of a page (spec v0.2 §3, §5.8). */
+	action?: 'palette';
 };
 
 const files = import.meta.glob<{ default: NavItem }>('./nav/*.ts', { eager: true });
@@ -32,7 +34,7 @@ export function currentNav(url: { pathname: string; searchParams: { get(k: strin
 	let best: NavItem | null = null;
 	let bestScore = -1;
 	for (const item of nav) {
-		if (item.panel) continue;
+		if (item.panel || item.action) continue;
 		const u = new URL(item.href, 'http://x');
 		if (u.pathname !== path) continue;
 		const params = [...u.searchParams];

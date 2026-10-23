@@ -5,6 +5,7 @@ This page describes the interface of Hublot-Kit from v0.2 on. To install it, see
 ## The top bar
 
 - On the left, the porthole ring, the name and the real version of the agent (`dev` for a development build).
+- In the middle, the field "Search a container, an image, a file…" with the hint `Ctrl K` (`⌘ K` on macOS). It opens the search (below) and searches nothing by itself.
 - On the right:
   - Docker's state: "Connected" or "Docker unreachable", followed by the daemon's address (for example `unix:///var/run/docker.sock`). An address that would carry credentials (`tcp://user:password@host`) is masked by the agent;
   - the shield: filled with "Read-only" when the agent started with `--read-only`, outlined with "Writes allowed" otherwise;
@@ -13,7 +14,7 @@ This page describes the interface of Hublot-Kit from v0.2 on. To install it, see
 
 ## The side bar
 
-It leads to the pages that exist: Containers (with their count), Diff with the image, Logs and Settings. "Diff with the image" and "Logs" open the matching panel of the chosen container; with no container chosen, the list asks you to choose one.
+It leads to the pages that exist: Containers (with their count), Diff with the image, Search, Logs and Settings. "Search" opens the global search. "Diff with the image" and "Logs" open the matching panel of the chosen container; with no container chosen, the list asks you to choose one.
 
 At the bottom, a notice says the agent's real state:
 
@@ -21,6 +22,18 @@ At the bottom, a notice says the agent's real state:
 - "Writes allowed, always confirmed" otherwise. This is the default: every write goes through a confirmation that names the container and the path.
 
 Under 80 rem wide, the bar shrinks to its icons; under 48 rem, it becomes a drawer opened by the menu button of the top bar.
+
+## The search (Ctrl+K)
+
+`Ctrl K` (`⌘ K` on macOS), the field of the top bar or the "Search" entry open a palette, on every page but the login page.
+
+- It searches the containers (name, short ID, image, project, service), the Compose projects and the pages of the interface, in the list the browser already has: nothing is asked of the agent for that. An exact name comes first, then the start of a name, then a name that contains the search; a container comes before a project or a page.
+- It also searches **files**, but only those of the open container (`?c=` or the container's page), and only in the index already built when the explorer opened it. The search never starts an export or a walk: for a running container, or a stopped one the explorer has not opened yet, the palette offers "Open the explorer". It matches the full path, case ignored; names that contain the search come before paths that contain it through a parent directory. 200 files at most, then the palette asks you to narrow the search.
+- It returns only names the explorer already shows for that container, never a content, never a masked value (environment, command, labels).
+- Keyboard: the arrows choose, Enter opens, Escape closes and gives the focus back where it was; Tab stays in the palette.
+- Nothing is kept: no history, no browser storage, no query in the page's address. The file query goes in the address of the call to the agent (`/api/containers/{id}/fs/search?q=`), which the agent does not log; a reverse proxy that logs addresses would see it (see [the limitations](limitations.md)).
+
+Images will join the palette with the Images page.
 
 ## The Containers page
 

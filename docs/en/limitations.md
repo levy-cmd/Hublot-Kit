@@ -85,6 +85,11 @@ The technical spec ([§13, in French](../superpowers/specs/2026-10-07-hublot-kit
   Docker counts the parts of a long line, not lines, and gives no way to tell. The download has the whole line.
 - A logging driver Docker cannot read back (`none`, `syslog`…) gives `logs_unavailable`.
 
+## Search (v0.2)
+
+- Files can be searched only in the index already built of a stopped container the explorer has opened. A running container has no index: open the explorer.
+- The query of a file search goes in the address of the call to the agent (`…/fs/search?q=`). The agent neither logs nor keeps it, but a reverse proxy in front of it that logs addresses would see it. A file name can be sensitive: set the proxy's logs accordingly.
+
 ## Secret masking
 
 The X-ray masks secrets by name and by known forms. Not recognised in v0.1, among others:

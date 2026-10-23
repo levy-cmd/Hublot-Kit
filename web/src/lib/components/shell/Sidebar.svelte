@@ -4,6 +4,7 @@
 	import Icon from '#lib/icons/Icon.svelte';
 	import Ring from '#lib/icons/Ring.svelte';
 	import { currentNav, nav, navHref } from '#lib/nav.ts';
+	import { openPalette } from '#lib/palette.ts';
 	import ReadOnlyNotice from './ReadOnlyNotice.svelte';
 
 	let { readOnly, version, open }: { readOnly: boolean; version: string; open: boolean } = $props();
@@ -22,15 +23,24 @@
 		{#each nav as item (item.id)}
 			{@const n = item.count?.() ?? null}
 			<li>
-				<a
-					href={navHref(item, chosen)}
-					aria-current={current === item.id ? 'page' : undefined}
-					title={t(item.labelKey)}
-				>
-					<Icon name={item.icon} size={20} />
-					<span class="label">{t(item.labelKey)}</span>
-					{#if n !== null}<span class="count">{n}</span>{/if}
-				</a>
+				{#if item.action === 'palette'}
+					<!-- "Search" opens the palette, which gives the focus back here. -->
+					<button type="button" class="entry" title={t(item.labelKey)} aria-haspopup="dialog" onclick={openPalette}>
+						<Icon name={item.icon} size={20} />
+						<span class="label">{t(item.labelKey)}</span>
+					</button>
+				{:else}
+					<a
+						class="entry"
+						href={navHref(item, chosen)}
+						aria-current={current === item.id ? 'page' : undefined}
+						title={t(item.labelKey)}
+					>
+						<Icon name={item.icon} size={20} />
+						<span class="label">{t(item.labelKey)}</span>
+						{#if n !== null}<span class="count">{n}</span>{/if}
+					</a>
+				{/if}
 			</li>
 		{/each}
 	</ul>
@@ -70,7 +80,7 @@
 		display: grid;
 		gap: 0.15rem;
 	}
-	a {
+	.entry {
 		position: relative;
 		display: flex;
 		align-items: center;
@@ -82,9 +92,18 @@
 		font-weight: 550;
 		transition: background-color var(--vite), color var(--vite);
 	}
-	a:hover {
+	.entry:hover {
 		background: var(--releve);
 		color: var(--texte);
+	}
+	button.entry {
+		width: 100%;
+		border: 0;
+		background: none;
+		font: inherit;
+		font-weight: 550;
+		text-align: left;
+		cursor: pointer;
 	}
 	a[aria-current='page'] {
 		background: var(--selection);
@@ -129,7 +148,7 @@
 			padding: 0.75rem 0.5rem;
 			align-items: center;
 		}
-		a {
+		.entry {
 			justify-content: center;
 			padding: 0.6rem;
 		}

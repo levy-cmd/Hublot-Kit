@@ -1,0 +1,22 @@
+export default {
+	'nav.search': 'Search',
+	'palette.field': 'Search a container, an image, a file…',
+	'palette.title': 'Global search',
+	'palette.input': 'Search',
+	'palette.close': 'Close the search',
+	'palette.help': '↑ ↓ to choose, Enter to open, Esc to close',
+	'palette.type': 'Type at least 2 characters. Nothing is remembered.',
+	'palette.none': 'No results',
+	'palette.count': '{n} results',
+	'palette.section.container': 'Containers',
+	'palette.section.image': 'Images',
+	'palette.section.project': 'Compose projects',
+	'palette.section.page': 'Pages',
+	'palette.section.file': 'Files of {name}',
+	'palette.projectCount': '{n} container(s)',
+	'palette.searching': 'Searching the index…',
+	'palette.truncated': 'Only the first {n} files: narrow the search.',
+	'palette.openExplorer': 'Open the explorer',
+	'palette.noIndex': 'Files are searched in the index already built of a stopped container',
+	'palette.noContainer': 'Open a container to search its files.'
+};

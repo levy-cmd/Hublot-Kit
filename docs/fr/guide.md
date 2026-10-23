@@ -5,6 +5,7 @@ Cette page décrit l'interface de Hublot-Kit à partir de la v0.2. Pour l'instal
 ## La barre du haut
 
 - À gauche, l'anneau du hublot, le nom et la version réelle de l'agent (`dev` pour une version de développement).
+- Au centre, le champ « Rechercher un conteneur, une image, un fichier… » avec l'indication `Ctrl K` (`⌘ K` sur macOS). Il ouvre la recherche (ci-dessous) et ne cherche rien par lui-même.
 - À droite :
   - l'état de Docker : « Connecté » ou « Docker injoignable », suivi de l'adresse du démon (par exemple `unix:///var/run/docker.sock`). Une adresse qui contiendrait un identifiant (`tcp://utilisateur:motdepasse@hôte`) est masquée par l'agent ;
   - le bouclier : plein avec « Lecture seule » quand l'agent a démarré avec `--read-only`, en contour avec « Écriture permise » sinon ;
@@ -13,7 +14,7 @@ Cette page décrit l'interface de Hublot-Kit à partir de la v0.2. Pour l'instal
 
 ## La barre latérale
 
-Elle mène aux pages qui existent : Conteneurs (avec leur nombre), Diff avec l'image, Logs et Paramètres. « Diff avec l'image » et « Logs » ouvrent le panneau correspondant du conteneur choisi ; sans conteneur choisi, la liste demande d'en choisir un.
+Elle mène aux pages qui existent : Conteneurs (avec leur nombre), Diff avec l'image, Recherche, Logs et Paramètres. « Recherche » ouvre la recherche globale. « Diff avec l'image » et « Logs » ouvrent le panneau correspondant du conteneur choisi ; sans conteneur choisi, la liste demande d'en choisir un.
 
 En bas, un encart dit l'état réel de l'agent :
 
@@ -21,6 +22,18 @@ En bas, un encart dit l'état réel de l'agent :
 - « Écriture permise, toujours confirmée » sinon. C'est le cas par défaut : chaque écriture passe par une boîte de confirmation qui nomme le conteneur et le chemin.
 
 Sous 80 rem de large, la barre se réduit à ses icônes ; sous 48 rem, elle devient un tiroir qu'ouvre le bouton de menu de la barre du haut.
+
+## La recherche (Ctrl+K)
+
+`Ctrl K` (`⌘ K` sur macOS), le champ de la barre du haut ou l'entrée « Recherche » ouvrent une palette, sur toutes les pages sauf celle de connexion.
+
+- Elle cherche les conteneurs (nom, ID court, image, projet, service), les projets Compose et les pages de l'interface, dans la liste que le navigateur a déjà : rien n'est demandé à l'agent pour cela. Un nom exact passe en premier, puis un début de nom, puis un nom qui contient la recherche ; un conteneur passe avant un projet ou une page.
+- Elle cherche aussi les **fichiers**, mais seulement ceux du conteneur ouvert (`?c=` ou la page du conteneur), et seulement dans l'index déjà construit quand l'explorateur l'a ouvert. La recherche ne lance jamais d'export ni de parcours : pour un conteneur en marche, ou un conteneur arrêté que l'explorateur n'a pas encore ouvert, la palette propose « Ouvrir l'explorateur ». La recherche porte sur le chemin complet, sans tenir compte de la casse ; les noms qui contiennent la recherche passent avant les chemins qui la contiennent par un dossier parent. 200 fichiers au plus, puis la palette demande de préciser.
+- Elle ne renvoie que des noms que l'explorateur montre déjà pour ce conteneur, jamais un contenu, jamais une valeur masquée (environnement, commande, labels).
+- Au clavier : les flèches choisissent, Entrée ouvre, Échap ferme et rend le focus là où il était ; Tab reste dans la palette.
+- Rien n'est gardé : ni historique, ni stockage du navigateur, ni requête dans l'adresse de la page. La requête des fichiers part dans l'adresse de l'appel à l'agent (`/api/containers/{id}/fs/search?q=`), que l'agent ne journalise pas ; un reverse proxy qui journalise les adresses la verrait (voir [les limites](limites.md)).
+
+Les images rejoindront la palette avec la page Images.
 
 ## La page Conteneurs
 

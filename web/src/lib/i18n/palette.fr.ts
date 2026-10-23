@@ -1,0 +1,22 @@
+export default {
+	'nav.search': 'Recherche',
+	'palette.field': 'Rechercher un conteneur, une image, un fichier…',
+	'palette.title': 'Recherche globale',
+	'palette.input': 'Rechercher',
+	'palette.close': 'Fermer la recherche',
+	'palette.help': '↑ ↓ pour choisir, Entrée pour ouvrir, Échap pour fermer',
+	'palette.type': 'Tapez au moins 2 caractères. Rien n’est mémorisé.',
+	'palette.none': 'Aucun résultat',
+	'palette.count': '{n} résultats',
+	'palette.section.container': 'Conteneurs',
+	'palette.section.image': 'Images',
+	'palette.section.project': 'Projets Compose',
+	'palette.section.page': 'Pages',
+	'palette.section.file': 'Fichiers de {name}',
+	'palette.projectCount': '{n} conteneur(s)',
+	'palette.searching': 'Recherche dans l’index…',
+	'palette.truncated': 'Les {n} premiers fichiers seulement : précisez la recherche.',
+	'palette.openExplorer': 'Ouvrir l’explorateur',
+	'palette.noIndex': 'Les fichiers se cherchent dans l’index déjà construit d’un conteneur arrêté',
+	'palette.noContainer': 'Ouvrez un conteneur pour chercher dans ses fichiers.'
+};

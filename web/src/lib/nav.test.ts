@@ -5,8 +5,8 @@ import { dicts } from './i18n/index.ts';
 
 // Spec v0.2 §3: an entry appears once its page exists; no dead link.
 describe('nav', () => {
-	it('lists the entries of tranche 1, in order', () => {
-		expect(nav.map((n) => n.id)).toEqual(['containers', 'diff', 'logs', 'settings']);
+	it('lists the entries delivered so far, in order', () => {
+		expect(nav.map((n) => n.id)).toEqual(['containers', 'diff', 'search', 'logs', 'settings']);
 	});
 
 	it('leads only to pages that exist', () => {
@@ -31,6 +31,8 @@ describe('nav', () => {
 		expect(at('/c/abc?tab=diff')).toBe('containers');
 		expect(at('/settings')).toBe('settings');
 		expect(at('/servers')).toBeNull();
+		// "Search" opens the palette (tranche 3): never the current page.
+		expect(nav.find((n) => n.id === 'search')?.action).toBe('palette');
 	});
 
 	it('opens the panel of the chosen container', () => {

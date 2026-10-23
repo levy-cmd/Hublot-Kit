@@ -97,6 +97,11 @@ tous les détails.
   téléchargement contient la ligne entière.
 - Un pilote de logs que Docker ne sait pas relire (`none`, `syslog`…) donne `logs_unavailable`.
 
+## Recherche (v0.2)
+
+- La recherche de fichiers n'est possible que dans l'index déjà construit d'un conteneur arrêté que l'explorateur a ouvert. Pour un conteneur en marche, il n'y a pas d'index : ouvrez l'explorateur.
+- La requête d'une recherche de fichiers part dans l'adresse de l'appel à l'agent (`…/fs/search?q=`). L'agent ne la journalise pas et ne la garde pas, mais un reverse proxy placé devant lui qui journalise les adresses la verrait. Un nom de fichier peut être sensible : réglez les journaux du proxy en conséquence.
+
 ## Masquage des secrets
 
 La radiographie masque les secrets par leur nom et par des formes connues. Non reconnus en v0.1, entre autres :

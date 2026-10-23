@@ -5,6 +5,8 @@
 	import Ring from '#lib/icons/Ring.svelte';
 	import type { Theme } from '#lib/theme.ts';
 	import ServerMenu from './ServerMenu.svelte';
+	import CommandPalette from '../CommandPalette.svelte';
+	import { openPalette } from '#lib/palette.ts';
 
 	let {
 		meta,
@@ -26,6 +28,9 @@
 		tf('shell.docker.title', { version: meta.docker.serverVersion || '?', host: meta.docker.host || '?' })
 	);
 	let roText = $derived(meta.readOnly ? t('shell.readOnly') : t('shell.writable'));
+	// The shortcut as the keyboard spells it (spec v0.2 §3).
+	const mac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
+	const shortcut = mac ? '⌘ K' : 'Ctrl K';
 </script>
 
 <header class="topbar">
@@ -45,8 +50,15 @@
 		<span class="version mono" title={tf('shell.version', { v: meta.version })}>{meta.version}</span>
 	</a>
 
-	<!-- The global search field arrives with its palette (tranche 3). -->
-	<div class="center"></div>
+	<!-- The field only opens the palette: it searches nothing by itself (spec v0.2 §3). -->
+	<div class="center">
+		<button type="button" class="search" aria-label={t('palette.field')} aria-haspopup="dialog" aria-keyshortcuts={mac ? 'Meta+K' : 'Control+K'} onclick={openPalette}>
+			<Icon name="search" size={16} />
+			<span class="search-text">{t('palette.field')}</span>
+			<kbd>{shortcut}</kbd>
+		</button>
+	</div>
+	<CommandPalette />
 
 	<div class="right">
 		<span class="docker" title={dockerTitle}>
@@ -114,6 +126,44 @@
 	}
 	.center {
 		flex: 1;
+		display: flex;
+		justify-content: center;
+		min-width: 0;
+	}
+	.search {
+		display: flex;
+		align-items: center;
+		gap: 0.6rem;
+		width: min(34rem, 100%);
+		min-width: 0;
+		height: 2.25rem;
+		padding: 0 0.5rem 0 0.75rem;
+		background: var(--fond);
+		color: var(--texte-doux);
+		border: 1px solid var(--trait-fort);
+		border-radius: var(--rayon);
+		font: inherit;
+		font-size: var(--t-m);
+		cursor: text;
+		text-align: left;
+	}
+	.search:hover {
+		color: var(--texte);
+	}
+	.search-text {
+		flex: 1;
+		min-width: 0;
+		overflow: hidden;
+		text-overflow: ellipsis;
+		white-space: nowrap;
+	}
+	kbd {
+		padding: 0.1rem 0.4rem;
+		border: 1px solid var(--trait);
+		border-radius: 4px;
+		font-size: var(--t-xs);
+		color: var(--texte-doux);
+		white-space: nowrap;
 	}
 	.right {
 		display: flex;
@@ -183,6 +233,15 @@
 			display: inline-grid;
 		}
 		.version {
+			display: none;
+		}
+		.search {
+			width: 2.25rem;
+			padding: 0;
+			justify-content: center;
+		}
+		.search-text,
+		.search kbd {
 			display: none;
 		}
 		.docker-text {

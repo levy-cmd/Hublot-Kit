@@ -180,3 +180,22 @@ func TestSearchCachedTypes(t *testing.T) {
 		t.Errorf("%v, attendu %v", hits, want)
 	}
 }
+
+// BenchmarkSearchWalk: the cost of a whole walk (nothing found) of an index
+// of 37 224 entries (golang:1.27, spec v0.2 §5.5) and of 1 000 000
+// (DefaultIndexLimits.MaxHeaders).
+func BenchmarkSearchWalk(b *testing.B) {
+	for _, n := range []int{37_224, 1_000_000} {
+		x := &index{entries: map[string]Entry{"/": {Name: "/", Type: TypeDir}}, children: map[string][]string{}, hardlinks: map[string]string{}}
+		for i := range n {
+			x.add(&tar.Header{Name: fmt.Sprintf("/usr/lib/d%03d/s%02d/File-%d.so", i%500, i%40, i), Typeflag: tar.TypeReg})
+		}
+		b.Run(fmt.Sprint(n), func(b *testing.B) {
+			for b.Loop() {
+				if hits, _ := x.search(tctx, "absent-name", 200); len(hits) != 0 {
+					b.Fatal(hits)
+				}
+			}
+		})
+	}
+}
