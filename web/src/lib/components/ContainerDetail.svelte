@@ -74,6 +74,16 @@
 	// The command as the radiography shows it: masked by the agent. Copying
 	// copies this form, never a revealed value.
 	let command = $derived(radio ? commandLine([...radio.entrypoint, ...radio.cmd]) : '');
+	// Three lines at most, "Show all" when it is longer (the mock-up's block).
+	let cmdEl = $state<HTMLElement>();
+	let cmdOpen = $state(false);
+	let cmdLong = $state(false);
+	$effect(() => {
+		void command;
+		const el = cmdEl;
+		if (!el || cmdOpen) return;
+		cmdLong = el.scrollHeight > el.clientHeight + 1;
+	});
 
 	function when(iso: string): string {
 		const d = new Date(iso);
@@ -134,7 +144,18 @@
 					<span class="block-icon"><Icon name="terminal" /></span>
 					<div class="block-main">
 						<h3>{t('container.command')}</h3>
-						{#if command}<code class="command">{command}</code>{:else}<p class="muted">{t('container.noCommand')}</p>{/if}
+						{#if command}
+							<code class="command" class:clamped={!cmdOpen} id="detail-command" bind:this={cmdEl}>{command}</code>
+							{#if cmdLong}
+								<button
+									type="button"
+									class="more"
+									aria-expanded={cmdOpen}
+									aria-controls="detail-command"
+									onclick={() => (cmdOpen = !cmdOpen)}>{cmdOpen ? t('container.showLess') : t('container.showAll')}</button
+								>
+							{/if}
+						{:else}<p class="muted">{t('container.noCommand')}</p>{/if}
 						{#if radio.commandMasked}<p class="note">{t('xray.commandMasked')}</p>{/if}
 					</div>
 					{#if command}<CopyButton text={command} label={t('container.copyCommand')} />{/if}
@@ -271,6 +292,27 @@
 		min-width: 0;
 		display: grid;
 		gap: 0.25rem;
+		justify-items: start;
+	}
+	.command.clamped {
+		display: -webkit-box;
+		-webkit-box-orient: vertical;
+		-webkit-line-clamp: 3;
+		line-clamp: 3;
+		overflow: hidden;
+	}
+	.more {
+		border: 0;
+		padding: 0;
+		background: none;
+		color: var(--emeraude-texte);
+		font: inherit;
+		font-size: var(--t-s);
+		font-weight: 600;
+		cursor: pointer;
+	}
+	.more:hover {
+		text-decoration: underline;
 	}
 	.command {
 		display: block;

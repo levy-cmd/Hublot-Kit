@@ -24,6 +24,8 @@ export default {
 	'container.back': 'Back to the containers',
 	'container.loading': 'Loading the container…',
 	'container.exitCode': ', code {n}',
+	'container.showAll': 'Show all',
+	'container.showLess': 'Show less',
 	'panels.label': 'Container panels',
 	'panels.files': 'File system',
 	'panels.diff': 'Diff with the image',

@@ -48,9 +48,11 @@ type Fake struct {
 	LogsGate   chan struct{}
 	LogsCloses atomic.Int32
 	logsCalls  []LogsOptions
-	// Daemon answers Info; with Err set, Connected is false.
-	Daemon DaemonInfo
-	Err    error
+	// Daemon answers Info, with DaemonErr (a Ping that works and a /version
+	// that fails, for instance); with Err set, Connected is false.
+	Daemon    DaemonInfo
+	DaemonErr error
+	Err       error
 }
 
 func (f *Fake) Info(context.Context) (DaemonInfo, error) {
@@ -59,7 +61,7 @@ func (f *Fake) Info(context.Context) (DaemonInfo, error) {
 		info.Connected = false
 		return info, f.Err
 	}
-	return f.Daemon, nil
+	return f.Daemon, f.DaemonErr
 }
 
 // Put is one PutArchive call: the tar is read whole.

@@ -1,12 +1,10 @@
-<script module lang="ts">
-	export type Panel = 'files' | 'diff' | 'logs';
-</script>
-
 <script lang="ts">
 	import { page } from '$app/state';
+	import { untrack } from 'svelte';
 	import type { Entry } from '#lib/api.ts';
 	import { t } from '#lib/i18n/index.ts';
 	import Icon from '#lib/icons/Icon.svelte';
+	import { mountedPanels, type Panel } from '#lib/panels.ts';
 	import { withParams } from '#lib/url.ts';
 	import ChangesList from './ChangesList.svelte';
 	import FileBrowser from './FileBrowser.svelte';
@@ -15,6 +13,8 @@
 
 	// The bottom panels of the chosen container (spec v0.2 §3): side by side
 	// from 90 rem, tabs below (the file system tab then holds the content).
+	// Below 90 rem a panel is mounted when first opened, never before: a
+	// hidden file system panel would export a stopped container for nothing.
 
 	let {
 		id,
@@ -23,6 +23,24 @@
 		readOnly,
 		panel
 	}: { id: string; name: string; stopped: boolean; readOnly: boolean; panel: Panel } = $props();
+
+	// Known before the first render: mounting everything, then unmounting,
+	// would already have sent the requests.
+	const wideQuery = matchMedia('(min-width: 90rem)');
+	let wide = $state(wideQuery.matches);
+	$effect(() => {
+		const on = () => (wide = wideQuery.matches);
+		wideQuery.addEventListener('change', on);
+		return () => wideQuery.removeEventListener('change', on);
+	});
+	let opened = $state<Panel[]>([]);
+	$effect(() => {
+		const p = panel;
+		untrack(() => {
+			if (!opened.includes(p)) opened = [...opened, p];
+		});
+	});
+	let mounted = $derived(mountedPanels(new Set(opened), panel, wide));
 
 	let file = $derived(page.url.searchParams.get('file'));
 	let entry = $state<Entry | undefined>();
@@ -48,30 +66,38 @@
 	</nav>
 
 	<div class="grid">
-		<section class="panel p-files" class:current={panel === 'files'} aria-labelledby="p-files">
-			<h2 id="p-files">{t('panels.files')}</h2>
-			<div class="body">
-				<FileBrowser {id} {name} {stopped} {readOnly} compact withPreview={false} diffHref={panelHref('diff')} onselect={(e) => (entry = e)} />
-			</div>
-		</section>
-		<section class="panel p-diff" class:current={panel === 'diff'} aria-labelledby="p-diff">
-			<h2 id="p-diff">{t('panels.diff')}</h2>
-			<div class="body"><ChangesList {id} {fileHref} /></div>
-		</section>
-		<section class="panel p-content preview" class:current={panel === 'files'} aria-labelledby="p-content">
-			<h2 id="p-content" class="sr-only">{t('panels.content')}</h2>
-			<div class="body">
-				{#if file}
-					<FilePreview {id} {name} path={file} {entry} {stopped} {readOnly} />
-				{:else}
-					<p class="muted empty"><Icon name="file" size={20} /> {t('files.selectFile')}</p>
-				{/if}
-			</div>
-		</section>
-		<section class="panel p-logs" class:current={panel === 'logs'} aria-labelledby="p-logs">
-			<h2 id="p-logs">{t('panels.logs')}</h2>
-			<div class="body logs-body"><LogsView {id} /></div>
-		</section>
+		{#if mounted.has('files')}
+			<section class="panel p-files" class:current={panel === 'files'} aria-labelledby="p-files">
+				<h2 id="p-files">{t('panels.files')}</h2>
+				<div class="body">
+					<FileBrowser {id} {name} {stopped} {readOnly} compact withPreview={false} diffHref={panelHref('diff')} onselect={(e) => (entry = e)} />
+				</div>
+			</section>
+		{/if}
+		{#if mounted.has('diff')}
+			<section class="panel p-diff" class:current={panel === 'diff'} aria-labelledby="p-diff">
+				<h2 id="p-diff">{t('panels.diff')}</h2>
+				<div class="body"><ChangesList {id} {fileHref} /></div>
+			</section>
+		{/if}
+		{#if mounted.has('files')}
+			<section class="panel p-content preview" class:current={panel === 'files'} aria-labelledby="p-content">
+				<h2 id="p-content" class="sr-only">{t('panels.content')}</h2>
+				<div class="body">
+					{#if file}
+						<FilePreview {id} {name} path={file} {entry} {stopped} {readOnly} />
+					{:else}
+						<p class="muted empty"><Icon name="file" size={20} /> {t('files.selectFile')}</p>
+					{/if}
+				</div>
+			</section>
+		{/if}
+		{#if mounted.has('logs')}
+			<section class="panel p-logs" class:current={panel === 'logs'} aria-labelledby="p-logs">
+				<h2 id="p-logs">{t('panels.logs')}</h2>
+				<div class="body logs-body"><LogsView {id} /></div>
+			</section>
+		{/if}
 	</div>
 </section>
 
@@ -84,13 +110,20 @@
 	.grid {
 		display: grid;
 		gap: 0.75rem;
+		align-items: start;
 		min-width: 0;
 	}
+	/* A panel takes the height of its content, up to the screen's; it
+	   scrolls inside beyond that. The logs take a steady height. */
 	.panel {
 		display: flex;
 		flex-direction: column;
 		min-width: 0;
+		max-height: min(72vh, 40rem);
 		padding: 0.9rem 1rem;
+	}
+	.p-logs {
+		height: min(62vh, 34rem);
 	}
 	h2 {
 		font-size: var(--t-m);
@@ -99,17 +132,19 @@
 	.body {
 		min-width: 0;
 		min-height: 0;
-		flex: 1;
+		flex: 1 1 auto;
+		overflow: auto;
 	}
 	.logs-body {
 		display: flex;
 		flex-direction: column;
+		overflow: hidden;
 	}
 	.empty {
 		display: flex;
 		align-items: center;
 		gap: 0.5rem;
-		padding: 1rem 0;
+		padding: 0.5rem 0;
 	}
 
 	/* Under 90 rem: one panel at a time, chosen by the tabs. */
@@ -124,9 +159,6 @@
 			overflow: hidden;
 			clip-path: inset(50%);
 			white-space: nowrap;
-		}
-		.p-logs .body {
-			height: min(70vh, 36rem);
 		}
 		.panels[data-panel='files'] .grid {
 			grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
@@ -145,13 +177,6 @@
 		}
 		.grid {
 			grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.85fr) minmax(0, 1.1fr) minmax(0, 1.25fr);
-			grid-auto-rows: 32rem;
-		}
-		.body {
-			overflow: auto;
-		}
-		.logs-body {
-			overflow: hidden;
 		}
 		.panel.current {
 			border-color: var(--trait-fort);

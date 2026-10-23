@@ -128,7 +128,7 @@
 		font-size: var(--t-s);
 		font-weight: 600;
 		color: var(--texte-doux);
-		padding: 0.5rem 0.75rem;
+		padding: 0.5rem 0.6rem;
 		background: var(--releve);
 		border-bottom: 1px solid var(--trait);
 		white-space: nowrap;
@@ -140,25 +140,25 @@
 		border-top-right-radius: var(--rayon);
 	}
 	th.c-name {
-		width: 34%;
+		width: 32.5%;
 	}
 	th.c-image {
-		width: 20%;
+		width: 10.5%;
 	}
 	th.c-state {
-		width: 7.5rem;
+		width: 6.5rem;
 	}
 	th.c-ports {
-		width: 18%;
+		width: 14%;
 	}
 	th.c-uptime {
-		width: 22%;
+		width: 15.5%;
 	}
 	th.c-actions {
-		width: 6.75rem;
+		width: 6.25rem;
 	}
 	td {
-		padding: 0.5rem 0.75rem;
+		padding: 0.5rem 0.6rem;
 		border-bottom: 1px solid var(--trait);
 		white-space: nowrap;
 		vertical-align: middle;
@@ -241,7 +241,19 @@
 		background: var(--surface);
 	}
 
-	@media (max-width: 90rem) {
+	/* The name first: a narrower face keeps more of it, the image is the one
+	   cut (whole in the title and for screen readers). */
+	.name {
+		font-stretch: 87.5%;
+	}
+	.c-ports,
+	.c-uptime {
+		font-size: var(--t-s);
+	}
+	.c-uptime .cut {
+		white-space: normal;
+	}
+	@media (max-width: 48rem) {
 		.c-ports {
 			display: none;
 		}

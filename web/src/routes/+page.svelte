@@ -8,7 +8,8 @@
 	import { errorMessage, t, tf } from '#lib/i18n/index.ts';
 	import Icon from '#lib/icons/Icon.svelte';
 	import { withParams } from '#lib/url.ts';
-	import BottomPanels, { type Panel } from '#lib/components/BottomPanels.svelte';
+	import BottomPanels from '#lib/components/BottomPanels.svelte';
+	import type { Panel } from '#lib/panels.ts';
 	import ContainerDetail, { type DetailTab } from '#lib/components/ContainerDetail.svelte';
 	import ContainerTable from '#lib/components/ContainerTable.svelte';
 
@@ -185,7 +186,7 @@
 	}
 	@media (min-width: 64rem) {
 		.top.with-detail {
-			grid-template-columns: minmax(0, 1fr) minmax(20rem, 24rem);
+			grid-template-columns: minmax(0, 1fr) minmax(20rem, 22rem);
 		}
 	}
 	.list {

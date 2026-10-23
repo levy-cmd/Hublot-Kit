@@ -194,10 +194,12 @@ type metaDocker struct {
 }
 
 // meta (spec v0.2 §5.10). Docker down is not an error here: the UI says it.
+// Info sets Connected from the Ping alone; its error (a failed /version,
+// say) only leaves the versions empty.
 func (s *server) meta(w http.ResponseWriter, r *http.Request) {
 	info, err := s.d.Docker.Info(r.Context())
 	if err != nil {
-		info.Connected = false
+		slog.Debug("docker info", "err", err)
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"version":  s.d.Version,
