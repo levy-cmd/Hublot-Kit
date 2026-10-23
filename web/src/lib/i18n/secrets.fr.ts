@@ -9,7 +9,7 @@ export default {
 	'secrets.project': 'Projet',
 	'secrets.project.any': 'Tous les projets',
 	'secrets.project.none': 'Sans projet',
-	'secrets.summary': '{secrets} secrets détectés dans {containers} conteneurs sur {total}',
+	'secrets.summary': 'Secrets détectés : {secrets} · conteneurs concernés : {containers} sur {total}',
 	'secrets.empty': 'Aucun conteneur.',
 	'secrets.unavailable': 'indisponible',
 	'secrets.unavailableHint':
@@ -17,7 +17,8 @@ export default {
 	'secrets.none': 'aucun secret détecté',
 	'secrets.count.env': '{n} var.',
 	'secrets.count.args': '{n} arg.',
-	'secrets.count.labels': '{n} labels masqués',
+	'secrets.count.labels.one': '1 label masqué',
+	'secrets.count.labels.other': '{n} labels masqués',
 	'secrets.env': 'Variables',
 	'secrets.args': 'Arguments masqués',
 	'secrets.argsHint': 'La commande ne se révèle pas : elle est montrée telle que la radiographie la masque.',

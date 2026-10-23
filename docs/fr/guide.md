@@ -14,7 +14,7 @@ Cette page décrit l'interface de Hublot-Kit à partir de la v0.2. Pour l'instal
 
 ## La barre latérale
 
-Elle mène aux pages qui existent : Conteneurs (avec leur nombre), Diff avec l'image, Recherche, Logs et Paramètres. « Recherche » ouvre la recherche globale. « Diff avec l'image » et « Logs » ouvrent le panneau correspondant du conteneur choisi ; sans conteneur choisi, la liste demande d'en choisir un.
+Elle mène aux pages qui existent : Conteneurs (avec leur nombre), Diff avec l'image, Recherche, Logs, Secrets et Paramètres. « Recherche » ouvre la recherche globale. « Diff avec l'image » et « Logs » ouvrent le panneau correspondant du conteneur choisi ; sans conteneur choisi, la liste demande d'en choisir un.
 
 En bas, un encart dit l'état réel de l'agent :
 
@@ -73,6 +73,20 @@ Les labels portent souvent des secrets que le masquage ne reconnaît pas, par ex
 2. **Diff avec l'image** : les compteurs des ajouts, modifications et suppressions, puis la liste ; un chemin ouvre le fichier dans l'explorateur.
 3. **Contenu du fichier** : l'aperçu avec ses numéros de ligne, le téléchargement et, si l'écriture est permise, la modification.
 4. **Logs en direct** : l'horodatage, le niveau et le message. Le niveau est déduit du texte (`ERROR`, `WARN`, `INFO`, `DEBUG`, ou un champ `level`) ; c'est une heuristique, et à défaut le flux d'origine (`stdout` ou `stderr`) est affiché. « Suivi automatique » fait suivre la fin du flux ; le couper ne met pas le flux en pause. « Pause » arrête la réception, « Reprendre » rattrape les lignes arrivées entre-temps.
+
+## La page Secrets
+
+La page Secrets fait l'inventaire de ce que l'agent masque, sur tous les conteneurs à la fois. Elle ne montre que des **noms**, jamais une valeur :
+
+- les variables d'environnement que la radiographie masque ;
+- les arguments de la commande et du point d'entrée qui contiennent une partie masquée, sous la forme que montre l'onglet Aperçu ;
+- les noms des labels masqués. Tout label hors de `com.docker.compose.*` et `org.opencontainers.image.*` est masqué par précaution, qu'il porte un secret ou non : ils sont comptés à part.
+
+Les conteneurs sont triés par nombre de secrets détectés (variables et arguments), puis par nombre de labels masqués ; la liste « Projet » filtre par projet Compose, comme sur la page Conteneurs. Une ligne se déplie sur ses variables ; « Révéler » passe par la même demande que l'onglet Secrets du détail, journalisée par l'agent, et permise en lecture seule. La commande et les labels ne se révèlent pas.
+
+Une valeur révélée n'est gardée que par la page : elle est oubliée quand on replie la ligne, qu'on actualise, qu'on quitte la page ou qu'on ferme l'onglet. Rien n'est écrit dans le stockage du navigateur.
+
+L'inventaire coûte un `docker inspect` par conteneur (quelques millisecondes), quatre à la fois au plus pour tout l'agent. Un conteneur qui ne répond pas en 3 s, par exemple parce que Docker le verrouille pendant son export, est marqué « indisponible » sans retenir les autres ; « Actualiser » réessaie. Rien n'est gardé en cache : la page relit Docker à chaque ouverture.
 
 ## La page d'un conteneur et le téléphone
 

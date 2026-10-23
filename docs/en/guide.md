@@ -14,7 +14,7 @@ This page describes the interface of Hublot-Kit from v0.2 on. To install it, see
 
 ## The side bar
 
-It leads to the pages that exist: Containers (with their count), Diff with the image, Search, Logs and Settings. "Search" opens the global search. "Diff with the image" and "Logs" open the matching panel of the chosen container; with no container chosen, the list asks you to choose one.
+It leads to the pages that exist: Containers (with their count), Diff with the image, Search, Logs, Secrets and Settings. "Search" opens the global search. "Diff with the image" and "Logs" open the matching panel of the chosen container; with no container chosen, the list asks you to choose one.
 
 At the bottom, a notice says the agent's real state:
 
@@ -73,6 +73,20 @@ From 90 rem wide, four panels side by side; below, tabs.
 2. **Diff with the image**: the counts of additions, changes and deletions, then the list; a path opens the file in the explorer.
 3. **File content**: the preview with its line numbers, the download and, when writes are allowed, editing.
 4. **Live logs**: the timestamp, the level and the message. The level is guessed from the text (`ERROR`, `WARN`, `INFO`, `DEBUG`, or a `level` field); it is a heuristic, and otherwise the stream it came from (`stdout` or `stderr`) is shown. "Auto-scroll" follows the end of the stream; turning it off does not pause the stream. "Pause" stops receiving, "Resume" catches up with the lines that arrived meanwhile.
+
+## The Secrets page
+
+The Secrets page takes the inventory of what the agent masks, across every container at once. It shows **names** only, never a value:
+
+- the environment variables the X-ray masks;
+- the arguments of the command and the entrypoint that hold a masked part, in the form the Overview tab shows;
+- the names of the masked labels. Every label outside `com.docker.compose.*` and `org.opencontainers.image.*` is masked as a precaution, whether it holds a secret or not: they are counted apart.
+
+Containers are sorted by number of detected secrets (variables and arguments), then by number of masked labels; the "Project" list filters by Compose project, as on the Containers page. A row unfolds on its variables; "Reveal" goes through the same request as the Secrets tab of the detail, journaled by the agent, and allowed in read-only mode. The command and the labels cannot be revealed.
+
+A revealed value is kept by the page only: it is forgotten when you fold the row, refresh, leave the page or close the tab. Nothing is written to the browser's storage.
+
+The inventory costs one `docker inspect` per container (a few milliseconds), four at a time at most for the whole agent. A container that does not answer within 3 s, for instance because Docker locks it during its export, is marked "unavailable" without holding the others; "Refresh" tries again. Nothing is cached: the page reads Docker again each time it opens.
 
 ## A container's page and the phone
 

@@ -74,6 +74,12 @@ Traitez le jeton d'accès comme le mot de passe root du serveur.
   que les règles ci-dessus ne reconnaissent pas.
 - Une valeur masquée se révèle une à une, et chaque révélation est écrite dans le journal d'audit (le nom, jamais la
   valeur) avant l'envoi de la valeur.
+- La page Secrets (`GET /api/secrets`) ne renvoie que des noms : variables masquées, arguments sous leur forme
+  masquée, clés des labels masqués. Elle n'a pas de révélation à elle : une valeur passe par la même demande
+  journalisée que la radiographie, une variable à la fois, sous le contrôle d'`Origin`. Comme toute réponse de l'API,
+  elle n'est pas gardée en cache (`Cache-Control: no-store`), et l'interface n'écrit aucune valeur dans le stockage du
+  navigateur. Son coût est borné : quatre `docker inspect` à la fois pour tout l'agent, 3 s chacun, 15 s et
+  1 000 conteneurs par inventaire ; au-delà, un conteneur est marqué indisponible.
 - C'est une heuristique : [certaines formes ne sont pas reconnues](limites.md#masquage-des-secrets). Les logs ne sont
   jamais masqués.
 

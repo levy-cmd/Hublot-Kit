@@ -168,9 +168,13 @@
 								{#if r.unavailable}
 									<span class="pill warn" title={t('secrets.unavailableHint')}>{t('secrets.unavailable')}</span>
 								{:else}
-									{#if r.env.length}<span class="pill ok">{tf('secrets.count.env', { n: r.env.length })}</span>{/if}
-									{#if r.args.length}<span class="pill ok">{tf('secrets.count.args', { n: r.args.length })}</span>{/if}
-									{#if r.labels.length}<span class="pill">{tf('secrets.count.labels', { n: r.labels.length })}</span>{/if}
+									{#if r.env.length}<span class="pill strong">{tf('secrets.count.env', { n: r.env.length })}</span>{/if}
+									{#if r.args.length}<span class="pill strong">{tf('secrets.count.args', { n: r.args.length })}</span>{/if}
+									{#if r.labels.length}
+										<span class="muted small">
+											{r.labels.length === 1 ? t('secrets.count.labels.one') : tf('secrets.count.labels.other', { n: r.labels.length })}
+										</span>
+									{/if}
 									{#if n + r.labels.length === 0}<span class="muted small">{t('secrets.none')}</span>{/if}
 								{/if}
 							</span>
@@ -311,6 +315,9 @@
 	.chev {
 		display: inline-block;
 		width: 0.8rem;
+		font-size: var(--t-l);
+		line-height: 1;
+		text-align: center;
 		color: var(--texte-doux);
 		transition: transform var(--vite);
 	}
@@ -342,6 +349,13 @@
 	}
 	.small {
 		font-size: var(--t-xs);
+	}
+	.pill.strong {
+		color: var(--texte);
+		border-color: var(--trait-fort);
+	}
+	.counts {
+		align-items: center;
 	}
 	.row > .note {
 		padding: 0 0.5rem 0.55rem 1.7rem;
