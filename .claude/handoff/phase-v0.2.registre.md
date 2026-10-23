@@ -143,3 +143,13 @@
     - l'interface n'envoie que l'ID complet aux routes de fichiers, de recherche et de chiffres (`fullId`, figures par l'ID de la radiographie ; e2e sur `/c/<ID court>`). Pas de correspondance par préfixe côté agent (v0.1.1) : la limite d'un ID court pendant un export est écrite dans la spec et les limites ;
     - `Indexing` au lieu de `Pending` dans la recherche (pas une visite) ;
     - sections de la palette en `role="group"` nommés.
+- **Tranche 3 (recherche Ctrl+K)** : 2b1b75a, a335abd (tests rouges), 982bc90, 5e83086 (tests rouges), 823a4d7. Validée par le relecteur et par Codex. CI de la PR brouillon #10 verte (run 39990583708), overlay2 compris.
+  - PR brouillon #10 (`phase/v0.2` → `main`) ouverte le 2026-10-23 par la session principale, UNIQUEMENT pour que la CI tourne. Ne pas la fusionner, ne pas la sortir du brouillon avant la clôture.
+  - Correctif de revue :
+    - un délai dépassé donne toujours 504 (cause de l'instabilité en CI overlay2) ;
+    - recherche en POST, la requête dans le corps (jamais dans une URL ni dans les journaux d'un proxy) ;
+    - l'interface n'envoie que l'ID complet (`fullId`) ;
+    - `Indexing` ne compte pas comme une visite ;
+    - sections de la palette en groupes nommés.
+  - Limite documentée : un appel à l'API avec un ID court pendant un export attend le verrou de dockerd. Pas de correspondance par préfixe, par sécurité.
+  - À faire en tête de la tranche 4 (Minor de Codex) : `fs_search.go:63` doit refuser toute donnée après le premier objet JSON (second `Decode` égal à `io.EOF`).
