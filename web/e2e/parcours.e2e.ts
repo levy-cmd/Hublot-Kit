@@ -58,8 +58,13 @@ test('connexion, liste, panneaux fichiers et diff', async ({ page }) => {
 			.then((l: { id: string; name: string }[]) => l.find((c) => c.name === 'hublot-e2e-agent')?.id)
 	);
 	expect(agentId).toMatch(/^[0-9a-f]{64}$/);
+	const logsCalls: string[] = [];
+	page.on('request', (r) => {
+		if (/\/api\/containers\/[^/]+\/logs(\?|$)/.test(r.url())) logsCalls.push(r.url());
+	});
 	await page.goto(`/?c=${agentId}&panel=logs`);
 	await expect(page.getByRole('log')).toBeVisible();
+	await expect(page.getByRole('log').locator('.line').first()).toBeVisible(); // the agent's own start lines
 	await expect.poll(openStreams).toBe(1);
 	const bottom = page.getByRole('navigation', { name: 'Panneaux du conteneur' });
 	await bottom.getByRole('link', { name: "Diff avec l'image" }).click();
@@ -68,6 +73,9 @@ test('connexion, liste, panneaux fichiers et diff', async ({ page }) => {
 	await expect.poll(openStreams).toBe(0);
 	await bottom.getByRole('link', { name: 'Logs en direct' }).click();
 	await expect.poll(openStreams).toBe(1);
+	// The stream resumes after the last line received, it does not start over.
+	expect(logsCalls.length).toBeGreaterThanOrEqual(2);
+	expect(logsCalls.at(-1)).toMatch(/[?&]after=[^&]+/);
 	await page.goto('/');
 
 	// hublot-e2e is stopped: the "Stopped" tab lists it (?state=stopped).

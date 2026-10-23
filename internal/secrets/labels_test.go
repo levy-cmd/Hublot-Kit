@@ -69,6 +69,30 @@ func TestLabels(t *testing.T) {
 	}
 }
 
+// Review of tranche 2 (session ruling, narrows Q60): the Compose labels that
+// carry paths of the host machine are masked like a label outside the list.
+func TestLabelsHostPathsMasked(t *testing.T) {
+	got := Labels(map[string]string{
+		"com.docker.compose.project.config_files":     "/home/alice/shop/compose.yml,/home/alice/shop/compose.prod.yml",
+		"com.docker.compose.project.working_dir":      "/home/alice/shop",
+		"com.docker.compose.project.environment_file": "/home/alice/shop/.env",
+		"com.docker.compose.project":                  "shop",
+	})
+	b, _ := json.Marshal(got)
+	if strings.Contains(string(b), "alice") {
+		t.Errorf("FUITE : chemin de l'hôte dans %s", b)
+	}
+	for _, l := range got {
+		if l.Key == "com.docker.compose.project" {
+			if l.Masked || l.Value == nil || *l.Value != "shop" {
+				t.Errorf("projet : %+v", l)
+			}
+		} else if !l.Masked || l.Value != nil {
+			t.Errorf("%s non masqué : %+v", l.Key, l)
+		}
+	}
+}
+
 func TestLabelsEmpty(t *testing.T) {
 	if got := Labels(nil); got == nil || len(got) != 0 {
 		t.Errorf("Labels(nil) = %#v, liste vide attendue (JSON [])", got)

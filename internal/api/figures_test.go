@@ -102,6 +102,39 @@ func TestFiguresCache(t *testing.T) {
 	}
 }
 
+// Review of tranche 2 (Codex): requests that arrive together once the
+// cache has expired share one Inspect with size=true, which dockerd pays
+// by walking the writable layer.
+func TestFiguresSizeCoalesced(t *testing.T) {
+	now := fakeClock(t)
+	f, c := figuresFixture(t)
+	if rec := f.do("GET", "/api/containers/web/figures", "", c); rec.Code != http.StatusOK {
+		t.Fatalf("%d %s", rec.Code, rec.Body)
+	}
+	*now = now.Add(61 * time.Second)
+	f.docker.SizeGate = make(chan struct{})
+	const n = 8
+	done := make(chan *httptest.ResponseRecorder, n)
+	for range n {
+		go func() { done <- f.do("GET", "/api/containers/web/figures", "", c) }()
+	}
+	time.Sleep(300 * time.Millisecond) // every request reaches the size, or waits for it
+	close(f.docker.SizeGate)
+	for range n {
+		select {
+		case rec := <-done:
+			if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"sizeRw":1234`) {
+				t.Errorf("%d %s", rec.Code, rec.Body)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("requête bloquée")
+		}
+	}
+	if got := f.docker.SizeCalls.Load(); got != 2 {
+		t.Errorf("%d Inspect avec size, attendu 2 (le premier, puis un seul pour %d requêtes simultanées)", got, n)
+	}
+}
+
 // Spec v0.2 §5.3: dockerd holds the container lock during an export, and
 // the Inspect waits; figures answers 504 at its deadline.
 func TestFiguresTimeout(t *testing.T) {

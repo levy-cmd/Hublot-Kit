@@ -1,6 +1,6 @@
 import { readdirSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import { nav, navHref } from './nav.ts';
+import { currentNav, nav, navHref } from './nav.ts';
 import { dicts } from './i18n/index.ts';
 
 // Spec v0.2 §3: an entry appears once its page exists; no dead link.
@@ -19,6 +19,18 @@ describe('nav', () => {
 			expect(dicts.fr).toHaveProperty(n.labelKey);
 			expect(dicts.en).toHaveProperty(n.labelKey);
 		}
+	});
+
+	// Review of tranche 2: "Diff with the image" and "Logs" open a panel of the
+	// Containers page; they are never the current page, even with ?panel=.
+	it('marks the page, never a panel shortcut, as current', () => {
+		const at = (u: string) => currentNav(new URL(u, 'http://x'));
+		expect(at('/')).toBe('containers');
+		expect(at('/?c=abc&panel=diff')).toBe('containers');
+		expect(at('/?panel=logs')).toBe('containers');
+		expect(at('/c/abc?tab=diff')).toBe('containers');
+		expect(at('/settings')).toBe('settings');
+		expect(at('/servers')).toBeNull();
 	});
 
 	it('opens the panel of the chosen container', () => {

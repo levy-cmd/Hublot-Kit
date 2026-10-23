@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { Radiography } from './api';
 import {
 	addReveal, askFor, commandLine, envValue, forgetReveals, isStopped, labelChip, lastExit, mountLabel, noReveals, portLabel,
-	removeReveal, restartLabel, revealedFor, shortId
+	removeReveal, restartLabel, revealedFor, shortId, splitLabels
 } from './xray';
 
 describe('xray (F7)', () => {
@@ -103,6 +103,22 @@ describe('xray (F7)', () => {
 		expect(labelChip({ key: 'com.docker.compose.depends_on', value: '', masked: false }, 'masqué')).toEqual({
 			key: 'com.docker.compose.depends_on', value: '', masked: false
 		});
+	});
+
+	it('shows the labels in clear as chips, the masked ones as keys only (review of tranche 2)', () => {
+		const split = splitLabels([
+			{ key: 'architecture', value: null, masked: true },
+			{ key: 'com.docker.compose.project', value: 'shop', masked: false },
+			{ key: 'com.docker.compose.project.working_dir', value: null, masked: true },
+			{ key: 'org.opencontainers.image.source', value: 'https://github.com/o/r', masked: false },
+			{ key: 'backup.dsn', value: 's3cr3t', masked: true } // masked wins over a value
+		]);
+		expect(split.shown).toEqual([
+			{ key: 'com.docker.compose.project', value: 'shop' },
+			{ key: 'org.opencontainers.image.source', value: 'https://github.com/o/r' }
+		]);
+		expect(split.masked).toEqual(['architecture', 'com.docker.compose.project.working_dir', 'backup.dsn']);
+		expect(JSON.stringify(split)).not.toContain('s3cr3t');
 	});
 
 	it('reads the last exit, "never" for Docker\'s zero date (spec v0.2 §5.3)', () => {
