@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import { NO_PROJECT } from './containers.ts';
 import {
-	addInvReveal, askInv, filterRows, forgetInv, invRevealed, noInvReveals, projectsOfRows, removeInvReveal,
+	addInvReveal, askInv, dropInvContainer, filterRows, forgetInv, invRevealed, noInvReveals, projectsOfRows, removeInvReveal,
 	secretCount, sortRows, type SecretRow
 } from './inventory.ts';
 
@@ -71,6 +71,14 @@ describe('inventory', () => {
 		expect(invRevealed(r, 'c1', '__proto__')).toBe('v');
 		expect(invRevealed(r, 'c1', 'constructor')).toBeNull();
 		expect(invRevealed(r, 'constructor', 'toString')).toBeNull();
+	});
+
+	it('forgets the values of a folded container only', () => {
+		let r = addInvReveal(noInvReveals, askInv(noInvReveals, 'c1'), 'A', 'v1');
+		r = addInvReveal(r, askInv(r, 'c2'), 'A', 'v2');
+		r = dropInvContainer(r, 'c1');
+		expect(invRevealed(r, 'c1', 'A')).toBeNull();
+		expect(invRevealed(r, 'c2', 'A')).toBe('v2');
 	});
 
 	it('forgets every value, and drops a reveal asked before (pagehide, leaving the page)', () => {
