@@ -153,3 +153,16 @@
     - sections de la palette en groupes nommés.
   - Limite documentée : un appel à l'API avec un ID court pendant un export attend le verrou de dockerd. Pas de correspondance par préfixe, par sécurité.
   - À faire en tête de la tranche 4 (Minor de Codex) : `fs_search.go:63` doit refuser toute donnée après le premier objet JSON (second `Decode` égal à `io.EOF`).
+- **Tranche 4 (page Secrets)** : 166be92 (test rouge), 0864588 (`decodeOne`, Minor de la tranche 3), 9ab9885 (tests rouges), a15e357, 1f42e4f ; correctif de revue : e747222 (tests rouges), 14945db.
+  - Écarts au plan :
+    - bornes ajoutées : 15 s et 1 000 conteneurs par parcours, sémaphore de 4 Inspect pour tout l'agent ;
+    - tri : env + arguments comptent comme secrets, les labels masqués viennent ensuite (la liste blanche masque tous les labels) ; indisponibles en dernier ; valeur révélée oubliée aussi au repli de la ligne et à l'actualisation ;
+    - fichiers hors liste : `nav.test.ts` (une ligne), `scripts/e2e.sh` (variables du conteneur `hublot-e2e`), `web/e2e/secrets.e2e.ts`.
+  - **Contrat révisé à la revue** (Codex, critique) : `args` vaut `[{part, index, kind, name?}]`, jamais le texte masqué. Un masque partiel de la spec v0.1 §13 (`Password=••••••(üü)`, `--token` suivi de JSON) laisserait sortir un reste de la valeur. `name` n'est tiré que d'un drapeau ou d'une clé faits de `[A-Za-z0-9_.-]`, ou du shell et de son drapeau. Spec v0.2 §5.9 et plan à jour.
+  - Correctif de revue :
+    - noms de variables dédoublonnés dans l'agent, clé par index dans la page (relecteur : `each_key_duplicate` avec `API_TOKEN` en double ; e2e avec la variable en double) ;
+    - inventaires simultanés regroupés : un seul parcours détaché, chaque appelant avec son délai (Codex) ;
+    - erreur de `ListContainers` : `503 docker_unavailable`, détail fixe, journal par `secrets.Line` (Codex) ;
+    - `revealEnv` passe par `decodeOne`.
+  - Mesures (Docker Desktop, 42 conteneurs) : 66 à 182 ms ; un conteneur verrouillé par un `GET /archive?path=/` lu lentement est `unavailable` en 3,1 s, les autres complets.
+  - Mutations : toutes tuées, sauf une, **acceptée** : le second `ctx.Err()` après l'acquisition d'une place (`secrets_inventory.go`). Il ne ferme qu'une course étroite (une place libérée à l'instant du délai, que `select` choisit au hasard) : le relecteur la juge quasi équivalente. Le contrôle reste ; il a corrigé un vrai défaut vu une fois sous `-race` (8 Inspect après le délai).
