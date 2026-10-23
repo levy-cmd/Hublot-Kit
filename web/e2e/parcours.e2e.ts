@@ -113,7 +113,7 @@ test('connexion, liste, panneaux fichiers et diff', async ({ page }) => {
 	// hublot-e2e-motd replaced the first line of /etc/motd and added one at
 	// the end, and the tag that started it
 	// was removed (scripts/e2e.sh, Review Focus 5): the image is read by its
-	// ID. The first answer of the image is a 202: its progress shows.
+	// ID. The image answers 202 until released: its progress shows.
 	const motd = await page.evaluate(() =>
 		fetch('/api/containers')
 			.then((r) => r.json())
@@ -123,12 +123,11 @@ test('connexion, liste, panneaux fichiers et diff', async ({ page }) => {
 	const radio = await page.evaluate((id) => fetch(`/api/containers/${id}`).then((r) => r.json()), motd);
 	expect(radio.image).toBe('hublot-e2e-motd'); // a name Docker no longer knows
 	const imageCalls: string[] = [];
-	let faked = false;
+	let extracting = true;
 	const imageFile = /\/api\/images\/[^/]+\/fs\/file\?/;
 	await page.route(imageFile, (route) => {
 		imageCalls.push(new URL(route.request().url()).pathname);
-		if (faked) return route.continue();
-		faked = true;
+		if (!extracting) return route.continue();
 		return route.fulfill({
 			status: 202,
 			contentType: 'application/json',
@@ -138,9 +137,22 @@ test('connexion, liste, panneaux fichiers et diff', async ({ page }) => {
 	await page.goto(`/?c=${motd}&panel=diff`);
 	await page.getByRole('link', { name: '/etc/motd', exact: true }).click();
 	await expect(content).toContainText("Lecture du fichier dans l'image : 42 %");
+	// Review of tranche 7 (Codex): under 90 rem, the diff hidden behind
+	// another panel stops asking the agent; shown again, it asks again.
+	await panels.getByRole('link', { name: 'Logs en direct' }).click();
+	await expect(page).toHaveURL(/panel=logs/);
+	await page.waitForTimeout(500);
+	const asked = imageCalls.length;
+	await page.waitForTimeout(4500);
+	expect(imageCalls.length).toBe(asked);
+	await panels.getByRole('link', { name: "Diff avec l'image" }).click();
+	await expect.poll(() => imageCalls.length).toBeGreaterThan(asked);
+	extracting = false;
 	const added = content.locator('.cm-changedLine');
 	await expect(added).toHaveCount(2, { timeout: 30_000 });
-	await expect(added).toHaveText(['Bienvenue sur Hublot', 'ligne ajoutée par hublot']);
+	await expect(added).toHaveText(['Bienvenue sur Hublot', /^ligne ajoutée par hublot /]);
+	// Review of tranche 7: the U+202E of that line is shown, not obeyed.
+	await expect(added.locator('.cm-specialChar')).toHaveCount(1);
 	await expect(content.locator('.cm-deletedLine')).toHaveCount(1); // the image's first line
 	// Line numbers of each side: an added line has none in the image, the
 	// removed one none in the container.

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import * as merge from '@codemirror/merge';
 import { Chunk } from '@codemirror/merge';
 import { Text } from '@codemirror/state';
 import { ApiError, type Change, type Preview } from './api.ts';
@@ -7,7 +8,9 @@ import {
 	deletedAt,
 	diffChange,
 	diffHref,
+	diffState,
 	lineChunks,
+	numbering,
 	needs,
 	reasonMessage,
 	sideOf,
@@ -163,5 +166,38 @@ describe('line numbers of each side in the unified view', () => {
 	});
 	it('from an empty file', () => {
 		expect(numbers('', 'a\nb')).toEqual(['1 -', '+ 1', '+ 2']);
+	});
+});
+
+describe('the unified view of two large files (review of tranche 7)', () => {
+	// About 224 KiB each, nearly every line different: without the scan
+	// limit of the view, the diff took 54 s and found other chunks than the
+	// ones shown.
+	const big = (seed: number) => {
+		let x = seed;
+		const word = () => ((x = (x * 1103515245 + 12345) % 2147483648), (x % 100000).toString(36));
+		return Array.from({ length: 8500 }, () => Array.from({ length: 6 }, word).join(' ')).join('\n') + '\n';
+	};
+	it('is bounded in time, and numbers the chunks the view shows', async () => {
+		const original = big(1);
+		const modified = big(2);
+		expect(original.length).toBeGreaterThan(200_000);
+		await diffState({ kind: 'added', text: 'warm-up' }, 'diff', true); // modules loaded before timing
+		const t0 = performance.now();
+		const state = await diffState({ kind: 'modified', original, modified, equal: null }, 'diff', true);
+		const shown = merge.getChunks(state)!.chunks;
+		const nums = numbering(merge, state);
+		expect(performance.now() - t0).toBeLessThan(1500);
+		expect(shown.length).toBeGreaterThan(0);
+		expect(nums).toEqual(lineChunks(shown, merge.getOriginalDoc(state), state.doc));
+		// Every line of each side numbered once, in order.
+		const b = state.doc.lines;
+		const aSeen: number[] = [];
+		for (let l = 1; l <= b + 1; l++) {
+			aSeen.push(...deletedAt(nums, l));
+			const a = l <= b ? aLineOf(nums, l) : null;
+			if (a !== null) aSeen.push(a);
+		}
+		expect(aSeen).toEqual(Array.from({ length: merge.getOriginalDoc(state).lines }, (_, i) => i + 1));
 	});
 });
