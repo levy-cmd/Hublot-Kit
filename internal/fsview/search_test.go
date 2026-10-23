@@ -8,6 +8,7 @@ import (
 	"archive/tar"
 	"context"
 	"fmt"
+	"maps"
 	"slices"
 	"testing"
 	"time"
@@ -178,6 +179,46 @@ func TestSearchCachedTypes(t *testing.T) {
 	want := []SearchHit{{"/x/k-fifo", TypeOther}, {"/x/k-file", TypeFile}, {"/x/k-hard", TypeFile}}
 	if !slices.Equal(hits, want) {
 		t.Errorf("%v, attendu %v", hits, want)
+	}
+}
+
+// Review of tranche 3: the search asks whether a build is in progress
+// (Indexing) without making a visit of it: neither its last use (Grace,
+// IdleTTL) nor its place in the LRU change. Same matching as Pending: full
+// ID or name, never a prefix.
+func TestViewsIndexingNotAVisit(t *testing.T) {
+	g := &gated{Fake: stoppedDocker(t), open: make(chan struct{})}
+	defer close(g.open)
+	addStopped(t, g.Fake, "x2")
+	v := NewViews(g, Options{})
+	if v.Indexing("db") {
+		t.Fatal("aucune construction")
+	}
+	v.For(tctx, "db")
+	v.For(tctx, "x2")
+	snapshot := func() ([]string, map[string]time.Time) {
+		v.mu.Lock()
+		defer v.mu.Unlock()
+		touched := map[string]time.Time{}
+		for k, b := range v.builds {
+			touched[k] = b.touched
+		}
+		return slices.Clone(v.order), touched
+	}
+	order, touched := snapshot()
+	time.Sleep(5 * time.Millisecond)
+	for _, ref := range []string{"db", vID} {
+		if !v.Indexing(ref) {
+			t.Errorf("Indexing(%s) pendant la construction : false", ref)
+		}
+	}
+	for _, ref := range []string{vID[:12], "d", "web"} {
+		if v.Indexing(ref) {
+			t.Errorf("Indexing(%s) d'un autre conteneur : true", ref)
+		}
+	}
+	if o, tc := snapshot(); !slices.Equal(o, order) || !maps.Equal(tc, touched) {
+		t.Errorf("Indexing a compté une visite : ordre %v → %v", order, o)
 	}
 }
 

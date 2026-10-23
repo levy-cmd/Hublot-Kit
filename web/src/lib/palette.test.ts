@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Container } from './api.ts';
 import { containerList } from './containerList.svelte.ts';
 import {
-	fileItems, MAX_QUERY, rank, searchFiles, sections, validQuery, type FileSearch, type PaletteItem
+	fileItems, fullId, MAX_QUERY, rank, searchFiles, sections, validQuery, type FileSearch, type PaletteItem
 } from './palette.ts';
 import { paletteItems } from './palette/index.ts';
 
@@ -92,6 +92,25 @@ describe('fileItems', () => {
 	});
 });
 
+// Review of tranche 3 (Codex): the agent recognises a build in progress by
+// the full ID only (no prefix, v0.1.1); the palette never sends anything else.
+describe('fullId', () => {
+	const full = 'ab'.repeat(32);
+	const list = [ctr('web', { id: full }), ctr('db', { id: 'cd'.repeat(32) })];
+	it('turns a name, a short or a full ID into the full ID of the list', () => {
+		expect(fullId(list, full)).toBe(full);
+		expect(fullId(list, 'web')).toBe(full);
+		expect(fullId(list, full.slice(0, 12))).toBe(full);
+	});
+	it('gives nothing for an unknown, too short or ambiguous reference', () => {
+		expect(fullId(list, 'ef'.repeat(6))).toBeNull();
+		expect(fullId(list, 'abab')).toBeNull();
+		expect(fullId([...list, ctr('x', { id: 'ab'.repeat(6) + 'ef'.repeat(26) })], full.slice(0, 12))).toBeNull();
+		expect(fullId(null, full)).toBeNull();
+		expect(fullId(list, null)).toBeNull();
+	});
+});
+
 describe('sections', () => {
 	it('groups by kind, in a fixed order', () => {
 		const out = sections([item('page', 'p'), item('container', 'a'), item('project', 'x'), item('container', 'b')]);
@@ -139,9 +158,13 @@ describe('no trace of the query', () => {
 		rank(paletteItems(), 'backup sql');
 		fileItems(res, 'web0123456789abcdef', false);
 		expect(fetchMock).toHaveBeenCalledOnce();
-		expect(String((fetchMock.mock.calls[0] as unknown[])[0])).toBe(
-			'/api/containers/web0123456789abcdef/fs/search?q=backup%20sql'
-		);
+		// Review of tranche 3 (Codex): the query goes in the body of a POST,
+		// never in a URL a reverse proxy would log.
+		const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+		expect(url).toBe('/api/containers/web0123456789abcdef/fs/search');
+		expect(url).not.toMatch(/backup|\?/);
+		expect(init.method).toBe('POST');
+		expect(JSON.parse(String(init.body))).toEqual({ q: 'backup sql' });
 		expect(store.setItem).not.toHaveBeenCalled();
 	});
 

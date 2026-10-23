@@ -26,6 +26,11 @@ import (
 // and an Inspect of it waits (v0.1.1); past this, 504.
 var figuresTimeout = 30 * time.Second
 
+// figuresCallTimeout bounds the shared Inspect with size=true (sizeCall),
+// which outlives the request that started it: the same 30 s, apart only so
+// that a test can make either deadline end first.
+var figuresCallTimeout = 30 * time.Second
+
 // figuresNow is the clock of the size cache; tests replace it.
 var figuresNow = time.Now
 
@@ -78,10 +83,10 @@ func newFigureCache() *figureCache {
 }
 
 // size answers from the cache, else joins the call in flight for id, else
-// starts it. The call runs on its own, bounded by figuresTimeout: a request
+// starts it. The call runs on its own, bounded by figuresCallTimeout: a request
 // that goes away leaves it to the others, never fails them.
 func (c *figureCache) size(ctx context.Context, d dockerx.Client, id string) (rw, rootfs *int64, err error) {
-	now, timeout := figuresNow(), figuresTimeout
+	now, timeout := figuresNow(), figuresCallTimeout
 	c.mu.Lock()
 	if e, ok := c.sizes[id]; ok && now.Sub(e.at) < sizeTTL {
 		c.mu.Unlock()

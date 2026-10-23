@@ -137,22 +137,65 @@ func TestFiguresSizeCoalesced(t *testing.T) {
 
 // Spec v0.2 §5.3: dockerd holds the container lock during an export, and
 // the Inspect waits; figures answers 504 at its deadline.
+//
+// Deterministic (CI, review of tranche 3): the request's deadline and the
+// shared call's are set apart, so that one of them always ends first.
 func TestFiguresTimeout(t *testing.T) {
-	old := figuresTimeout
-	figuresTimeout = 50 * time.Millisecond
-	t.Cleanup(func() { figuresTimeout = old })
+	setTimeouts(t, 50*time.Millisecond, time.Hour) // the request's deadline ends first
 	f, c := figuresFixture(t)
 	f.docker.SizeGate = make(chan struct{})
 	defer close(f.docker.SizeGate)
+	if rec := awaitFigures(t, f, c); rec.Code != http.StatusGatewayTimeout || errCode(t, rec) != "internal" {
+		t.Errorf("verrou de dockerd : %d %s", rec.Code, rec.Body)
+	}
+}
+
+// Review of tranche 3 (CI red, Minor of tranche 2): when the shared call
+// reaches its deadline first, every request waiting on it, the one that
+// started it and those that joined it, answers 504, never 503.
+func TestFiguresTimeoutShared(t *testing.T) {
+	setTimeouts(t, time.Hour, 500*time.Millisecond) // the call's deadline ends first
+	f, c := figuresFixture(t)
+	f.docker.SizeGate = make(chan struct{})
+	defer close(f.docker.SizeGate)
+	first := make(chan *httptest.ResponseRecorder, 1)
+	go func() { first <- f.do("GET", "/api/containers/web/figures", "", c) }()
+	for deadline := time.Now().Add(5 * time.Second); f.docker.SizeCalls.Load() == 0; time.Sleep(time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("calcul jamais lancé")
+		}
+	}
+	joined := awaitFigures(t, f, c)
+	for name, rec := range map[string]*httptest.ResponseRecorder{"rejointe": joined, "première": <-first} {
+		if rec.Code != http.StatusGatewayTimeout || errCode(t, rec) != "internal" {
+			t.Errorf("requête %s : %d %s", name, rec.Code, rec.Body)
+		}
+	}
+	if n := f.docker.SizeCalls.Load(); n != 1 {
+		t.Errorf("%d Inspect avec size, attendu 1 (la seconde requête rejoint le calcul)", n)
+	}
+}
+
+// setTimeouts replaces the deadline of a request and that of the shared
+// size call for one test.
+func setTimeouts(t *testing.T, request, call time.Duration) {
+	t.Helper()
+	oldReq, oldCall := figuresTimeout, figuresCallTimeout
+	figuresTimeout, figuresCallTimeout = request, call
+	t.Cleanup(func() { figuresTimeout, figuresCallTimeout = oldReq, oldCall })
+}
+
+// awaitFigures asks the figures of web, within 5 s.
+func awaitFigures(t *testing.T, f *fixture, c *http.Cookie) *httptest.ResponseRecorder {
+	t.Helper()
 	done := make(chan *httptest.ResponseRecorder, 1)
 	go func() { done <- f.do("GET", "/api/containers/web/figures", "", c) }()
 	select {
 	case rec := <-done:
-		if rec.Code != http.StatusGatewayTimeout {
-			t.Errorf("verrou de dockerd : %d %s", rec.Code, rec.Body)
-		}
+		return rec
 	case <-time.After(5 * time.Second):
 		t.Fatal("figures attend sans délai le verrou de dockerd")
+		return nil
 	}
 }
 
