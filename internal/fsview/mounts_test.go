@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"io/fs"
+	"os"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -12,6 +15,7 @@ import (
 
 func TestHostBind(t *testing.T) {
 	ctx := context.Background()
+	fakeHostRoot(t) // an empty host: every Source is judged as written
 	docker := &dockerx.Fake{Volumes: map[string]map[string]string{
 		"proc-vol":  {"type": "none", "o": "bind", "device": "/proc"},
 		"sys-vol":   {"o": "rbind,ro", "device": "/sys/kernel"},
@@ -78,6 +82,167 @@ func TestHostBind(t *testing.T) {
 	}
 	if err := HostBind(ctx, nil, []dockerx.Mount{vol("plain-vol", "/v", "local")}); !errors.Is(err, ErrForbiddenPath) {
 		t.Fatalf("sans client Docker, un volume doit être refusé : %v", err)
+	}
+}
+
+// realSelfPIDNamespace: the reading of the agent, before TestMain.
+var realSelfPIDNamespace = selfPIDNamespace
+
+// TestMain: without root (CI job "go"), /proc/1/root is out of reach and
+// every bind would be refused; host paths are then judged as written.
+func TestMain(m *testing.M) {
+	dir, err := os.MkdirTemp("", "hublot-host")
+	if err != nil {
+		panic(err)
+	}
+	UseEmptyHostIfUnreachable(dir)
+	code := m.Run()
+	os.RemoveAll(dir)
+	os.Exit(code)
+}
+
+// fakeHostRoot points the host's root at a temporary tree for one test.
+func fakeHostRoot(t *testing.T) string {
+	t.Helper()
+	root := t.TempDir()
+	old, oldNS := hostRoot, selfPIDNamespace
+	hostRoot = root
+	selfPIDNamespace = func() (string, error) { return hostPIDNamespace, nil }
+	t.Cleanup(func() { hostRoot, selfPIDNamespace = old, oldNS })
+	return root
+}
+
+// v0.1.2 (audit, constat 5): Docker keeps the Source of a bind as written,
+// but mounts what it resolves to on the host. A bind of …/link (-> /) passed
+// the text rule, and an archive of / locks dockerd. The rule applies to the
+// Source resolved from the host's root (never the agent's).
+func TestHostBindResolvesHostLinks(t *testing.T) {
+	ctx := context.Background()
+	root := fakeHostRoot(t)
+	for _, d := range []string{"proc/1", "sys/fs/cgroup", "dev", "srv/data", "opt", "etc"} {
+		if err := os.MkdirAll(filepath.Join(root, d), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	links := map[string]string{
+		"srv/root":  "/",           // absolute: from the host's root
+		"srv/up":    "../..",       // relative, ".." stopped at the root
+		"srv/proc":  "../proc",     // relative
+		"opt/fs":    "/sys/fs",     // a link in the middle of the Source
+		"srv/dev":   "/dev",        // /dev exactly
+		"srv/chain": "/srv/root",   // a link to a link
+		"srv/loop":  "/srv/loop",   // a loop: unresolvable, refused
+		"srv/ok":    "data",        // control: a plain directory
+		"srv/etc":   "/etc",        // control: /etc is not refused
+		"srv/gone":  "/srv/absent", // control: a missing target is not the host
+	}
+	for name, target := range links {
+		if err := os.Symlink(target, filepath.Join(root, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	docker := &dockerx.Fake{Volumes: map[string]map[string]string{
+		"via-link": {"type": "none", "o": "bind", "device": "/srv/root"},
+		"ok-vol":   {"type": "none", "o": "bind", "device": "/srv/ok"},
+	}}
+	bind := func(src, dst string) dockerx.Mount { return dockerx.Mount{Type: "bind", Source: src, Destination: dst} }
+	for _, c := range []struct {
+		m    dockerx.Mount
+		want []string
+	}{
+		{bind("/srv/root", "/h"), []string{"/srv/root", "/h"}},
+		{bind("/srv/root/", "/h"), []string{"/srv/root", "/h"}},
+		{bind("/srv/up", "/h"), []string{"/srv/up", "/h"}},
+		{bind("/srv/proc", "/p"), []string{"/srv/proc", "/p"}},
+		{bind("/srv/proc/1", "/p"), []string{"/srv/proc/1", "/p"}},
+		{bind("/opt/fs/cgroup", "/cg"), []string{"/opt/fs/cgroup", "/cg"}},
+		{bind("/srv/dev", "/d"), []string{"/srv/dev", "/d"}},
+		{bind("/srv/chain", "/h"), []string{"/srv/chain", "/h"}},
+		{bind("/srv/loop", "/l"), []string{"/srv/loop", "/l"}},
+		{dockerx.Mount{Type: "volume", Name: "via-link", Destination: "/v", Driver: "local"}, []string{"via-link", "/srv/root", "/v"}},
+	} {
+		err := HostBind(ctx, docker, []dockerx.Mount{c.m})
+		if !errors.Is(err, ErrForbiddenPath) {
+			t.Errorf("%+v : %v, attendu ErrForbiddenPath", c.m, err)
+			continue
+		}
+		for _, w := range c.want {
+			if !strings.Contains(err.Error(), w) {
+				t.Errorf("%+v : %q ne nomme pas %q", c.m, err, w)
+			}
+		}
+	}
+	allowed := []dockerx.Mount{
+		bind("/srv/ok", "/a"), bind("/srv/etc", "/e"), bind("/srv/gone", "/g"), bind("/srv/data", "/d"),
+		bind("/srv/absent/x", "/x"),
+		{Type: "volume", Name: "ok-vol", Destination: "/w", Driver: "local"},
+	}
+	if err := HostBind(ctx, docker, allowed); err != nil {
+		t.Fatalf("montages ordinaires refusés : %v", err)
+	}
+}
+
+// v0.1.2 (counter-audit, constat 3): an agent started with --init and
+// without --pid=host is not PID 1, yet /proc/1/root is its own container's
+// root, and the check passed (fail open). The agent must be in the host's
+// PID namespace, or every host path is refused.
+func TestHostBindOutsideHostPIDNamespace(t *testing.T) {
+	fakeHostRoot(t)
+	docker := &dockerx.Fake{Volumes: map[string]map[string]string{"v": {"type": "none", "o": "bind", "device": "/srv/v"}}}
+	for _, ns := range []func() (string, error){
+		func() (string, error) { return "pid:[4026532745]", nil }, // a container's namespace
+		func() (string, error) { return "", fs.ErrPermission },
+	} {
+		selfPIDNamespace = ns
+		for _, m := range []dockerx.Mount{
+			{Type: "bind", Source: "/srv/data", Destination: "/d"},
+			{Type: "volume", Name: "v", Destination: "/v", Driver: "local"},
+		} {
+			err := HostBind(context.Background(), docker, []dockerx.Mount{m})
+			if !errors.Is(err, ErrForbiddenPath) || !strings.Contains(err.Error(), "--pid=host") {
+				t.Errorf("%+v : %v, attendu un refus qui nomme --pid=host", m, err)
+			}
+		}
+	}
+	selfPIDNamespace = func() (string, error) { return hostPIDNamespace, nil }
+	if err := HostBind(context.Background(), docker, []dockerx.Mount{{Type: "bind", Source: "/srv/data", Destination: "/d"}}); err != nil {
+		t.Errorf("espace de PID de l'hôte : %v", err)
+	}
+	if hostPIDNamespace != "pid:[4026531836]" {
+		t.Errorf("espace de PID initial : %q", hostPIDNamespace)
+	}
+}
+
+// Under Linux, tests run in the host's PID namespace (CI runner, or
+// scripts/test-linux.sh with --pid=host): the real reading finds it.
+func TestSelfPIDNamespaceIsHostsUnderLinux(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("Linux only")
+	}
+	if ns, err := realSelfPIDNamespace(); err != nil || ns != hostPIDNamespace {
+		t.Fatalf("espace de PID : %q %v, attendu %q", ns, err, hostPIDNamespace)
+	}
+}
+
+// A Source the agent cannot resolve (no access to the host's root: no
+// --pid=host, AppArmor) is refused: fail closed, never the text alone.
+func TestHostBindUnresolvableSourceRefused(t *testing.T) {
+	old := resolveHost
+	resolveHost = func(string) (string, error) { return "", fs.ErrPermission }
+	t.Cleanup(func() { resolveHost = old })
+	docker := &dockerx.Fake{Volumes: map[string]map[string]string{"v": {"type": "none", "o": "bind", "device": "/srv/v"}}}
+	for _, m := range []dockerx.Mount{
+		{Type: "bind", Source: "/srv/data", Destination: "/d"},
+		{Type: "volume", Name: "v", Destination: "/v", Driver: "local"},
+	} {
+		err := HostBind(context.Background(), docker, []dockerx.Mount{m})
+		if !errors.Is(err, ErrForbiddenPath) || !strings.Contains(err.Error(), m.Destination) {
+			t.Errorf("%+v : %v, attendu ErrForbiddenPath qui nomme le montage", m, err)
+		}
+	}
+	// Mounts with no host path still pass.
+	if err := HostBind(context.Background(), docker, []dockerx.Mount{{Type: "tmpfs", Destination: "/t"}, {Type: "image", Destination: "/i"}}); err != nil {
+		t.Errorf("tmpfs et image : %v", err)
 	}
 }
 

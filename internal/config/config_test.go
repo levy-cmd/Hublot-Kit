@@ -34,6 +34,28 @@ func TestEnvThenFlagPrecedence(t *testing.T) {
 	}
 }
 
+// v0.1.2 (counter-audit, constat 2): connections at once per source address.
+// Behind a reverse proxy every connection comes from the proxy: settable.
+func TestMaxConnsPerIP(t *testing.T) {
+	if c, err := Load(nil, env(nil)); err != nil || c.MaxConnsPerIP != 64 {
+		t.Fatalf("défaut : %+v %v", c, err)
+	}
+	if c, err := Load(nil, env(map[string]string{"HUBLOT_MAX_CONNS_PER_IP": "200"})); err != nil || c.MaxConnsPerIP != 200 {
+		t.Fatalf("variable : %+v %v", c, err)
+	}
+	if c, err := Load([]string{"--max-conns-per-ip", "300"}, env(map[string]string{"HUBLOT_MAX_CONNS_PER_IP": "200"})); err != nil || c.MaxConnsPerIP != 300 {
+		t.Fatalf("option : %+v %v", c, err)
+	}
+	for _, bad := range []string{"0", "-1", "x", "513"} {
+		if _, err := Load([]string{"--max-conns-per-ip", bad}, env(nil)); err == nil {
+			t.Errorf("--max-conns-per-ip %s accepté", bad)
+		}
+		if _, err := Load(nil, env(map[string]string{"HUBLOT_MAX_CONNS_PER_IP": bad})); err == nil {
+			t.Errorf("HUBLOT_MAX_CONNS_PER_IP=%s accepté", bad)
+		}
+	}
+}
+
 func TestInvalidBoolEnv(t *testing.T) {
 	if _, err := Load(nil, env(map[string]string{"HUBLOT_READ_ONLY": "peut-être"})); err == nil {
 		t.Fatal("want error for invalid HUBLOT_READ_ONLY")

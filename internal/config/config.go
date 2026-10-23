@@ -18,7 +18,14 @@ type Config struct {
 	TLSCert      string
 	TLSKey       string
 	PublicOrigin string
+	// MaxConnsPerIP: connections open at once per source address (v0.1.2,
+	// counter-audit). Behind a reverse proxy, they all come from the proxy.
+	MaxConnsPerIP int
 }
+
+// MaxConns is the cap of connections open at once, every address together:
+// MaxConnsPerIP cannot exceed it.
+const MaxConns = 512
 
 // TLS reports whether the agent serves HTTPS itself.
 func (c Config) TLS() bool { return c.TLSCert != "" }
@@ -45,9 +52,15 @@ func Load(args []string, getenv func(string) string) (Config, error) {
 	fs.StringVar(&c.TLSCert, "tls-cert", or("HUBLOT_TLS_CERT", ""), "TLS certificate")
 	fs.StringVar(&c.TLSKey, "tls-key", or("HUBLOT_TLS_KEY", ""), "TLS key")
 	fs.StringVar(&c.PublicOrigin, "public-origin", or("HUBLOT_PUBLIC_ORIGIN", ""), "public origin behind a reverse proxy")
+	perIP := fs.String("max-conns-per-ip", or("HUBLOT_MAX_CONNS_PER_IP", "64"), "connections at once per source address")
 	if err := fs.Parse(args); err != nil {
 		return Config{}, err
 	}
+	n, err := strconv.Atoi(*perIP)
+	if err != nil || n < 1 || n > MaxConns {
+		return Config{}, fmt.Errorf("--max-conns-per-ip/HUBLOT_MAX_CONNS_PER_IP: %q, expected 1 to %d", *perIP, MaxConns)
+	}
+	c.MaxConnsPerIP = n
 
 	if fs.NArg() > 0 {
 		return Config{}, fmt.Errorf("positional arguments not allowed: %v", fs.Args())

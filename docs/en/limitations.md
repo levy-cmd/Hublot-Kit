@@ -17,20 +17,30 @@ The technical spec ([§13, in French](../superpowers/specs/2026-10-07-hublot-kit
 - Only the cgroup layouts of Docker are recognised: with the cgroupfs driver and a custom `--cgroup-parent`, a
   running container answers `container_changed` and cannot be explored. With the systemd driver it works.
 - Measured on Ubuntu (AppArmor) and Fedora (SELinux enforcing). Other security modules were not measured.
+- Connections: at most 64 at once per address (an IPv6 /64 counts as one), 512 in all. Someone who controls several
+  addresses (on the machine itself, all of `127.0.0.0/8`) can still fill the 512 and make legitimate requests wait. A
+  page rebound to `127.0.0.1` (DNS rebinding, see [security](security.md)) can hold the 64 connections of the local
+  user.
 
 ## Files
 
 - Pseudo-filesystems (`/proc`, `/sys`…) appear as folders that cannot be opened. A pseudo-filesystem type that
   the agent does not know would not be refused; device nodes stay refused in any case.
 - A stopped container is read from an index of its full archive, built on first access: this can take seconds on a
-  large image, with a progress bar. The index is capped at 4 GiB read, 5 minutes and 1,000,000 entries
-  (`too_large`); three indexes are kept in memory.
+  large image, with a progress bar. The index is capped at 4 GiB read, 5 minutes, 1,000,000 entries and 256 MiB of
+  names and link targets (`too_large`); three indexes are kept in memory. An index takes about 237 MB per million
+  entries with ordinary names; one measured just under the 256 MiB cap of names took 371 MiB, so three indexes can
+  hold over 1 GiB.
 - While Docker exports a stopped container (indexing, or download of a folder), it answers nothing else about that
   container. During the indexing, browsing answers at once with the progress; the other requests on that container
   (X-ray, logs, writes, browsing during a download) wait for the end of the export, and fail after 10 seconds
   (`docker_unavailable`) if it lasts longer.
 - A stopped container that bind-mounts `/`, `/proc`, `/sys` (or below) or `/dev` of the host cannot be explored (the
-  error names the mount): its archive would contain the host. Its logs, changes and X-ray stay available.
+  error names the mount): its archive would contain the host. Its logs, changes and X-ray stay available. A source
+  that is a symbolic link on the host is judged by its target, resolved from the host's root (`/proc/1/root`: the
+  agent needs `--pid=host`); a source the agent cannot resolve is refused. A link changed on the host between this
+  check and the moment Docker mounts the source is not seen, nor a link that only `dockerd` sees (a folder shared
+  by Docker Desktop, a `dockerd` in its own mount namespace).
 - A host folder bind-mounted into a stopped container, with a `/proc`, `/sys`, FUSE or NFS mount below it, is not
   detected: indexing may then make Docker read it, and a stuck FUSE or NFS server can block `dockerd`.
 - A FUSE mount owned by a running container that stops answering: requests to that container fail after 10
