@@ -237,6 +237,19 @@ func TestMetaDocker(t *testing.T) {
 	}
 }
 
+// Spec v0.2 §5.10: the Ping says connected; a failed GET /version only
+// leaves the version empty.
+func TestMetaDockerVersionFails(t *testing.T) {
+	f := newFixture(t, false)
+	f.docker.Daemon = dockerx.DaemonInfo{Host: "unix:///var/run/docker.sock", APIVersion: "1.44", Connected: true}
+	f.docker.DaemonErr = errors.New("GET /version: 500")
+	_, c := f.login(t, f.token)
+	rec := f.do("GET", "/api/meta", "", c)
+	if body := rec.Body.String(); rec.Code != http.StatusOK || !strings.Contains(body, `"connected":true`) {
+		t.Fatalf("meta: %d %s", rec.Code, body)
+	}
+}
+
 // Docker down: meta still answers (the UI shows "Docker unreachable").
 func TestMetaDockerDown(t *testing.T) {
 	f := newFixture(t, false)

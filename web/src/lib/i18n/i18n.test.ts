@@ -62,12 +62,26 @@ describe('i18n', () => {
 			}
 		};
 		walk(src);
+		// Any quoted string that starts with a namespace of the dictionaries
+		// ("panels.", "containers."…) is a key, however it reaches t():
+		// t('…'), tf('…'), key: '…', labelKey: '…'. A template (`status.${…}`)
+		// must start like at least one key.
+		const spaces = new Set(Object.keys(dicts.fr).map((k) => k.split('.')[0]));
 		const used = new Set<string>();
+		const prefixes = new Set<string>();
 		for (const f of files) {
-			for (const m of readFileSync(f, 'utf8').matchAll(/\btf?\('([a-zA-Z0-9_.-]+)'[),]/g)) used.add(m[1]);
-			for (const m of readFileSync(f, 'utf8').matchAll(/\blabelKey: '([a-zA-Z0-9_.-]+)'/g)) used.add(m[1]);
+			if (/[/\\]i18n[/\\][^/\\]+\.(fr|en)\.ts$/.test(f)) continue;
+			const src = readFileSync(f, 'utf8');
+			for (const m of src.matchAll(/['"]([a-z]+)\.([A-Za-z0-9_.-]*[A-Za-z0-9_])['"]/g)) {
+				if (spaces.has(m[1])) used.add(`${m[1]}.${m[2]}`);
+			}
+			for (const m of src.matchAll(/`([a-z]+)\.([A-Za-z0-9_.-]*)\$\{/g)) {
+				if (spaces.has(m[1])) prefixes.add(`${m[1]}.${m[2]}`);
+			}
 		}
 		expect(used.size).toBeGreaterThan(100);
 		for (const k of used) expect(dicts.fr, k).toHaveProperty([k]);
+		expect(prefixes.size).toBeGreaterThan(3);
+		for (const p of prefixes) expect(Object.keys(dicts.fr).some((k) => k.startsWith(p)), p).toBe(true);
 	});
 });

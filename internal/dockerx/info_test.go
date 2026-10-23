@@ -53,6 +53,24 @@ func TestInfoConnected(t *testing.T) {
 	}
 }
 
+// Spec v0.2 §5.10: connected comes from the Ping. A daemon that answers the
+// Ping but not /version stays connected, without a version.
+func TestInfoVersionFails(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/_ping") {
+			w.Header().Set("Api-Version", "1.44")
+			_, _ = w.Write([]byte("OK"))
+			return
+		}
+		http.Error(w, `{"message":"boom"}`, http.StatusInternalServerError)
+	}))
+	t.Cleanup(srv.Close)
+	info, err := engineFor(t, "tcp://"+srv.Listener.Addr().String()).Info(context.Background())
+	if err == nil || !info.Connected || info.ServerVersion != "" || info.APIVersion != "1.44" {
+		t.Fatalf("info = %+v, err = %v", info, err)
+	}
+}
+
 func TestInfoUnreachable(t *testing.T) {
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {

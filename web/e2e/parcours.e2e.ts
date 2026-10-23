@@ -16,6 +16,25 @@ test('connexion, liste, panneaux fichiers et diff', async ({ page }) => {
 	// The real version and Docker's state in the top bar (spec v0.2 §3).
 	await expect(page.locator('.topbar')).toContainText('Connecté');
 
+	// Review of tranche 1: under 90 rem (1280 px here), opening the logs panel
+	// of a stopped container mounts no hidden file system panel, so no
+	// export of the container starts.
+	const id = await page.evaluate(() =>
+		fetch('/api/containers')
+			.then((r) => r.json())
+			.then((l: { id: string; name: string }[]) => l.find((c) => c.name === 'hublot-e2e')?.id)
+	);
+	expect(id).toMatch(/^[0-9a-f]{64}$/);
+	const fsCalls: string[] = [];
+	page.on('request', (r) => {
+		if (/\/api\/containers\/[^/]+\/fs/.test(r.url())) fsCalls.push(r.url());
+	});
+	await page.goto(`/?c=${id}&panel=logs`);
+	await expect(page.getByRole('log')).toBeVisible();
+	await page.waitForTimeout(2000);
+	expect(fsCalls).toEqual([]);
+	await page.goto('/');
+
 	// hublot-e2e is stopped: the "Stopped" tab lists it (?state=stopped).
 	await page.getByRole('navigation', { name: 'Filtrer par état' }).getByRole('link', { name: /Arrêtés/ }).click();
 	await expect(page).toHaveURL(/state=stopped/);
@@ -40,7 +59,7 @@ test('connexion, liste, panneaux fichiers et diff', async ({ page }) => {
 	await expect(page.locator('.preview')).toContainText('bonjour hublot');
 
 	// The full page keeps working (links of v0.1, phone).
-	const id = new URL(page.url()).searchParams.get('c');
+	expect(new URL(page.url()).searchParams.get('c')).toBe(id);
 	await page.goto(`/c/${id}?tab=diff`);
 	await expect(page.getByRole('listitem').filter({ hasText: '/root/note.txt' })).toBeVisible();
 
