@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/levy-cmd/hublot-kit/internal/dockerx"
+	"github.com/levy-cmd/hublot-kit/internal/secrets"
 )
 
 // Witnesses: none of these may appear in an answer of /api/secrets.
@@ -409,6 +410,71 @@ func TestSecretsInventoryPartialMasks(t *testing.T) {
 	for name, w := range want {
 		if !reflect.DeepEqual(got[name].Args, w) {
 			t.Errorf("%s :\n obtenu  %+v\n attendu %+v", name, got[name].Args, w)
+		}
+	}
+}
+
+// Second review of tranche 4 (relecteur, Important): a name is taken only
+// from text the masking left in clear. "--password=" masks the argument
+// after it whole, even "--Tok3n_SECRET_xyz", which must then not name the
+// next one; a masked shell flag must not name the shell line.
+func TestSecretsInventoryNameFromClearTextOnly(t *testing.T) {
+	cases := [][]string{
+		{"app", "--password=", "--Tok3n_SECRET_xyz", "x"},
+		{"sh", "--password=", "-zc", "app --token s3cr3t"},
+		{"app", "--password=", "PGPASSWORD=s3cr3t"},
+		{"app", "--password=", "--api-key", "s3cr3t"},
+		{"app", "--token", "--secret=s3cr3t", "--key", "s3cr3t"},
+		{"bash", "-c", "--password=s3cr3t", "x"},
+		{"app", "--password", "-c", "Authorization: Bearer s3cr3t"},
+		{"app", "--password=", "postgres://u:s3cr3t@db", "--password", "y"},
+		{"sh", "-c", "PASS=s3cr3t app", "--secret", "z"},
+	}
+	fake := &dockerx.Fake{Infos: map[string]dockerx.ContainerInfo{}}
+	for n, cmd := range cases {
+		id := hexID(500 + n)
+		name := fmt.Sprintf("n%d", n)
+		fake.Containers = append(fake.Containers, dockerx.Container{ID: id, Name: name, State: "running"})
+		fake.Infos[id] = dockerx.ContainerInfo{ID: id, Name: name, Running: true, Pid: 3, Details: dockerx.Details{Cmd: cmd}}
+	}
+	f, c := inventoryFixture(t, fake, fake, false)
+	rec := f.do("GET", "/api/secrets", "", c)
+	body := rec.Body.String()
+	for _, w := range []string{"Tok3n", "-zc", "s3cr3t"} {
+		if strings.Contains(body, w) {
+			t.Errorf("%q dans la réponse : %s", w, body)
+		}
+	}
+	got := decodeInventory(t, rec.Body.Bytes())
+	if a := got["n0"].Args; !reflect.DeepEqual(a, []argRow{
+		{Part: "cmd", Index: 2, Kind: "flag", Name: "--password"},
+		{Part: "cmd", Index: 3, Kind: "other"},
+	}) {
+		t.Errorf("n0 : %+v", a)
+	}
+	if a := got["n1"].Args; len(a) != 2 || a[1] != (argRow{Part: "cmd", Index: 3, Kind: "other"}) {
+		t.Errorf("n1 : %+v", a)
+	}
+	// Every name, whatever the form, is text secrets.Args left in clear: the
+	// flag before (or the shell and its flag), or the key kept before "=".
+	for n, cmd := range cases {
+		masked, _ := secrets.Args(cmd)
+		for _, a := range got[fmt.Sprintf("n%d", n)].Args {
+			i := a.Index
+			ok := true
+			switch a.Kind {
+			case "flag":
+				ok = masked[i-1] == cmd[i-1] && strings.TrimSuffix(cmd[i-1], "=") == a.Name
+			case "shell":
+				ok = masked[0] == cmd[0] && masked[i-1] == cmd[i-1] && a.Name == cmd[0]+" "+cmd[i-1]
+			case "assignment":
+				ok = strings.HasPrefix(masked[i], a.Name+"=") && strings.HasPrefix(cmd[i], a.Name+"=")
+			default:
+				ok = a.Name == ""
+			}
+			if !ok {
+				t.Errorf("n%d %q (masqué %q) : nom %+v tiré d'un texte masqué", n, cmd, masked, a)
+			}
 		}
 	}
 }
