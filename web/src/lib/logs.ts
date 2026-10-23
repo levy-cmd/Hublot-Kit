@@ -87,6 +87,40 @@ export function filterLines(lines: ShownLine[], f: LogFilter): ShownLine[] {
 	return lines.filter((l) => (l.stream === 'stdout' ? f.stdout : f.stderr) && (q === '' || l.line.toLowerCase().includes(q)));
 }
 
+export type Level = 'error' | 'warn' | 'info' | 'debug';
+
+const LEVELS: Record<string, Level> = {
+	error: 'error', err: 'error', fatal: 'error', critical: 'error', crit: 'error', panic: 'error', emerg: 'error', alert: 'error',
+	warn: 'warn', warning: 'warn',
+	info: 'info', notice: 'info',
+	debug: 'debug', trace: 'debug'
+};
+
+// An upper-case level word (prose in lower case is not a level), or a
+// logfmt "level=…" field; the first one in the line wins.
+const WORD = /\b(?:(ERROR|ERR|FATAL|CRITICAL|CRIT|PANIC|WARN|WARNING|INFO|NOTICE|DEBUG|TRACE)\b|level=([A-Za-z]+)\b)/;
+
+/**
+ * The level of a log line, guessed from its text (spec v0.2 §3): a JSON
+ * field level, lvl or severity, else the first level word. null when
+ * nothing says it: the UI shows the stream instead. A heuristic, said so in
+ * the tooltip.
+ */
+export function levelOf(line: string): Level | null {
+	if (line.startsWith('{')) {
+		try {
+			const o = JSON.parse(line) as Record<string, unknown>;
+			const v = o?.level ?? o?.lvl ?? o?.severity;
+			return typeof v === 'string' ? (LEVELS[v.toLowerCase()] ?? null) : null;
+		} catch {
+			// not JSON: read it as text
+		}
+	}
+	const m = WORD.exec(line);
+	if (!m) return null;
+	return LEVELS[(m[1] ?? m[2]).toLowerCase()] ?? null;
+}
+
 /** HH:MM:SS.mmm of an RFC 3339 timestamp, in timeZone (default: the browser's). */
 export function formatTs(ts: string | undefined, timeZone?: string): string {
 	if (!ts) return '';

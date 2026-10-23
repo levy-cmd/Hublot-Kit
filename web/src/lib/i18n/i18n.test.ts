@@ -64,7 +64,7 @@ describe('i18n', () => {
 		walk(src);
 		const used = new Set<string>();
 		for (const f of files) {
-			for (const m of readFileSync(f, 'utf8').matchAll(/\bt\('([a-zA-Z0-9_.-]+)'\)/g)) used.add(m[1]);
+			for (const m of readFileSync(f, 'utf8').matchAll(/\btf?\('([a-zA-Z0-9_.-]+)'[),]/g)) used.add(m[1]);
 			for (const m of readFileSync(f, 'utf8').matchAll(/\blabelKey: '([a-zA-Z0-9_.-]+)'/g)) used.add(m[1]);
 		}
 		expect(used.size).toBeGreaterThan(100);

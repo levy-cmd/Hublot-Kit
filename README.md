@@ -60,6 +60,7 @@ Prefer a plain binary run by systemd? See [Binary and systemd](docs/en/install.m
 
 ## Documentation
 
+- [A tour of the interface](docs/en/guide.md): the layout, the panels, the theme, read-only mode as the interface shows it.
 - [Installation](docs/en/install.md): Docker, binary and systemd, reverse proxy, token, upgrade, uninstall, verifying
   the signatures and SBOMs of a release.
 - [Security model](docs/en/security.md): what the agent can do, what protects it, how to expose it.

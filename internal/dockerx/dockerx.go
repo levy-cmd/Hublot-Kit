@@ -155,7 +155,22 @@ type Client interface {
 	// it with ReadLogs. The caller closes it; it also ends with ctx.
 	// ErrNoLogs when the logging driver cannot be read.
 	Logs(ctx context.Context, id string, opt LogsOptions) (io.ReadCloser, error)
+	// Info says how the daemon is reached (spec v0.2 §5.10): a Ping of 2 s
+	// at most, then GET /version. Host is always set; on an error, Connected
+	// is false and the versions may be empty.
+	Info(ctx context.Context) (DaemonInfo, error)
 }
+
+// DaemonInfo is the Docker part of /api/meta. Host is raw: the API masks it.
+type DaemonInfo struct {
+	Host          string // DOCKER_HOST, or unix:///var/run/docker.sock
+	ServerVersion string // version of the daemon ("29.8.2")
+	APIVersion    string // API version negotiated by the client ("1.44")
+	Connected     bool
+}
+
+// infoTimeout bounds Info: the top bar must not wait for a stuck daemon.
+const infoTimeout = 2 * time.Second
 
 type engine struct{ c *client.Client }
 
@@ -172,6 +187,23 @@ func New() (Client, error) {
 func (e *engine) Ping(ctx context.Context) error {
 	_, err := e.c.Ping(ctx, client.PingOptions{})
 	return err
+}
+
+func (e *engine) Info(ctx context.Context) (DaemonInfo, error) {
+	info := DaemonInfo{Host: e.c.DaemonHost()}
+	ctx, cancel := context.WithTimeout(ctx, infoTimeout)
+	defer cancel()
+	if _, err := e.c.Ping(ctx, client.PingOptions{NegotiateAPIVersion: true}); err != nil {
+		return info, wrap(err)
+	}
+	info.Connected = true
+	info.APIVersion = e.c.ClientVersion()
+	v, err := e.c.ServerVersion(ctx, client.ServerVersionOptions{})
+	if err != nil {
+		return info, wrap(err) // reachable, version unknown
+	}
+	info.ServerVersion = v.Version
+	return info, nil
 }
 
 func (e *engine) ListContainers(ctx context.Context) ([]Container, error) {

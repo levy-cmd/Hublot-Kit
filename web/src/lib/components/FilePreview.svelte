@@ -2,8 +2,9 @@
 	import { goto } from '$app/navigation';
 	import { ApiError, checkDownload, downloadUrl, previewFile, saveFile, type Entry, type Preview } from '#lib/api.ts';
 	import { baseName, downloadErrorMessage, formatMode, formatSize, fsErrorMessage, indexingPercent } from '#lib/files.ts';
-	import { t } from '#lib/i18n/index.ts';
+	import { lang, t } from '#lib/i18n/index.ts';
 	import { latest, lock } from '#lib/guard.ts';
+	import Icon from '#lib/icons/Icon.svelte';
 	import { EDIT_MAX, lineSeparatorOf, writeErrorMessage } from '#lib/write.ts';
 	import ConfirmDialog from '#lib/components/ConfirmDialog.svelte';
 	import FileEditor from '#lib/components/FileEditor.svelte';
@@ -140,61 +141,88 @@
 				e instanceof ApiError ? downloadErrorMessage(e.code, e.detail) : downloadErrorMessage('unknown');
 		}
 	}
+
+	// "1\n2\n…": the gutter of the preview, one number per line of the text.
+	let lineNumbers = $derived.by(() => {
+		if (preview?.kind !== 'text') return '';
+		const text = preview.text;
+		let n = 1;
+		for (let i = 0; i < text.length; i++) if (text.charCodeAt(i) === 10) n++;
+		if (text.endsWith('\n')) n--;
+		return Array.from({ length: Math.max(n, 1) }, (_, i) => i + 1).join('\n');
+	});
+
+	const when = (iso: string) => new Date(iso).toLocaleString(lang, { dateStyle: 'medium', timeStyle: 'short' });
 </script>
 
 <header>
-	<h2>{baseName(path)}</h2>
-	{#if entry}
-		<p class="meta">
-			{formatSize(entry.size)} · <code>{formatMode(entry.type, entry.mode)}</code> · {entry.uid}:{entry.gid} ·
-			{new Date(entry.modTime).toLocaleString()}
-		</p>
-	{/if}
-	<button type="button" onclick={download}>{t('files.download')}</button>
-	{#if !readOnly && editable && !editing}
-		<button
-			type="button"
-			onclick={() => {
-				editing = true;
-				saved = false;
-			}}>{t('write.edit')}</button
-		>
-	{/if}
-	{#if downloadError}<p role="alert">{downloadError}</p>{/if}
-	{#if saved}<p role="status">{t('write.saved')}</p>{/if}
+	<span class="ficon"><Icon name="file" /></span>
+	<div class="title">
+		<h3>{baseName(path)}</h3>
+		<p class="path mono">{path}</p>
+	</div>
+	<div class="actions">
+		{#if !readOnly && editable && !editing}
+			<button
+				type="button"
+				class="btn small"
+				onclick={() => {
+					editing = true;
+					saved = false;
+				}}><Icon name="edit" /> {t('write.edit')}</button
+			>
+		{/if}
+		<button type="button" class="icon-btn small" onclick={download} aria-label={t('files.download')} title={t('files.download')}>
+			<Icon name="download" />
+		</button>
+	</div>
 </header>
+{#if entry}
+	<dl class="meta">
+		<div><dt class="sr-only">{t('files.col.size')}</dt><dd class="mono">{formatSize(entry.size)}</dd></div>
+		<div><dt class="sr-only">{t('files.col.mode')}</dt><dd class="mono">{formatMode(entry.type, entry.mode)}</dd></div>
+		<div><dt class="sr-only">{t('files.col.owner')}</dt><dd class="mono">{entry.uid}:{entry.gid}</dd></div>
+		<div><dt class="sr-only">{t('files.col.modified')}</dt><dd>{when(entry.modTime)}</dd></div>
+	</dl>
+{/if}
+{#if downloadError}<p role="alert">{downloadError}</p>{/if}
+{#if saved}<p role="status" class="saved">{t('write.saved')}</p>{/if}
 
 {#if indexing !== null}
 	<p role="status">{t('files.indexing')} : {indexing} %</p>
 	<progress max="100" value={indexing}></progress>
 	<p class="note">{t('files.indexingHint')}</p>
 {:else if loading}
-	<p>{t('files.loading')}</p>
+	<p class="muted">{t('files.loading')}</p>
 {:else if error}
 	<p role="alert">{error}</p>
-	<button type="button" onclick={() => reloads++}>{t('files.reload')}</button>
+	<button type="button" class="btn small" onclick={() => reloads++}>{t('files.reload')}</button>
 {:else if preview?.kind === 'text' && editing}
 	<FileEditor bind:this={editor} {path} text={preview.text} />
-	<div class="actions">
-		<button type="button" onclick={askSave} disabled={saving}>{saving ? t('write.saving') : t('write.save')}</button>
+	<div class="edit-actions">
+		<button type="button" class="btn primary small" onclick={askSave} disabled={saving}>{saving ? t('write.saving') : t('write.save')}</button>
 		<button
 			type="button"
+			class="btn small"
 			disabled={saving}
 			onclick={() => {
 				editing = false;
 				writeError = '';
 			}}>{t('write.cancel')}</button
 		>
-		{#if writeError}<button type="button" disabled={saving} onclick={() => reloads++}>{t('files.reload')}</button>{/if}
+		{#if writeError}<button type="button" class="btn small" disabled={saving} onclick={() => reloads++}>{t('files.reload')}</button>{/if}
 	</div>
 	{#if writeError}<p role="alert">{writeError}</p>{/if}
 {:else if preview?.kind === 'text'}
-	<pre>{preview.text}</pre>
+	<div class="code">
+		<pre class="gutter" aria-hidden="true">{lineNumbers}</pre>
+		<pre class="text">{preview.text}</pre>
+	</div>
 	{#if !readOnly && !editable}<p class="note">{t('write.notEditable')}</p>{/if}
 {:else if preview?.kind === 'image' && imageUrl}
 	<img src={imageUrl} alt={baseName(path)} />
 {:else if preview?.kind === 'binary'}
-	<p>{t('files.binary')}</p>
+	<p class="muted">{t('files.binary')}</p>
 {/if}
 
 {#if pending !== null}
@@ -209,12 +237,87 @@
 {/if}
 
 <style>
-	header { display: flex; flex-wrap: wrap; gap: 0.5rem 1rem; align-items: baseline; }
-	h2 { font-size: 1.1rem; margin: 0; word-break: break-all; }
-	.meta { margin: 0; opacity: 0.8; font-size: 0.9rem; }
-	pre { overflow: auto; max-height: 70vh; padding: 0.75rem; background: #f6f6f6; border-radius: 0.25rem; white-space: pre; }
-	img { max-width: 100%; height: auto; }
-	.note { font-style: italic; }
-	.actions { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.5rem; }
-	[role='alert'] { color: #b00020; }
+	header {
+		display: flex;
+		align-items: flex-start;
+		gap: 0.6rem;
+		min-width: 0;
+	}
+	.ficon {
+		color: var(--texte-doux);
+		padding-top: 0.15rem;
+	}
+	.title {
+		flex: 1;
+		min-width: 0;
+	}
+	h3 {
+		font-size: var(--t-m);
+		overflow-wrap: anywhere;
+	}
+	.path {
+		color: var(--texte-doux);
+		font-size: var(--t-xs);
+		overflow-wrap: anywhere;
+	}
+	.actions {
+		display: flex;
+		gap: 0.25rem;
+		align-items: center;
+	}
+	.meta {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.25rem 1rem;
+		margin: 0.5rem 0;
+		font-size: var(--t-xs);
+		color: var(--texte-doux);
+	}
+	.meta dd {
+		margin: 0;
+	}
+	.saved {
+		color: var(--emeraude-texte);
+	}
+	.code {
+		display: flex;
+		max-height: 70vh;
+		overflow: auto;
+		margin-top: 0.5rem;
+		background: var(--releve);
+		border-radius: var(--rayon);
+		font-size: var(--t-xs);
+		line-height: 1.6;
+	}
+	pre {
+		margin: 0;
+		padding: 0.6rem 0.75rem;
+		font-size: inherit;
+		white-space: pre;
+	}
+	.gutter {
+		position: sticky;
+		left: 0;
+		flex: none;
+		text-align: right;
+		color: var(--texte-doux);
+		background: var(--releve);
+		border-right: 1px solid var(--trait);
+		user-select: none;
+	}
+	.text {
+		flex: 1;
+	}
+	img {
+		max-width: 100%;
+		height: auto;
+		margin-top: 0.5rem;
+		border-radius: var(--rayon);
+	}
+	.edit-actions {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.5rem;
+		margin-top: 0.5rem;
+	}
 </style>

@@ -1,33 +1,57 @@
 import { expect, test } from '@playwright/test';
 
-// Spec §10: login → list → open a file → see the diff. scripts/e2e.sh starts
-// the agent and the stopped container hublot-e2e, whose /root/note.txt was
-// added after the image: this also runs tarindex end to end.
-test('connexion, liste, fichier, diff', async ({ page }) => {
+// Spec §10, extended by plan v0.2 (tranche 1): login → list → choose a row →
+// file system panel → preview → diff panel. scripts/e2e.sh starts the agent
+// and the stopped container hublot-e2e, whose /root/note.txt was added after
+// the image: this also runs tarindex end to end.
+test('connexion, liste, panneaux fichiers et diff', async ({ page }) => {
 	const token = process.env.HUBLOT_TOKEN;
 	if (!token) throw new Error('HUBLOT_TOKEN absent : lancer par scripts/e2e.sh');
 	await page.goto('/login');
 	await page.locator('#token').fill(token);
 	await page.locator('button[type=submit]').click();
-	await page.getByLabel('Afficher les conteneurs arrêtés').check(); // hublot-e2e is stopped
+
+	// Dark without a stored choice (Q64).
+	await expect(page.locator('html')).not.toHaveAttribute('data-theme', 'light');
+	// The real version and Docker's state in the top bar (spec v0.2 §3).
+	await expect(page.locator('.topbar')).toContainText('Connecté');
+
+	// hublot-e2e is stopped: the "Stopped" tab lists it (?state=stopped).
+	await page.getByRole('navigation', { name: 'Filtrer par état' }).getByRole('link', { name: /Arrêtés/ }).click();
+	await expect(page).toHaveURL(/state=stopped/);
 	await page.getByRole('link', { name: 'hublot-e2e', exact: true }).click();
+	await expect(page).toHaveURL(/[?&]c=[0-9a-f]{64}/);
+	await expect(page.locator('.detail h2')).toHaveText('hublot-e2e');
+
+	// File system panel (the default), then the content panel.
 	await page.getByRole('button', { name: 'root/', exact: true }).click(); // after the index is built
 	await page.getByRole('button', { name: 'note.txt', exact: true }).click();
 	await expect(page.locator('.preview')).toContainText('bonjour hublot');
 	await expect(page.getByRole('row', { name: /note\.txt/ }).locator('abbr.mark.added')).toBeVisible();
-	await page.getByRole('link', { name: 'Changements', exact: true }).click();
-	await expect(page.getByRole('listitem').filter({ hasText: '/root/note.txt' })).toContainText('ajouté');
 
-	// A link of the Changes tab leads to the file (?path=).
+	// Diff panel: the added file, and its link back to the file.
+	const panels = page.getByRole('navigation', { name: 'Panneaux du conteneur' });
+	await panels.getByRole('link', { name: "Diff avec l'image" }).click();
+	await expect(page).toHaveURL(/panel=diff/);
+	await expect(page.getByRole('listitem').filter({ hasText: '/root/note.txt' })).toContainText('ajouté');
 	await page.getByRole('link', { name: '/root/note.txt', exact: true }).click();
 	await expect(page).toHaveURL(/file=%2Froot%2Fnote\.txt/);
+	await expect(page).toHaveURL(/panel=files/);
 	await expect(page.locator('.preview')).toContainText('bonjour hublot');
 
-	// 390 px wide: no horizontal scroll, on the file view and on the Changes tab.
+	// The full page keeps working (links of v0.1, phone).
+	const id = new URL(page.url()).searchParams.get('c');
+	await page.goto(`/c/${id}?tab=diff`);
+	await expect(page.getByRole('listitem').filter({ hasText: '/root/note.txt' })).toBeVisible();
+
+	// 390 px wide: no horizontal scroll, on the list, the file view and the diff.
 	await page.setViewportSize({ width: 390, height: 800 });
 	const overflow = () => page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
 	expect(await overflow()).toBeLessThanOrEqual(0);
-	await page.getByRole('link', { name: 'Changements', exact: true }).click();
-	await expect(page.getByRole('listitem').filter({ hasText: '/root/note.txt' })).toBeVisible();
+	await page.goto(`/c/${id}?tab=files&path=%2Froot%2Fnote.txt`);
+	await expect(page.locator('.preview')).toContainText('bonjour hublot');
+	expect(await overflow()).toBeLessThanOrEqual(0);
+	await page.goto('/');
+	await expect(page.getByRole('link', { name: 'hublot-e2e', exact: true })).toBeVisible();
 	expect(await overflow()).toBeLessThanOrEqual(0);
 });

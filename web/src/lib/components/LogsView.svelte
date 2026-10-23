@@ -2,7 +2,10 @@
 	import { goto } from '$app/navigation';
 	import { ApiError, getMeta, logsDownloadUrl, logsUrl, type LogLine } from '#lib/api.ts';
 	import { errorMessage, t } from '#lib/i18n/index.ts';
-	import { appendLines, enqueue, filterLines, formatTs, parseCount, parseLine, streamEnd, type ShownLine } from '#lib/logs.ts';
+	import Icon from '#lib/icons/Icon.svelte';
+	import {
+		appendLines, enqueue, filterLines, formatTs, levelOf, parseCount, parseLine, streamEnd, type ShownLine
+	} from '#lib/logs.ts';
 
 	let { id }: { id: string } = $props();
 
@@ -20,7 +23,6 @@
 	let restarts = $state(0); // bumped by Resume / Follow again / Reload
 	let shown = $derived(filterLines(lines, { query, stdout, stderr }));
 	let box = $state<HTMLElement | null>(null);
-	let atBottom = true; // the view follows the end unless the user scrolled up
 
 	let lastId = ''; // ID of the last line received: where a resumption starts
 	let streamOf = ''; // container the lines belong to
@@ -122,77 +124,256 @@
 		restarts++;
 	}
 
+	// Auto-scroll (spec v0.2 §3): the view follows the end of the stream.
+	// Scrolling up turns it off, the switch turns it back on; neither pauses
+	// the stream.
+	let follow = $state(true);
+
 	function onScroll() {
-		if (box) atBottom = box.scrollHeight - box.scrollTop - box.clientHeight < 8;
+		if (box) follow = box.scrollHeight - box.scrollTop - box.clientHeight < 8;
 	}
 
 	$effect(() => {
 		void shown.length;
-		if (box && atBottom) box.scrollTop = box.scrollHeight;
+		if (box && follow) box.scrollTop = box.scrollHeight;
 	});
+
+	function setFollow(on: boolean) {
+		follow = on;
+		if (on && box) box.scrollTop = box.scrollHeight;
+	}
 </script>
 
 <section class="logs">
 	<div class="tools">
 		<input type="search" placeholder={t('logs.search')} aria-label={t('logs.search')} bind:value={query} />
-		<label><input type="checkbox" bind:checked={stdout} /> stdout</label>
-		<label><input type="checkbox" bind:checked={stderr} /> stderr</label>
-		<label><input type="checkbox" bind:checked={timestamps} /> {t('logs.timestamps')}</label>
-		{#if status === 'paused'}
-			<button type="button" onclick={resume}>{t('logs.resume')}</button>
-		{:else if status === 'live' || status === 'connecting' || status === 'reconnecting'}
-			<button type="button" onclick={pause}>{t('logs.pause')}</button>
-		{/if}
-		{#if status !== 'error'}<a href={logsDownloadUrl(id)} download>{t('logs.download')}</a>{/if}
+		<div class="checks" role="group" aria-label={t('logs.streams')}>
+			<label><input type="checkbox" bind:checked={stdout} /> stdout</label>
+			<label><input type="checkbox" bind:checked={stderr} /> stderr</label>
+			<label><input type="checkbox" bind:checked={timestamps} /> {t('logs.timestamps')}</label>
+		</div>
 	</div>
-	<p class="status" role="status">
-		{#if status === 'connecting'}{t('logs.connecting')}
-		{:else if status === 'live'}<span class="live">●</span> {t('logs.live')}
-		{:else if status === 'reconnecting'}{t('logs.reconnecting')}
-		{:else if status === 'paused'}{t('logs.paused')}
-		{:else if status === 'ended'}{t('logs.ended')}{/if}
-		· {shown.length} {t('logs.shown')}
-	</p>
-	{#if status === 'ended'}
-		<button type="button" onclick={resume}>{t('logs.follow')}</button>
-	{/if}
+	<div class="status">
+		<p role="status">
+			{#if status === 'connecting'}{t('logs.connecting')}
+			{:else if status === 'live'}<span class="dot ok"></span> {t('logs.live')}
+			{:else if status === 'reconnecting'}{t('logs.reconnecting')}
+			{:else if status === 'paused'}{t('logs.paused')}
+			{:else if status === 'ended'}{t('logs.ended')}{/if}
+			<span class="muted">{shown.length} {t('logs.shown')}</span>
+		</p>
+		{#if status === 'paused'}
+			<button type="button" class="btn small" onclick={resume}>{t('logs.resume')}</button>
+		{:else if status === 'live' || status === 'connecting' || status === 'reconnecting'}
+			<button type="button" class="btn small" onclick={pause}>{t('logs.pause')}</button>
+		{:else if status === 'ended'}
+			<button type="button" class="btn small" onclick={resume}>{t('logs.follow')}</button>
+		{/if}
+	</div>
 	{#if error}
-		<p role="alert">{error}</p>
-		<button type="button" onclick={resume}>{t('files.reload')}</button>
+		<div class="error">
+			<p role="alert">{error}</p>
+			<button type="button" class="btn small" onclick={resume}>{t('files.reload')}</button>
+		</div>
 	{/if}
 	{#if dropped}<p class="note">{dropped} {t('logs.dropped')}</p>{/if}
 	{#if removed}<p class="note">{removed} {t('logs.removed')}</p>{/if}
-	<div class="lines" bind:this={box} onscroll={onScroll}>
+	<!-- A scrolling region must take the focus, or the keyboard cannot scroll it. -->
+	<!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+	<div class="lines" bind:this={box} onscroll={onScroll} tabindex="0" role="log" aria-label={t('panels.logs')}>
 		{#if lines.length === 0 && status !== 'connecting'}
 			<p class="note">{t('logs.empty')}</p>
 		{:else if shown.length === 0 && lines.length > 0}
 			<p class="note">{t('logs.noMatch')}</p>
 		{/if}
 		{#each shown as l (l.key)}
+			{@const lv = levelOf(l.line)}
 			<div class="line {l.stream}" class:nots={!timestamps}>
 				{#if timestamps}<time datetime={l.ts}>{formatTs(l.ts)}</time>{/if}
-				<span class="text">{l.line}</span>
-				{#if l.truncated}<abbr class="cut" title={t('logs.truncated')}>…</abbr>{/if}
+				<span class="level {lv ?? 'stream'}" title={t('logs.levelHint')}>{lv ?? l.stream}</span>
+				<span class="text">{l.line}{#if l.truncated}<abbr class="cut" title={t('logs.truncated')}>…</abbr>{/if}</span>
 			</div>
 		{/each}
+	</div>
+	<div class="foot">
+		<label class="switch" title={t('logs.autoscrollHint')}>
+			<input type="checkbox" role="switch" checked={follow} onchange={(e) => setFollow(e.currentTarget.checked)} />
+			<span class="track" aria-hidden="true"></span>
+			{t('logs.autoscroll')}
+		</label>
+		{#if status !== 'error'}
+			<a class="btn small" href={logsDownloadUrl(id)} download><Icon name="download" /> {t('logs.download')}</a>
+		{/if}
 	</div>
 </section>
 
 <style>
-	.logs { min-width: 0; }
-	.tools { display: flex; flex-wrap: wrap; gap: 0.5rem 1rem; align-items: center; }
-	.tools input[type='search'] { flex: 1 1 12rem; min-width: 0; }
-	.status { margin: 0.5rem 0; font-size: 0.9rem; }
-	.live { color: #1b7f3b; }
-	.note { font-style: italic; }
-	.lines {
-		font-family: ui-monospace, monospace; font-size: 0.85rem; max-height: 70vh; overflow: auto;
-		border: 1px solid #ddd; padding: 0.25rem 0.5rem; background: #fafafa;
+	.logs {
+		display: flex;
+		flex-direction: column;
+		gap: 0.5rem;
+		min-width: 0;
+		min-height: 0;
+		height: 100%;
 	}
-	.line { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 0.75rem; white-space: pre-wrap; overflow-wrap: anywhere; }
-	.line.nots { grid-template-columns: minmax(0, 1fr) auto; }
-	.line time { color: #666; }
-	.line.stderr .text { color: #b00020; }
-	.cut { color: #8a5a00; text-decoration: none; }
-	[role='alert'] { color: #b00020; }
+	.tools {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.5rem 0.75rem;
+		align-items: center;
+	}
+	.tools input[type='search'] {
+		flex: 1 1 10rem;
+		min-height: 2rem;
+	}
+	.checks {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.25rem 0.75rem;
+		font-size: var(--t-s);
+		color: var(--texte-doux);
+	}
+	.checks label {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.35rem;
+	}
+	.status {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 0.5rem;
+		font-size: var(--t-s);
+	}
+	.status p {
+		display: flex;
+		align-items: center;
+		gap: 0.4rem;
+		flex-wrap: wrap;
+	}
+	.error {
+		display: flex;
+		gap: 0.5rem;
+		align-items: center;
+		flex-wrap: wrap;
+	}
+	.lines {
+		flex: 1;
+		min-height: 12rem;
+		overflow: auto;
+		font-family: var(--mono);
+		font-size: var(--t-xs);
+		line-height: 1.6;
+		padding: 0.5rem 0.6rem;
+		background: var(--releve);
+		border-radius: var(--rayon);
+	}
+	.line {
+		display: grid;
+		grid-template-columns: auto 3.25rem minmax(0, 1fr);
+		gap: 0.75rem;
+		white-space: pre-wrap;
+		overflow-wrap: anywhere;
+	}
+	.line.nots {
+		grid-template-columns: 3.25rem minmax(0, 1fr);
+	}
+	/* A narrow panel or a phone: the text takes its own line under the time
+	   and the level. */
+	.logs {
+		container-type: inline-size;
+	}
+	@container (max-width: 34rem) {
+		.line,
+		.line.nots {
+			grid-template-columns: auto minmax(0, 1fr);
+			gap: 0 0.75rem;
+			padding: 0.2rem 0;
+			border-bottom: 1px solid var(--trait);
+		}
+		.line .text {
+			grid-column: 1 / -1;
+		}
+	}
+	time {
+		color: var(--texte-doux);
+	}
+	.level {
+		text-transform: uppercase;
+		font-weight: 600;
+		color: var(--texte-doux);
+		cursor: help;
+	}
+	.level.error {
+		color: var(--rouge-texte);
+	}
+	.level.warn {
+		color: var(--ambre-texte);
+	}
+	.level.info {
+		color: var(--emeraude-texte);
+	}
+	.level.stream {
+		font-weight: 400;
+		text-transform: none;
+	}
+	.cut {
+		color: var(--ambre-texte);
+		text-decoration: none;
+	}
+	.foot {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 0.5rem;
+		flex-wrap: wrap;
+	}
+	.switch {
+		position: relative;
+		display: inline-flex;
+		align-items: center;
+		gap: 0.5rem;
+		font-size: var(--t-s);
+		cursor: pointer;
+	}
+	.switch input {
+		position: absolute;
+		opacity: 0;
+		width: 2.25rem;
+		height: 1.25rem;
+		margin: 0;
+		cursor: pointer;
+	}
+	.track {
+		position: relative;
+		width: 2.25rem;
+		height: 1.25rem;
+		border-radius: 999px;
+		background: var(--releve);
+		border: 1px solid var(--trait-fort);
+		transition: background-color var(--vite);
+	}
+	.track::after {
+		content: '';
+		position: absolute;
+		top: 2px;
+		left: 2px;
+		width: 0.875rem;
+		height: 0.875rem;
+		border-radius: 999px;
+		background: var(--texte-doux);
+		transition: transform var(--vite);
+	}
+	.switch input:checked + .track {
+		background: var(--emeraude);
+		border-color: var(--emeraude);
+	}
+	.switch input:checked + .track::after {
+		transform: translateX(1rem);
+		background: var(--sur-emeraude);
+	}
+	.switch input:focus-visible + .track {
+		outline: 2px solid var(--focus);
+		outline-offset: 2px;
+	}
 </style>

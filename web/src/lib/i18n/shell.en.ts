@@ -1,0 +1,20 @@
+export default {
+	'shell.skip': 'Skip to content',
+	'shell.nav': 'Main navigation',
+	'shell.navOpen': 'Open the navigation',
+	'shell.navClose': 'Close the navigation',
+	'shell.version': 'Version {v}',
+	'shell.tagline': 'Container observation',
+	'shell.docker.connected': 'Connected',
+	'shell.docker.down': 'Docker unreachable',
+	'shell.docker.title': 'Docker {version} at {host}',
+	'shell.readOnly': 'Read-only',
+	'shell.writable': 'Writes allowed',
+	'shell.notice.readOnly': 'Read-only: no writes into the containers',
+	'shell.notice.writable': 'Writes allowed, always confirmed',
+	'shell.notice.readOnlyHint': 'Editing and uploading files is disabled.',
+	'shell.notice.writableHint': 'Every write names the container and the path before it goes.',
+	'shell.theme.light': 'Light theme',
+	'shell.menu': 'Server menu',
+	'shell.agentAddress': 'Agent address'
+};

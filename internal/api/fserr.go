@@ -36,6 +36,31 @@ func writeFSError(w http.ResponseWriter, err error) {
 	writeError(w, status, code, detail)
 }
 
+// reservedStatus: codes of spec v0.2 §6 reserved by tranche 1, so that the
+// tranches that use them (3: invalid_query, 6: unsupported_image) never
+// write this file.
+var reservedStatus = map[string]int{
+	"invalid_query":     http.StatusBadRequest,
+	"unsupported_image": http.StatusUnprocessableEntity,
+}
+
+// apiCoder is an error that names its reserved code. A package that cannot
+// import api (fsview) gives its error an APICode method; writeFSError maps
+// it. Any code outside reservedStatus is ignored (internal).
+type apiCoder interface{ APICode() string }
+
+// writeReserved writes a reserved code with its status; any other code is
+// a programming error, answered as internal.
+func writeReserved(w http.ResponseWriter, code, detail string) {
+	status, ok := reservedStatus[code]
+	if !ok {
+		slog.Error("unreserved error code", "code", code)
+		writeError(w, http.StatusInternalServerError, "internal", "")
+		return
+	}
+	writeError(w, status, code, detail)
+}
+
 // notFoundDetail is the detail of a 404, for users (v0.1.1): never the
 // internal error (securejoin.OpenInRoot, openat2, the daemon's response).
 func notFoundDetail(err error) string {
@@ -87,6 +112,12 @@ func fsErrorStatus(err error) (int, string) {
 	case errors.Is(err, fs.ErrNotExist), errors.Is(err, fsview.ErrNotDir), errors.Is(err, syscall.ENOTDIR),
 		errors.Is(err, syscall.ELOOP): // a link loop, or a magic link refused by pathrs
 		return http.StatusNotFound, "not_found"
+	}
+	var coder apiCoder
+	if errors.As(err, &coder) {
+		if status, ok := reservedStatus[coder.APICode()]; ok {
+			return status, coder.APICode()
+		}
 	}
 	return http.StatusInternalServerError, "internal"
 }

@@ -1,0 +1,20 @@
+export default {
+	'shell.skip': 'Aller au contenu',
+	'shell.nav': 'Navigation principale',
+	'shell.navOpen': 'Ouvrir la navigation',
+	'shell.navClose': 'Fermer la navigation',
+	'shell.version': 'Version {v}',
+	'shell.tagline': 'Observation des conteneurs',
+	'shell.docker.connected': 'Connecté',
+	'shell.docker.down': 'Docker injoignable',
+	'shell.docker.title': 'Docker {version} sur {host}',
+	'shell.readOnly': 'Lecture seule',
+	'shell.writable': 'Écriture permise',
+	'shell.notice.readOnly': 'Lecture seule : aucune écriture dans les conteneurs',
+	'shell.notice.writable': 'Écriture permise, toujours confirmée',
+	'shell.notice.readOnlyHint': 'Modifier et envoyer des fichiers est désactivé.',
+	'shell.notice.writableHint': 'Chaque écriture nomme le conteneur et le chemin avant de partir.',
+	'shell.theme.light': 'Thème clair',
+	'shell.menu': 'Menu du serveur',
+	'shell.agentAddress': "Adresse de l'agent"
+};

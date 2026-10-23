@@ -64,6 +64,7 @@ Vous préférez un binaire lancé par systemd ? Voir [Binaire et systemd](docs/f
 
 ## Documentation
 
+- [Visite de l'interface](docs/fr/guide.md) : la disposition, les panneaux, le thème, la lecture seule telle que l'interface la montre.
 - [Installation](docs/fr/installation.md) : Docker, binaire et systemd, reverse proxy, jeton, mise à jour,
   désinstallation, vérification des signatures et des SBOM d'une release.
 - [Modèle de sécurité](docs/fr/securite.md) : ce que l'agent peut faire, ce qui le protège, comment l'exposer.

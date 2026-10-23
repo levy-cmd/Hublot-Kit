@@ -46,7 +46,9 @@ export type Container = {
 	created: string;
 	ports: Port[];
 };
-export type Meta = { version: string; readOnly: boolean };
+// Spec v0.2 §5.10: host is masked by the agent (secrets.Line).
+export type DockerInfo = { host: string; connected: boolean; serverVersion: string; apiVersion: string };
+export type Meta = { version: string; readOnly: boolean; docker: DockerInfo };
 
 export const login = (token: string) =>
 	api<{ ok: boolean }>('/login', { method: 'POST', body: JSON.stringify({ token }) });

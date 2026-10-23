@@ -16,6 +16,7 @@ import (
 	"github.com/levy-cmd/hublot-kit/internal/dockerx"
 	"github.com/levy-cmd/hublot-kit/internal/files"
 	"github.com/levy-cmd/hublot-kit/internal/fsview"
+	"github.com/levy-cmd/hublot-kit/internal/secrets"
 )
 
 type Deps struct {
@@ -121,6 +122,9 @@ func New(d Deps) http.Handler {
 	mux.Handle("GET /api/containers/{id}/changes", session(s.changes))
 	mux.Handle("GET /api/containers/{id}/logs", session(s.logsStream))
 	mux.Handle("GET /api/containers/{id}/logs/download", session(s.logsDownload))
+	for _, register := range moduleRoutes { // routes of later tranches (routes.go)
+		register(s, mux)
+	}
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "not_found", "")
 	})
@@ -182,8 +186,26 @@ func (s *server) logout(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+type metaDocker struct {
+	Host          string `json:"host"`
+	Connected     bool   `json:"connected"`
+	ServerVersion string `json:"serverVersion"`
+	APIVersion    string `json:"apiVersion"`
+}
+
+// meta (spec v0.2 §5.10). Docker down is not an error here: the UI says it.
 func (s *server) meta(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"version": s.d.Version, "readOnly": s.d.ReadOnly})
+	info, err := s.d.Docker.Info(r.Context())
+	if err != nil {
+		info.Connected = false
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"version":  s.d.Version,
+		"readOnly": s.d.ReadOnly,
+		// The address may carry credentials (ssh://user:pass@host): masked by §7.
+		"docker": metaDocker{Host: secrets.Line(info.Host), Connected: info.Connected,
+			ServerVersion: info.ServerVersion, APIVersion: info.APIVersion},
+	})
 }
 
 func (s *server) containers(w http.ResponseWriter, r *http.Request) {
