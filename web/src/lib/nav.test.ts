@@ -6,7 +6,7 @@ import { dicts } from './i18n/index.ts';
 // Spec v0.2 §3: an entry appears once its page exists; no dead link.
 describe('nav', () => {
 	it('lists the entries delivered so far, in order', () => {
-		expect(nav.map((n) => n.id)).toEqual(['containers', 'diff', 'search', 'logs', 'secrets', 'settings']);
+		expect(nav.map((n) => n.id)).toEqual(['containers', 'images', 'diff', 'search', 'logs', 'secrets', 'settings']);
 	});
 
 	it('leads only to pages that exist', () => {

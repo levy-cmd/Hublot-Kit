@@ -14,7 +14,7 @@ Cette page décrit l'interface de Hublot-Kit à partir de la v0.2. Pour l'instal
 
 ## La barre latérale
 
-Elle mène aux pages qui existent : Conteneurs (avec leur nombre), Diff avec l'image, Recherche, Logs, Secrets et Paramètres. « Recherche » ouvre la recherche globale. « Diff avec l'image » et « Logs » ouvrent le panneau correspondant du conteneur choisi ; sans conteneur choisi, la liste demande d'en choisir un.
+Elle mène aux pages qui existent : Conteneurs (avec leur nombre), Images (avec leur nombre), Diff avec l'image, Recherche, Logs, Secrets et Paramètres. « Recherche » ouvre la recherche globale. « Diff avec l'image » et « Logs » ouvrent le panneau correspondant du conteneur choisi ; sans conteneur choisi, la liste demande d'en choisir un.
 
 En bas, un encart dit l'état réel de l'agent :
 
@@ -73,6 +73,21 @@ Les labels portent souvent des secrets que le masquage ne reconnaît pas, par ex
 2. **Diff avec l'image** : les compteurs des ajouts, modifications et suppressions, puis la liste ; un chemin ouvre le fichier dans l'explorateur.
 3. **Contenu du fichier** : l'aperçu avec ses numéros de ligne, le téléchargement et, si l'écriture est permise, la modification.
 4. **Logs en direct** : l'horodatage, le niveau et le message. Le niveau est déduit du texte (`ERROR`, `WARN`, `INFO`, `DEBUG`, ou un champ `level`) ; c'est une heuristique, et à défaut le flux d'origine (`stdout` ou `stderr`) est affiché. « Suivi automatique » fait suivre la fin du flux ; le couper ne met pas le flux en pause. « Pause » arrête la réception, « Reprendre » rattrape les lignes arrivées entre-temps.
+
+## La page Images
+
+La page Images liste les images du démon, celles sans étiquette comprises (montrées par leur ID court), avec leur taille, leur date et les conteneurs qui les utilisent. Elle se trie par date, par taille ou par nom ; le champ filtre par étiquette, par début d'ID ou par nom de conteneur. Les images intermédiaires de l'ancien constructeur ne sont pas listées.
+
+Une image s'ouvre sur sa page, `/images/<ID>`. Elle se désigne toujours par son **ID complet** (64 caractères hexadécimaux), jamais par un nom comme `nginx:latest` : un nom peut changer de cible entre deux requêtes. Une adresse avec un nom ou un ID court répond « Introuvable ». Une image dé-étiquetée (`docker rmi -f` d'une image utilisée) reste donc lisible tant qu'elle existe.
+
+La page montre :
+
+- l'ID complet (avec copie), les étiquettes, la taille, la date et la plateforme (`linux/arm64/v8`) ;
+- la configuration : la commande, le dossier de travail, l'utilisateur, les ports exposés, les variables et les labels, masqués par les mêmes règles que la radiographie d'un conteneur. Une valeur masquée ne se révèle pas depuis l'image : la révélation, journalisée, se fait depuis un conteneur qui l'utilise ;
+- les couches, c'est-à-dire l'historique de construction, de la plus récente à la plus ancienne. Les entrées sans fichier (`ENV`, `CMD`, `LABEL`…) sont repliées. Les arguments de construction (`|2 GH_PAT=… /bin/sh -c …`, `ARG GH_PAT=…`) sont masqués quel que soit leur nom, et une ligne `LABEL` ne garde aucun texte : les labels se lisent dans la configuration, filtrés ;
+- les conteneurs de l'image, qui mènent à leur détail.
+
+La liste coûte deux demandes à Docker, quel que soit le nombre d'images (la liste des images et celle des conteneurs) ; deux onglets ouverts en même temps partagent la même lecture. Le détail en coûte trois. Si Docker ne répond pas en 10 s, la page le dit et « Actualiser » réessaie. Les fichiers d'une image ne sont pas encore explorables.
 
 ## La page Secrets
 

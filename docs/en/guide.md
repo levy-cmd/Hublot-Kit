@@ -14,7 +14,7 @@ This page describes the interface of Hublot-Kit from v0.2 on. To install it, see
 
 ## The side bar
 
-It leads to the pages that exist: Containers (with their count), Diff with the image, Search, Logs, Secrets and Settings. "Search" opens the global search. "Diff with the image" and "Logs" open the matching panel of the chosen container; with no container chosen, the list asks you to choose one.
+It leads to the pages that exist: Containers (with their count), Images (with their count), Diff with the image, Search, Logs, Secrets and Settings. "Search" opens the global search. "Diff with the image" and "Logs" open the matching panel of the chosen container; with no container chosen, the list asks you to choose one.
 
 At the bottom, a notice says the agent's real state:
 
@@ -73,6 +73,21 @@ From 90 rem wide, four panels side by side; below, tabs.
 2. **Diff with the image**: the counts of additions, changes and deletions, then the list; a path opens the file in the explorer.
 3. **File content**: the preview with its line numbers, the download and, when writes are allowed, editing.
 4. **Live logs**: the timestamp, the level and the message. The level is guessed from the text (`ERROR`, `WARN`, `INFO`, `DEBUG`, or a `level` field); it is a heuristic, and otherwise the stream it came from (`stdout` or `stderr`) is shown. "Auto-scroll" follows the end of the stream; turning it off does not pause the stream. "Pause" stops receiving, "Resume" catches up with the lines that arrived meanwhile.
+
+## The Images page
+
+The Images page lists the images of the daemon, untagged ones included (shown by their short ID), with their size, their date and the containers that use them. It sorts by date, size or name; the field filters by tag, by start of ID or by container name. The intermediate images of the classic builder are not listed.
+
+An image opens on its page, `/images/<ID>`. It is always named by its **full ID** (64 hex characters), never by a name such as `nginx:latest`: a name may change target between two requests. An address with a name or a short ID answers "Not found". An untagged image (`docker rmi -f` of an image in use) thus stays readable as long as it exists.
+
+The page shows:
+
+- the full ID (with copy), the tags, the size, the date and the platform (`linux/arm64/v8`);
+- the configuration: the command, the working directory, the user, the exposed ports, the variables and the labels, masked by the same rules as a container's X-ray. A masked value is not revealed from the image: the reveal, journaled, is done from a container that uses it;
+- the layers, that is the build history, newest first. The entries without files (`ENV`, `CMD`, `LABEL`…) are folded. The build arguments (`|2 GH_PAT=… /bin/sh -c …`, `ARG GH_PAT=…`) are masked whatever their name, and a `LABEL` line keeps none of its text: the labels are read in the configuration, filtered;
+- the containers of the image, which lead to their detail.
+
+The list costs two requests to Docker, whatever the number of images (the list of images and that of containers); two tabs open at the same time share the same read. The detail costs three. If Docker does not answer within 10 s, the page says so and "Refresh" tries again. The files of an image cannot be explored yet.
 
 ## The Secrets page
 
