@@ -1402,3 +1402,31 @@ func TestImageExtractTransientErrorForgotten(t *testing.T) {
 		t.Errorf("après le retour de Docker : %q, %v", got, err)
 	}
 }
+
+// An unsupported_image of an extraction (a layer altered since the index)
+// is definitive for an immutable image: kept like a content, the next polls
+// ask nothing of Docker.
+func TestImageExtractUnsupportedKept(t *testing.T) {
+	good := layerOf(t, tfile("f", "GOOD-CONTENT"))
+	evil := layerOf(t, tfile("f", "EVIL-CONTENT"))
+	files := saveFiles(good)
+	for i := range files {
+		if bytes.Equal(files[i].body, good) {
+			files[i].body = evil
+		}
+	}
+	altered, _ := outerTar(t, files...)
+	h := newSaveHook(imageDocker(saveArchive(t, good)), func(_ context.Context, _ string, rc io.ReadCloser) io.ReadCloser {
+		rc.Close()
+		return io.NopCloser(bytes.NewReader(altered))
+	})
+	fsys := readyImage(t, NewViews(h, Options{}), imgID)
+	for range 3 {
+		if _, err := readImage(t, fsys, "/f"); !isUnsupported(err) {
+			t.Fatalf("Open(/f) : %v", err)
+		}
+	}
+	if n := h.callsOf(imgID); n != 2 {
+		t.Errorf("%d exports, attendu 2 (l'index, puis une extraction)", n)
+	}
+}

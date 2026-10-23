@@ -278,8 +278,11 @@ func within(t *testing.T, name string, d time.Duration, f func()) {
 // cap is masked whole. The costs are relative (review of tranche 6 of v0.2:
 // absolute ceilings of 100 and 250 ms failed under load): each call is
 // compared with Line on a banal input of maxLen bytes, measured in the same
-// conditions. A quadratic cost on such an input is hundreds of times that;
-// linear work stays within a small factor, whatever the machine.
+// conditions. Measured (review of tranche 6, machine loaded, -race): 2.2
+// at most under the cap, 0.0 over it (masked whole at once). Ceilings: 8
+// under the cap, 1 over it; the mutations "Line without its cap" (18.9) and
+// "quadratic Args" (22.4) fail them. Each call also ends within 1 s. A
+// uniform slowdown of maskText stays invisible to a ratio.
 func TestCost(t *testing.T) {
 	pad := func(s, fill string) string { return s + strings.Repeat(fill, (maxLen-len(s))/len(fill)) }
 	plain := pad("", "abc ")
@@ -290,24 +293,30 @@ func TestCost(t *testing.T) {
 	if _, m := Args([]string{"app", "--x=" + big}); !m {
 		t.Error("au-dessus du plafond : non masqué")
 	}
+	line128 := strings.Repeat("key", 43690)
 	for _, c := range []struct {
 		name string
+		over bool // over the cap: masked whole, cheaper than a scan
 		f    func()
 	}{
-		{"Masked 128 Kio", func() { Masked("X", big) }},
-		{"Line 128 Kio", func() { Line(strings.Repeat("key", 43690)) }},
-		{"Args 128 Kio", func() { Args([]string{"app", "--x=" + big}) }},
+		{"Masked 128 Kio", true, func() { Masked("X", big) }},
+		{"Line 128 Kio", true, func() { Line(line128) }},
+		{"Args 128 Kio", true, func() { Args([]string{"app", "--x=" + big}) }},
 		// Just under the cap: the work itself must be linear.
-		{"Masked a= sous le plafond", func() { Masked("X", strings.Repeat("a=", maxLen/2-1)) }},
-		{"Masked k=v, sous le plafond", func() { Masked("X", strings.Repeat("k=v,", maxLen/4-1)) }},
-		{"Line key sous le plafond", func() { Line(strings.Repeat("key", maxLen/3-1)) }},
-		{"Args sous le plafond", func() { Args([]string{"app", "--attrs=" + strings.Repeat("service.name=x,", 500)}) }},
+		{"Masked a= sous le plafond", false, func() { Masked("X", strings.Repeat("a=", maxLen/2-1)) }},
+		{"Masked k=v, sous le plafond", false, func() { Masked("X", strings.Repeat("k=v,", maxLen/4-1)) }},
+		{"Line key sous le plafond", false, func() { Line(strings.Repeat("key", maxLen/3-1)) }},
+		{"Args sous le plafond", false, func() { Args([]string{"app", "--attrs=" + strings.Repeat("service.name=x,", 500)}) }},
 	} {
-		within(t, c.name, 5*time.Second, c.f) // a cost far from linear fails here instead of hanging
+		within(t, c.name, time.Second, c.f) // a cost far from linear fails here instead of hanging
 		r := relCost(c.f, func() { Line(plain) })
+		ceiling := 8.0
+		if c.over {
+			ceiling = 1
+		}
 		t.Logf("%s : rapport %.1f", c.name, r)
-		if r > 20 {
-			t.Errorf("%s : %.1f fois le coût de Line sur une entrée banale de %d octets, plafond 20", c.name, r, maxLen)
+		if r > ceiling {
+			t.Errorf("%s : %.1f fois le coût de Line sur une entrée banale de %d octets, plafond %.0f", c.name, r, maxLen, ceiling)
 		}
 	}
 
