@@ -608,6 +608,33 @@ func TestViewsPollsDuringLockedExport(t *testing.T) {
 	}
 }
 
+// Pending answers for a build in progress only: never for another
+// container (no prefix match), never once the build is over (serving goes
+// through Inspect).
+func TestViewsPendingOnlyInProgress(t *testing.T) {
+	d := newLockedExport(t)
+	v := NewViews(d, Options{})
+	if err := v.Pending("db"); err != nil {
+		t.Fatalf("aucune construction : %v", err)
+	}
+	v.For(tctx, "db")
+	for _, ref := range []string{"db", vID} {
+		if err := v.Pending(ref); !errors.Is(err, ErrIndexing) {
+			t.Errorf("Pending(%s) pendant la construction : %v", ref, err)
+		}
+	}
+	for _, ref := range []string{"web", vID[:12], "d", "e", strings.Repeat("ab", 32)} {
+		if err := v.Pending(ref); err != nil {
+			t.Errorf("Pending(%s) d'un autre conteneur : %v", ref, err)
+		}
+	}
+	close(d.open)
+	ready(t, v, "db")
+	if err := v.Pending("db"); err != nil {
+		t.Errorf("Pending après la construction : %v", err)
+	}
+}
+
 // The identity is checked again when an index is served: restarted and
 // stopped once the build is over, the container gets a new index, never the
 // old one.

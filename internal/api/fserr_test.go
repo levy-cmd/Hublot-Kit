@@ -58,7 +58,8 @@ func TestNotFoundDetailForUsers(t *testing.T) {
 		{&fs.PathError{Op: "openat2", Path: "/m/etc", Err: syscall.ELOOP}, "no such file or directory"},
 		{&fs.PathError{Op: "open", Path: "/etc/hosts/x", Err: syscall.ENOTDIR}, "no such file or directory"},
 		{fmt.Errorf("%w : /etc/hostname", fsview.ErrNotDir), "no such file or directory"},
-		{fmt.Errorf("%w : Error response from daemon: No such container: web", dockerx.ErrNotFound), "no such container"},
+		{fmt.Errorf("%w : Error response from daemon: No such container: web", dockerx.ErrNotFound), "no such container or path"},
+		{fmt.Errorf("%w (EOF)", errNoVariable), "unknown variable"},
 	}
 	for _, c := range cases {
 		rec := httptest.NewRecorder()
