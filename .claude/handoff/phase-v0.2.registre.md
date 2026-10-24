@@ -209,3 +209,12 @@
   - Arbitrage (Codex : « a » et « a\n » vus identiques ; relecteur : 20 000 paires aléatoires justes). Vérifié dans 445e67e : « a » donne `["a"]`, « a\n » donne `["a",""]`, la différence est vue. Constat écarté.
   - Minor reporté à la tranche 10 : aucun message ne signale le repli en un seul bloc.
   - Le `.env` s'affiche en clair dans le diff comme dans l'aperçu (spec v0.1 §7).
+- **Tranche 8 (Snapshots : prise, liste, suppression, comptage)** : e4c51ac (tests rouges), 942b130, 19eeba3, 1d7680f, b93a175, c2238a0, 8b2c4b0 ; correctif de revue : 5976acd (tests rouges), b20fbff. Validée par l'auditeur (preuves) et par Codex. CI de la PR #10 verte sur b20fbff (run 40066004938).
+  - Vérifiée sur hk-ubuntu et hk-fedora, sur les cinq cibles, actives et arrêtées (prise et comptage), sans refus AppArmor ni AVC.
+  - Mesures (golang:1.27, 36 784 entrées, 941 Mo hachés, manifeste 1,5 Mo) : actif 7,3 s / 18,8 Mo (ubuntu), 4,9 s / 21,6 Mo (fedora) ; arrêté 13,4 s / 37 Mo, `docker inspect` bloqué 10 à 12,5 s pendant l'export.
+  - Écarts au plan : `server.go`, `icons.ts`, `nav.test.ts`, `ContainerDetail.svelte` ; ajouts `Header.Limits`, `MaskMounts`, `Collector` ; `prepareDataDir` rend le descripteur du dossier de données. Correctif e2e : `GET /api/snapshots` perdait une prise finie.
+  - Correctif de revue (auditeur, prouvé ; Codex) : `CaptureArchive` gardait ses entrées sans plafond de noms (≈ 5,4 Gio au plafond de 4 Gio, par un simple `GET /count`). Plafond de 256 Mio de noms et de cibles, comme l'index tar, dans l'export (prise et comptage) et sur les listings du parcours ; `too_large`, rien d'écrit. Prouvé : 80 000 liens à chemins de 4 Kio refusés, agent debout ; 65 000 juste sous le plafond, RSS 518 Mo. Détail fixe pour les 500 de la clé et du magasin. `TestWalkExistingMountNotTraversed` sur `/dev`, sans privilège.
+  - Spec v0.2 corrigée (§5.7 « Mémoire », Q57, §9) : 250 Mo mesurés, 500 Mo au pire, au lieu de 150 Mo.
+  - Réserves acceptées (Codex) : `tar.Reader.Next()` lit un en-tête avant le contrôle (borné par `archive/tar`) ; la rétention de 1 Gio peut être dépassée de la taille d'un snapshot.
+  - Minor reportés : `count.go`, après un comptage arrêté au plafond, le premier relevé attend le verrou de dockerd et répond 503 au lieu de 413 (tranche 10) ; `parcours.e2e.ts:144-147`, attentes fixes (500 ms, 4,5 s) fragiles sous charge, deux échecs à load 9 (en tête de la tranche 9).
+  - Mutations : 60 + 6, toutes tuées.
