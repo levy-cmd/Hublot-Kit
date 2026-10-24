@@ -218,3 +218,11 @@
   - Réserves acceptées (Codex) : `tar.Reader.Next()` lit un en-tête avant le contrôle (borné par `archive/tar`) ; la rétention de 1 Gio peut être dépassée de la taille d'un snapshot.
   - Minor reportés : `count.go`, après un comptage arrêté au plafond, le premier relevé attend le verrou de dockerd et répond 503 au lieu de 413 (tranche 10) ; `parcours.e2e.ts:144-147`, attentes fixes (500 ms, 4,5 s) fragiles sous charge, deux échecs à load 9 (en tête de la tranche 9).
   - Mutations : 60 + 6, toutes tuées.
+- **Tranche 9 (Snapshots : comparaison)** : d1b565f (parcours e2e sans attentes fixes, Minor de la tranche 8), 7d01619 (tests rouges), 51a4473, e97ab23, 7983be6 ; correctif de revue : 4d4863e (tests rouges), 41bf9d1. Validée par l'auditeur (preuves) et par Codex (arbitrage ci-dessous). CI de la PR #10 verte sur 41bf9d1 (run 40081633739).
+  - Mesure : la fusion en flux tient au plus 3,2 Mio de tas pour 2 × 500 000 entrées.
+  - Écarts au plan : `Compare` prend des flux (`iter.Seq2`) et renvoie une erreur ; ajouts `Result.Type`, `Merger`, `ExistingKey` (lit la clé sans la créer) ; `snapshots.e2e.ts` reçoit un second test.
+  - Correctif de revue (auditeur, prouvé) : sans empreintes, les fichiers inchangés « inconnu » remplissaient la limite de 10 000 et évinçaient les vrais changements (20 000 inchangés + un ajout : l'ajout disparaissait). Les inconnus sont comptés à part (`unknownCount`, 1 000 listés, repliés dans la page) ; `truncated` ne porte que sur les vrais changements. Spec §5.7 et §6, guide EN/FR.
+  - `image-match` : la spec est alignée sur le code (2 Mio, `match:false` si la taille diffère, rien de gardé) ; monter à 256 Mio demanderait de toucher fsview. Test de la course de `claim` ajouté (la mutation faisait paniquer l'agent).
+  - Arbitrage : Codex jugeait la lecture d'`image-match` non bornée (`io.Copy`). Vérifié dans 41bf9d1 : la taille est refusée au-delà de `MaxExtract` avant la lecture (snapshots_compare.go:443), et l'extraction lit par `io.LimitReader(tr, MaxExtract+1)` (imageindex.go:746-750). Constat écarté.
+  - Minor reporté à la tranche 10 : quand `truncated` est vrai, `unknownCount` n'est qu'un minimum, mais l'interface l'affiche comme un nombre exact (« au moins » à écrire).
+  - Mutations : 41 + 5, toutes tuées.
