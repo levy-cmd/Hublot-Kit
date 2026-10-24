@@ -120,3 +120,27 @@ Plan : `docs/superpowers/plans/2026-10-13-lancement.md`. Décisions de l'utilisa
   - Leçons intégrées à la T10 (0239044) : quatre jeux d'étiquettes attendus, dont les `sha256-…` ; recontrôle cosign et SBOM sans connexion après publication.
   - Incident d'orchestration : le dépôt principal a été retrouvé sur `ci/release-dispatch`, et la session l'a remis sur `phase/lancement`. Règle : vérifier la branche du dépôt principal après tout agent qui crée des branches.
   - Accès : l'utilisateur a ajouté `read:packages` au jeton `gh`. cosign v3.1.3 reste installé dans hk-ubuntu.
+- **Task 10, étapes 1 à 4 (v0.1.0 en privé)** : validées par le relecteur, qui a recoupé les journaux et les manifestes. Constats dans le plan (0253cbd).
+  - PR #6 fusionnée dans `main` (b8e11da, arbre identique à 569ec4f, CI verte).
+  - Tag `v0.1.0` sur b8e11da. `release.yml` identique sur la rc, le tag et `main` (blob 00cb891).
+  - Run 38910819137 : 4 jobs verts, `RELEASE OK : v0.1.0`.
+  - Étiquettes : exactement `0.1.0` et `0.1` sur l'index 95d77148, plus les deux `sha256-…`, avec `SIGNATURES OK` ; pas de `latest`.
+  - Commande de la doc sur les deux VM : `IMAGE OK`. Les identifiants sont retirés.
+  - Tout est encore privé : release en brouillon, paquet et dépôt privés.
+  - Ruling: le « Critical » de Codex (identité `refs/tags/v0.1.0` non prouvée) est écarté. `verify-release.sh` (l.36, 40, 70) fixe cette identité exacte pour tous les `cosign verify(-blob)`, donc `RELEASE OK` l'établit. L'étape 8 la revérifie sans connexion.
+  - Ruling: les 16 versions du paquet sont sans risque. GoReleaser signe une fois par étiquette ; les deux bundles portent le même certificat, l'index intermédiaire n'est pas consulté par cosign, et une signature orpheline ne peut pas tromper la vérification par identité.
+  - Ruling: la PR #6 a été fusionnée par l'agent, conformément à l'accord « tout enchaîner » du 2026-10-16.
+  - Décisions de l'utilisateur (2026-10-16) pour le passage en public : nettoyer le léger (lien claude.ai retiré de la spec en 569ec4f ; 18 branches de travail supprimées, branches de phase gardées) ; brouillon de la rc à supprimer ; étapes 5 et 6 à reconfirmer.
+- **Task 10, étapes 5 à 10 : v0.1.0 publique (2026-10-16)**
+  - Étape 5 refusée à un agent par le classifieur de permissions (« Create Public Surface »), sans contournement.
+  - L'utilisateur a fait lui-même les étapes 5 et 6 (dépôt public, signalement privé des vulnérabilités activé, release `v0.1.0` publiée en « latest ») et l'étape 7 (paquet GHCR rendu public dans l'interface).
+  - Vérifié par la session : dépôt `PUBLIC`, `private-vulnerability-reporting` à `true`, release `isDraft=false`, paquet `public` ; manifeste `:0.1` lu sans connexion (200).
+  - Étape 8, vérification anonyme :
+    - `IMAGE OK` sur les deux VM, image tirée sans connexion ;
+    - `cosign verify` sur `:0.1.0` et `:0.1` avec l'identité `refs/tags/v0.1.0`, refusé avec `v0.1.1` ;
+    - SBOM SPDX-2.3 pour amd64 et arm64 ;
+    - bloc « Verify the release » : `Verified OK`, et somme de l'archive arm64 OK.
+  - Étape 9 : brouillon `v0.1.0-rc.1` supprimé ; le tag et l'image `0.1.0-rc.1` restent.
+  - Étape 10 : PR de clôture #8 (`docs/lancement-constats` → `main`), CI verte. À fusionner par l'utilisateur après l'étape 11.
+  - Reste à l'utilisateur : retirer `read:packages` du jeton `gh` (`gh auth refresh -h github.com -r read:packages`).
+  - Écart mineur : avec `head -n 3`, le `cosign verify` par motif affiche le JSON avant la ligne « Verification for… », car stdout sort avant stderr. La vérification est verte.
