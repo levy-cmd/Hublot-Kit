@@ -10,6 +10,8 @@ import (
 	"fmt"
 	"regexp"
 	"time"
+
+	"github.com/levy-cmd/hublot-kit/internal/fsview"
 )
 
 // Entry is one line of a manifest, in the order of the path components.
@@ -76,6 +78,11 @@ type Limits struct {
 	MaxArchiveBytes    int64         `json:"maxArchiveBytes"`
 	MaxDuration        time.Duration `json:"maxDuration"`
 	MaxArchiveDuration time.Duration `json:"maxArchiveDuration"`
+	// MaxNameBytes caps the bytes of the paths and link targets an export
+	// keeps until its sort (review of tranche 8: ~450 000 links of 4 KiB
+	// names and targets held ~5.4 GiB); the cap of the tar index (v0.1.2).
+	// Zero or negative: the default.
+	MaxNameBytes int64 `json:"maxNameBytes"`
 }
 
 var DefaultLimits = Limits{
@@ -85,6 +92,7 @@ var DefaultLimits = Limits{
 	MaxArchiveBytes:    4 << 30,
 	MaxDuration:        10 * time.Minute,
 	MaxArchiveDuration: 5 * time.Minute,
+	MaxNameBytes:       fsview.DefaultIndexLimits.MaxNameBytes,
 }
 
 // ComparePaths orders clean container paths by their components: "/a",

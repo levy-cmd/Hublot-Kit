@@ -216,6 +216,11 @@ func CaptureArchive(ctx context.Context, r io.Reader, mounts []string, key []byt
 	hs := &hasher{key: key, lim: lim}
 	var entries []Entry
 	at := map[string]int{} // path → index in entries (duplicates, hard links)
+	maxNames := lim.MaxNameBytes
+	if maxNames <= 0 {
+		maxNames = DefaultLimits.MaxNameBytes
+	}
+	var names int64 // bytes of the paths and link targets kept
 	for {
 		h, err := tr.Next()
 		if err == io.EOF {
@@ -235,6 +240,9 @@ func CaptureArchive(ctx context.Context, r io.Reader, mounts []string, key []byt
 		e, keep := archiveEntry(h, ms)
 		if !keep {
 			continue
+		}
+		if names += int64(len(e.Path) + len(e.Link)); names > maxNames {
+			return fmt.Errorf("%w: snapshot beyond %d bytes of names and link targets", fsview.ErrTooLarge, maxNames)
 		}
 		if e.Type == "file" && key != nil {
 			switch {

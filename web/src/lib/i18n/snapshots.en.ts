@@ -24,7 +24,7 @@ export default {
 		'The container is stopped: Docker exports all of it, volumes included (up to 4 GiB read), and locks it during the export, 5 min at most: start, inspect, logs and writes wait.',
 	'snapshots.cost.index':
 		'Taken from the index already built: no export, no lock, no fingerprint. A comparison will only see sizes, dates, permissions, links, additions and deletions.',
-	'snapshots.cost.memory': 'Memory of the agent: every entry until the end of the export, about 250 MB at worst (500,000 entries).',
+	'snapshots.cost.memory': 'Memory of the agent: every entry until the end of the export, about 250 MB for 500,000 entries, 500 MB at worst with long names.',
 	'snapshots.cost.size': 'Size of the container according to Docker: {size}.',
 	'snapshots.progress': 'Photo of {name} in progress: {n} entries, {p} %',
 	'snapshots.progress.count': 'Count of {name} in progress: {n} entries',

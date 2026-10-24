@@ -22,7 +22,14 @@ import (
 var (
 	walkBeforeOpen  = func(string) {}
 	walkReadTimeout = 10 * time.Second
+	// walkMaxHeld caps the names and link targets of the listings held at
+	// once, every level on the way down (review of tranche 8: a deep tree
+	// whose levels hold thousands of 4 KiB links), each entry counted with
+	// walkEntryCost more for itself: the cap of the tar index (v0.1.2).
+	walkMaxHeld = DefaultIndexLimits.MaxNameBytes
 )
+
+const walkEntryCost = 128
 
 // maxStuckReads: past that many reads given up (a FUSE server that never
 // answers, spec §13), the walk ends: each one keeps a goroutine.
@@ -65,6 +72,7 @@ type walk struct {
 	rootMnt   uint64
 	truncated bool
 	stuck     atomic.Int32
+	held      int64 // bytes of the listings on the way down
 }
 
 // dir walks the children of dir, whose handle h was checked by the caller.
@@ -75,6 +83,14 @@ func (w *walk) dir(dir string, h *os.File) error {
 	if !ok {
 		w.truncated = true // unreadable directory: its children are missing
 	}
+	var cost int64
+	for _, e := range children {
+		cost += int64(len(e.Name)+len(e.LinkTarget)) + walkEntryCost
+	}
+	if w.held += cost; w.held > walkMaxHeld {
+		return fmt.Errorf("%w: the walk holds more than %d bytes of names and link targets", ErrTooLarge, walkMaxHeld)
+	}
+	defer func() { w.held -= cost }()
 	for _, e := range children {
 		if err := w.ctx.Err(); err != nil {
 			return err

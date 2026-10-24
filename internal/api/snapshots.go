@@ -240,6 +240,10 @@ func (s *server) prepare(ctx context.Context, info dockerx.ContainerInfo, wantIn
 	return c, nil
 }
 
+// snapKeyDetail: a refused key answers internal with a fixed detail that
+// says it (spec v0.2 §5.7); the reason goes to the log, masked (e2267be).
+const snapKeyDetail = "the snapshot key is refused (see the agent's log)"
+
 // errSnapConflict: 409 conflict, with the reason.
 var errSnapConflict = errors.New("conflict")
 
@@ -327,8 +331,8 @@ func (s *server) snapshotCreate(w http.ResponseWriter, r *http.Request) {
 	s.snap.named(j, info)
 	key, keyID, err := store.Key()
 	if err != nil {
-		slog.Error("snapshot key", "err", err)
-		writeError(w, http.StatusInternalServerError, "internal", "snapshot key refused: "+err.Error())
+		slog.Error("snapshot key", "err", secrets.Line(err.Error()))
+		writeError(w, http.StatusInternalServerError, "internal", snapKeyDetail)
 		return
 	}
 	release, ok := s.guard.take(info.ID)
@@ -461,8 +465,8 @@ func (s *server) snapshotList(w http.ResponseWriter, r *http.Request) {
 	snapListBetween()
 	list, err := store.List()
 	if err != nil {
-		slog.Error("snapshot list", "err", err)
-		writeError(w, http.StatusInternalServerError, "internal", "snapshots: "+err.Error())
+		slog.Error("snapshot list", "err", secrets.Line(err.Error()))
+		writeError(w, http.StatusInternalServerError, "internal", internalDetail)
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 5*time.Second)
