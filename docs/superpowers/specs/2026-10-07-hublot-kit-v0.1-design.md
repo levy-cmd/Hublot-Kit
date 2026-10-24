@@ -376,9 +376,9 @@ Base 5 à 10 h par semaine. 12 semaines maintenues : le code du spike a été é
 | Socle | 2 à 4 | dépôt, CI, agent, auth, audit, F1, squelette interface, page `/servers` | |
 | Explorateur | 5 à 9 | F2, F3, F4, F5 | démo : un diagnostic complet sans terminal |
 | Observation | 10 | F6, F7 | |
-| Lancement | 11 à 12 | docs FR/EN, GoReleaser, image GHCR, unité systemd, release signée ; pré-version `v0.1.0-rc.1` privée, puis `v0.1.0` | v0.1 publique |
+| Lancement | 11 à 12 | docs FR/EN, GoReleaser, image GHCR, unité systemd, release signée ; pré-version `v0.1.0-rc.1` privée, puis `v0.1.0` | v0.1 publique : v0.1.0 publiée le 2026-10-16 (plan Lancement) |
 
-Avancement (2026-10-15) : Spike, Socle, Explorateur et Observation sont fusionnés. Lancement : messages de l'agent en anglais, `hublot --version`, unité systemd, image, docs FR/EN, GoReleaser, installation Docker et systemd (vérifiées sur les deux VM avec l'image et les archives du snapshot de la CI ; une vraie release sera éprouvée à la pré-version), vérification d'une release et `release.yml` sont faits sur `phase/lancement` ; restent la pré-version `v0.1.0-rc.1` (première vraie signature, GHCR) puis la `v0.1.0` publique, étape par étape avec l'accord de l'utilisateur (plan Lancement, tâches 9 et 10).
+Avancement (2026-10-16) : Spike, Socle, Explorateur, Observation et Lancement sont fusionnés. La pré-version `v0.1.0-rc.1` a éprouvé en privé la signature sans clé, GHCR et le brouillon (plan Lancement, tâche 9). La `v0.1.0` est publiée le 2026-10-16 : dépôt public avec signalement privé des vulnérabilités, release signée, image `ghcr.io/levy-cmd/hublot-kit` (`0.1.0`, `0.1`) publique ; sans connexion, l'image passe `check-image.sh` sur les deux VM, sa signature et son SBOM sont vérifiés hors de GitHub (plan Lancement, tâche 10).
 
 Avancement (2026-10-24) : `v0.1.0` est publiée, puis les correctifs de sécurité `v0.1.1` et `v0.1.2` (audit indépendant, PR #11). La v0.2 (spec `2026-10-23-hublot-kit-v0.2-design.md`, plan `2026-10-23-v0.2.md`) a ses tranches 1 à 9 validées sur `phase/v0.2` (F11 à F19), CI de la PR #10 verte ; la tranche 10 (clôture : test de lecture seule côté Docker, spec et doc) est en cours. F8 à F10 sont reportées après la v0.2 (Q55). Restent la revue de toute la branche, puis la PR, `v0.2.0-rc.1` et `v0.2.0`, chacune sur ARRÊT.
 
