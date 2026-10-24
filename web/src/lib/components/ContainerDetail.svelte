@@ -13,6 +13,7 @@
 	import ChangesList from './ChangesList.svelte';
 	import CopyButton from './CopyButton.svelte';
 	import FileBrowser from './FileBrowser.svelte';
+	import FilesCount from './FilesCount.svelte';
 	import LogsView from './LogsView.svelte';
 	import XrayView from './XrayView.svelte';
 
@@ -171,13 +172,7 @@
 		<dl class="figures" aria-label={t('container.figures')}>
 			<div class="figure">
 				<dt>{t('container.figure.files')}</dt>
-				<dd
-					title={figures?.files
-						? tf('container.figure.filesAt', { at: when(figures.files.at) })
-						: t('container.figure.filesNone')}
-				>
-					{figures?.files ? figures.files.count.toLocaleString(lang) : '—'}
-				</dd>
+				<FilesCount id={fullID} name={radio.name} running={radio.state.running} files={figures?.files} loaded={figures != null} {when} />
 			</div>
 			<div class="figure">
 				<dt>{t('container.figure.imageSize')}</dt>

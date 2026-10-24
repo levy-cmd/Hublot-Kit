@@ -81,7 +81,18 @@ type snapFixture struct {
 	walker *memWalker
 	store  *snapshot.Store
 	data   string
+	srv    *server
 }
+
+// lastServer is the server New built last (the api tests are sequential).
+var lastServer atomic.Pointer[server]
+
+func init() {
+	moduleRoutes = append(moduleRoutes, func(s *server, _ *http.ServeMux) { lastServer.Store(s) })
+}
+
+// snapJob is the heavy job in progress, nil if none.
+func (sf *snapFixture) snapJob() (*snapJob, bool) { return sf.srv.snap.current("") }
 
 func newSnapFixture(t *testing.T, readOnly bool, docker dockerx.Client, fake *dockerx.Fake) *snapFixture {
 	t.Helper()
@@ -128,6 +139,7 @@ func newSnapFixture(t *testing.T, readOnly bool, docker dockerx.Client, fake *do
 		Limiter:   auth.NewLimiter(5, time.Minute, time.Now),
 	})
 	sf.token, sf.auditP, sf.auditLog = tok, ap, al
+	sf.srv = lastServer.Load()
 	return sf
 }
 
@@ -412,6 +424,32 @@ func TestSnapshotOneAtATime(t *testing.T) {
 	sf.idle(t, c)
 	if rec := sf.do("POST", "/api/containers/db/snapshots", "", c); rec.Code != http.StatusAccepted {
 		t.Fatalf("prise après la fin de la première : %d %s", rec.Code, rec.Body)
+	}
+	sf.idle(t, c)
+}
+
+// e2e: a capture that ends while the list is read must show either in
+// progress or in the list, never neither (the page would stop polling).
+func TestSnapshotListNeverLosesTheEnd(t *testing.T) {
+	sf, c := snapSetup(t, false)
+	sf.walker.gate = make(chan struct{})
+	if rec := sf.do("POST", "/api/containers/web/snapshots", "", c); rec.Code != http.StatusAccepted {
+		t.Fatalf("prise : %d %s", rec.Code, rec.Body)
+	}
+	old := snapListBetween
+	t.Cleanup(func() { snapListBetween = old })
+	snapListBetween = func() {
+		snapListBetween = func() {}
+		close(sf.walker.gate)
+		for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); time.Sleep(5 * time.Millisecond) {
+			if j, _ := sf.snapJob(); j == nil {
+				return
+			}
+		}
+	}
+	l, body := sf.list(t, c)
+	if l.Current == nil && len(l.Snapshots) == 0 {
+		t.Fatalf("prise ni en cours ni dans la liste : %s", body)
 	}
 	sf.idle(t, c)
 }

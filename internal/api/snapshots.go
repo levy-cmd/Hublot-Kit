@@ -29,6 +29,10 @@ import (
 // snapLimits: the caps of a capture (a variable: tests lower them).
 var snapLimits = snapshot.DefaultLimits
 
+// snapListBetween runs between the read of the job and the read of the
+// files in GET /api/snapshots: a test ends a capture there.
+var snapListBetween = func() {}
+
 // snapInspectTimeout bounds the final Inspect, after an export that held
 // dockerd's lock on the container.
 const snapInspectTimeout = 30 * time.Second
@@ -436,6 +440,25 @@ func (s *server) snapshotList(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "internal", "snapshots unavailable")
 		return
 	}
+	out := struct {
+		Snapshots []snapshotJSON `json:"snapshots"`
+		Current   *currentJSON   `json:"current"`
+		Last      *snapOutcome   `json:"last"`
+	}{}
+	// The job first, the files after (e2e): read the other way, a capture
+	// that ends in between shows neither in progress nor in the list, and
+	// the page stops polling without its photo.
+	s.snap.mu.Lock()
+	if j := s.snap.job; j != nil {
+		cj := &currentJSON{Kind: j.kind, Snapshot: j.snapshot, Progress: j.progress(), Entries: j.entries.Load()}
+		if len(j.refs) >= 3 {
+			cj.ContainerID, cj.ContainerName = j.refs[1], j.refs[2]
+		}
+		out.Current = cj
+	}
+	out.Last = s.snap.last
+	s.snap.mu.Unlock()
+	snapListBetween()
 	list, err := store.List()
 	if err != nil {
 		slog.Error("snapshot list", "err", err)
@@ -451,11 +474,7 @@ func (s *server) snapshotList(w http.ResponseWriter, r *http.Request) {
 			alive[c.ID] = true
 		}
 	}
-	out := struct {
-		Snapshots []snapshotJSON `json:"snapshots"`
-		Current   *currentJSON   `json:"current"`
-		Last      *snapOutcome   `json:"last"`
-	}{Snapshots: make([]snapshotJSON, 0, len(list))}
+	out.Snapshots = make([]snapshotJSON, 0, len(list))
 	for _, h := range list {
 		sj := snapshotJSON{ID: h.ID, ContainerID: h.ContainerID, ContainerName: h.ContainerName, Project: h.Project,
 			Image: h.Image, ImageID: h.ImageID, CreatedAt: h.CreatedAt, FinishedAt: h.FinishedAt, State: h.State,
@@ -466,16 +485,6 @@ func (s *server) snapshotList(w http.ResponseWriter, r *http.Request) {
 		}
 		out.Snapshots = append(out.Snapshots, sj)
 	}
-	s.snap.mu.Lock()
-	if j := s.snap.job; j != nil {
-		cj := &currentJSON{Kind: j.kind, Snapshot: j.snapshot, Progress: j.progress(), Entries: j.entries.Load()}
-		if len(j.refs) >= 3 {
-			cj.ContainerID, cj.ContainerName = j.refs[1], j.refs[2]
-		}
-		out.Current = cj
-	}
-	out.Last = s.snap.last
-	s.snap.mu.Unlock()
 	writeJSON(w, http.StatusOK, out)
 }
 

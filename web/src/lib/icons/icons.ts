@@ -31,7 +31,8 @@ export const ICONS = {
 	lock: 'M5 9h10v7.5H5z M7 9V6.5a3 3 0 0 1 6 0V9',
 	edit: 'M13.5 3.5l3 3L7 16H4v-3z',
 	check: 'M4.5 10.5l3.5 3.5 7.5-8',
-	info: 'M10 3a7 7 0 1 0 0 14a7 7 0 1 0 0-14z M10 9v4.5 M10 6.5v.5'
+	info: 'M10 3a7 7 0 1 0 0 14a7 7 0 1 0 0-14z M10 9v4.5 M10 6.5v.5',
+	camera: 'M3 6.5h3l1.5-2h5l1.5 2h3v9H3z M10 8.5a2.5 2.5 0 1 0 0 5a2.5 2.5 0 1 0 0-5z'
 } as const;
 
 export type IconName = keyof typeof ICONS;
