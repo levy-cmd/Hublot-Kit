@@ -236,6 +236,7 @@ func (s *server) snapshotCompare(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, err)
 		return
 	}
+	release() // the answer is in memory: a client slow to read holds no slot (as the previews)
 	writeAnswer(w, b)
 }
 
