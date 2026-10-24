@@ -16,10 +16,11 @@ fails=0
 bad() { echo "ÉCHEC : $*" >&2; fails=$((fails + 1)); }
 docs="docs/en/install.md docs/fr/installation.md"
 
-# fresh NOM : copie neuve de ce que lit check-docs.sh, dans $tmp/NOM.
+# fresh NOM : copie neuve de ce que lit check-docs.sh, dans $tmp/NOM, avec
+# examples, cible d'un lien des README (la démo).
 fresh() {
   mkdir "$tmp/$1"
-  cp -R README.md README.fr.md LICENSE .goreleaser.yaml docs scripts packaging .github "$tmp/$1/"
+  cp -R README.md README.fr.md LICENSE .goreleaser.yaml docs scripts packaging .github examples "$tmp/$1/"
 }
 
 # refused NOM MOTIF : check-docs.sh sur la copie NOM doit échouer, avec MOTIF

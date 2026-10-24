@@ -73,6 +73,9 @@ ssh -L 7878:127.0.0.1:7878 user@server
 
 Vous préférez un binaire lancé par systemd ? Voir [Binaire et systemd](docs/fr/installation.md#binaire-et-systemd).
 
+Pour l'essayer d'abord sur des conteneurs jetables (un service sans shell, un conteneur arrêté, un nginx modifié,
+de faux secrets), voir [la démo](examples/demo/) (en anglais).
+
 ## Documentation
 
 - [Visite de l'interface](docs/fr/guide.md) : la disposition, la recherche, les panneaux, les pages Images, Secrets
@@ -98,6 +101,14 @@ dans un conteneur, `make web && scripts/dev-agent.sh`. L'interface en mode déve
 l'agent sur `127.0.0.1:7878` : `cd web && npm run dev`. Les specs techniques sont dans docs/superpowers/specs :
 [v0.1](docs/superpowers/specs/2026-10-07-hublot-kit-v0.1-design.md), la référence, et
 [v0.2](docs/superpowers/specs/2026-10-23-hublot-kit-v0.2-design.md), son complément.
+
+## Comment ce projet est développé
+
+Hublot-Kit est développé avec des agents de code IA, dans un processus strict. Chaque changement suit un plan écrit
+pour sa phase ([docs/superpowers/plans](docs/superpowers/plans/)). Les tests d'évasion, qui vérifient qu'un chemin ne
+peut pas sortir d'un conteneur, s'écrivent avant le code qu'ils protègent. Chaque tâche reçoit deux revues
+indépendantes, et la branche entière est relue avant chaque release. Chaque release est signée, puis vérifiée depuis
+une autre machine sans identifiants, en suivant le guide d'installation tel qu'il est écrit.
 
 ## Licence
 
