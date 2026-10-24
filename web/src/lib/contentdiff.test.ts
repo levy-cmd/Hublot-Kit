@@ -14,7 +14,10 @@ import {
 	needs,
 	reasonMessage,
 	sideOf,
+	editLimit,
+	LINE_DIFF_BUDGET,
 	lineDiff,
+	MAX_EDITS,
 	REFINE_MAX,
 	sides,
 	type Side,
@@ -248,9 +251,23 @@ describe('the unified view of two large files (review of tranche 7)', () => {
 		const ls = Array.from({ length: 50_000 }, (_, i) => `line ${i % 7}`);
 		await bounded(ls.join('\r'), [...ls].reverse().join('\r'));
 	});
-	it('many small regions, each refined', async () => {
-		const ls = Array.from({ length: 20_000 }, (_, i) => (i % 2 ? 'a'.repeat(3000) : `k${i}`));
-		await bounded(ls.join('\n'), ls.map((l, i) => (i % 2 ? l : `${l}!`)).join('\n'));
+	it('many small blocks, each costly to refine', async () => {
+		// Each changed line is small enough to be refined to the characters,
+		// and costly to refine (a repetitive run whose ends moved): the
+		// total refined is what bounds them.
+		const a: string[] = [];
+		const b: string[] = [];
+		for (let i = 0; i < 500; i++) {
+			const run = 'a'.repeat(3990);
+			a.push(`k${i}`, `x${run}y${i}`);
+			b.push(`k${i}`, `y${i}${run}x`);
+		}
+		await bounded(a.join('\n'), b.join('\n'));
+	});
+	it('long runs of the same line, edits at both ends and inside', async () => {
+		// Every diagonal of the line diff slides along the run: the work is
+		// lines × edits, which the budget bounds.
+		await bounded(`a\n${'x\n'.repeat(999_000)}a\n`, `b\n${'x\n'.repeat(500_000)}${'c\n'.repeat(1500)}${'x\n'.repeat(497_500)}b\n`);
 	});
 });
 
@@ -289,8 +306,25 @@ describe('lineDiff: the bounded diff behind the view', () => {
 			check(a, b, lineDiff(a, b, (p, q) => merge.diff(p, q)));
 		}
 	});
+	it('bounds the work of the line diff: lines × edits, and edits² for its memory', () => {
+		for (const n of [1, 10, 3000, 10_000, 100_000, 2_000_000]) {
+			expect(editLimit(n) * n).toBeLessThanOrEqual(LINE_DIFF_BUDGET);
+			expect(editLimit(n)).toBeLessThanOrEqual(MAX_EDITS);
+		}
+		expect(MAX_EDITS).toBeLessThanOrEqual(1000);
+		expect(editLimit(2_000_000)).toBe(5);
+	});
+	it('past the edits allowed, one replaced block between the common ends', () => {
+		const a = Array.from({ length: 3000 }, (_, i) => `a${i}`).join('\n');
+		const b = Array.from({ length: 3000 }, (_, i) => `b${i}`).join('\n');
+		expect(lineDiff(`same\n${a}\nend`, `same\n${b}\nend`)).toEqual([{ fromA: 5, toA: 5 + a.length + 1, fromB: 5, toB: 5 + b.length + 1 }]);		// 600 lines changed out of 1200: 1200 edits, past the 1000 allowed.
+		const c = Array.from({ length: 1200 }, (_, i) => `l${i}`);
+		const d = c.map((l, i) => (i % 2 ? l : `${l}!`));
+		expect(lineDiff(c.join('\n'), d.join('\n'))).toHaveLength(1);
+		expect(lineDiff(c.slice(0, 800).join('\n'), d.slice(0, 800).join('\n'))).toHaveLength(400);
+	});
 	it('only lines that changed', () => {
-		expect(lineDiff('a\nb\nc\n', 'a\nB\nc\n')).toEqual([{ fromA: 2, toA: 3, fromB: 2, toB: 3 }]);
+		expect(lineDiff('a\nb\nc\n', 'a\nB\nc\n')).toEqual([{ fromA: 2, toA: 4, fromB: 2, toB: 4 }]); // the line and its end
 	});
 	it('refines a small region to the characters, never a large one', () => {
 		const calls: number[] = [];
