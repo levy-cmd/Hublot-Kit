@@ -40,10 +40,25 @@ func seqOf(es ...Entry) iter.Seq2[Entry, error] {
 
 func compareAll(t *testing.T, a, b []Entry, sameKey bool) map[string]Result {
 	t.Helper()
-	res, truncated, err := Compare(seqOf(a...), seqOf(b...), sameKey, 10_000)
-	if err != nil || truncated {
-		t.Fatalf("Compare : %v, tronqué %v", err, truncated)
+	o, err := Compare(seqOf(a...), seqOf(b...), sameKey, 10_000)
+	if err != nil || o.Truncated {
+		t.Fatalf("Compare : %v, tronqué %v", err, o.Truncated)
 	}
+	if o.UnknownCount != len(o.Unknown) {
+		t.Fatalf("%d inconnus comptés, %d listés", o.UnknownCount, len(o.Unknown))
+	}
+	for _, r := range o.Unknown {
+		if r.Kind != "unknown" {
+			t.Fatalf("liste des inconnus : %+v", r)
+		}
+	}
+	for _, r := range o.Results {
+		if r.Kind == "unknown" {
+			t.Fatalf("inconnu parmi les changements : %+v", r)
+		}
+	}
+	res := append(slices.Clone(o.Results), o.Unknown...)
+	slices.SortFunc(res, func(x, y Result) int { return ComparePaths(x.Path, y.Path) })
 	out := map[string]Result{}
 	for _, r := range res {
 		if _, dup := out[r.Path]; dup {
@@ -173,32 +188,32 @@ func TestCompareLimit(t *testing.T) {
 		a = append(a, fileE(p, "a", 1))
 		b = append(b, fileE(p, "b", 1))
 	}
-	res, truncated, err := Compare(seqOf(a...), seqOf(b...), true, 10_000)
-	if err != nil || !truncated || len(res) != 10_000 {
-		t.Fatalf("%d résultats, tronqué %v, %v", len(res), truncated, err)
+	o, err := Compare(seqOf(a...), seqOf(b...), true, 10_000)
+	if err != nil || !o.Truncated || len(o.Results) != 10_000 {
+		t.Fatalf("%d résultats, tronqué %v, %v", len(o.Results), o.Truncated, err)
 	}
-	if res[9_999].Path != "/f09999" {
-		t.Fatalf("dernier : %s", res[9_999].Path)
+	if o.Results[9_999].Path != "/f09999" {
+		t.Fatalf("dernier : %s", o.Results[9_999].Path)
 	}
 	// Exactly the cap: not truncated.
-	res, truncated, err = Compare(seqOf(a[:10_000]...), seqOf(b[:10_000]...), true, 10_000)
-	if err != nil || truncated || len(res) != 10_000 {
-		t.Fatalf("au plafond : %d, tronqué %v, %v", len(res), truncated, err)
+	o, err = Compare(seqOf(a[:10_000]...), seqOf(b[:10_000]...), true, 10_000)
+	if err != nil || o.Truncated || len(o.Results) != 10_000 {
+		t.Fatalf("au plafond : %d, tronqué %v, %v", len(o.Results), o.Truncated, err)
 	}
 }
 
 // A manifest out of the order of the components would turn every later
 // entry into added and deleted: refused, never a wrong answer.
 func TestCompareOutOfOrder(t *testing.T) {
-	_, _, err := Compare(seqOf(fileE("/b", "m", 1), fileE("/a", "m", 1)), seqOf(), true, 10)
+	_, err := Compare(seqOf(fileE("/b", "m", 1), fileE("/a", "m", 1)), seqOf(), true, 10)
 	if !errors.Is(err, ErrOutOfOrder) {
 		t.Fatalf("a désordonné : %v", err)
 	}
-	_, _, err = Compare(seqOf(), seqOf(fileE("/a-b", "m", 1), fileE("/a/b", "m", 1)), true, 10)
+	_, err = Compare(seqOf(), seqOf(fileE("/a-b", "m", 1), fileE("/a/b", "m", 1)), true, 10)
 	if !errors.Is(err, ErrOutOfOrder) {
 		t.Fatalf("b désordonné : %v", err)
 	}
-	_, _, err = Compare(seqOf(fileE("/a", "m", 1), fileE("/a", "m", 1)), seqOf(), true, 10)
+	_, err = Compare(seqOf(fileE("/a", "m", 1), fileE("/a", "m", 1)), seqOf(), true, 10)
 	if !errors.Is(err, ErrOutOfOrder) {
 		t.Fatalf("doublon : %v", err)
 	}
@@ -212,10 +227,10 @@ func TestCompareReadError(t *testing.T) {
 			yield(Entry{}, boom)
 		}
 	}
-	if _, _, err := Compare(bad, seqOf(fileE("/z", "m", 1)), true, 10); !errors.Is(err, boom) {
+	if _, err := Compare(bad, seqOf(fileE("/z", "m", 1)), true, 10); !errors.Is(err, boom) {
 		t.Fatalf("a : %v", err)
 	}
-	if _, _, err := Compare(seqOf(fileE("/z", "m", 1)), bad, true, 10); !errors.Is(err, boom) {
+	if _, err := Compare(seqOf(fileE("/z", "m", 1)), bad, true, 10); !errors.Is(err, boom) {
 		t.Fatalf("b : %v", err)
 	}
 }
@@ -232,9 +247,9 @@ func TestMergerStopsWhenFull(t *testing.T) {
 	if err := m.Add(fileE("/c", "m", 1)); !errors.Is(err, ErrResultsFull) {
 		t.Fatalf("Add au-delà du plafond : %v", err)
 	}
-	res, truncated, err := m.Finish()
-	if err != nil || !truncated || len(res) != 2 {
-		t.Fatalf("%+v %v %v", res, truncated, err)
+	o, err := m.Finish()
+	if err != nil || !o.Truncated || len(o.Results) != 2 {
+		t.Fatalf("%+v %v", o, err)
 	}
 }
 
@@ -262,6 +277,39 @@ func TestExistingKeyNeverCreates(t *testing.T) {
 	}
 	if _, _, err := s.ExistingKey(); err == nil || errors.Is(err, ErrNoKey) {
 		t.Fatalf("clé ouverte au groupe acceptée : %v", err)
+	}
+}
+
+// Review of tranche 9 (auditor, proved): without fingerprints (a photo of
+// the metadata, offered first, or a key changed since), every unchanged
+// file is unknown. Counted in the cap of results, 20 000 of them hid the
+// one file an attacker added. The unknown are counted apart, a few listed;
+// the real changes are never pushed out by them.
+func TestCompareUnknownNeverEvictsChanges(t *testing.T) {
+	var a, b []Entry
+	for i := range 20_000 {
+		e := fileE(fmt.Sprintf("/f%05d", i), "", 1)
+		a, b = append(a, e), append(b, e)
+	}
+	b = append(b, fileE("/zz-added", "", 1))
+	o, err := Compare(seqOf(a...), seqOf(b...), false, 10_000)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if o.Truncated || len(o.Results) != 1 || o.Results[0].Path != "/zz-added" || o.Results[0].Kind != "added" {
+		t.Fatalf("changements : %+v, tronqué %v", o.Results, o.Truncated)
+	}
+	if o.UnknownCount != 20_000 || len(o.Unknown) != MaxUnknownPaths || o.Unknown[0].Path != "/f00000" {
+		t.Fatalf("%d inconnus comptés, %d listés", o.UnknownCount, len(o.Unknown))
+	}
+	// The real changes keep their own cap, whatever the unknown.
+	b = b[:20_000]
+	for i := range 10_001 {
+		b = append(b, fileE(fmt.Sprintf("/g%05d", i), "", 1))
+	}
+	o, err = Compare(seqOf(a...), seqOf(b...), false, 10_000)
+	if err != nil || !o.Truncated || len(o.Results) != 10_000 || o.UnknownCount != 20_000 {
+		t.Fatalf("%d changements, tronqué %v, %d inconnus, %v", len(o.Results), o.Truncated, o.UnknownCount, err)
 	}
 }
 
@@ -323,9 +371,9 @@ func TestCompareStreaming(t *testing.T) {
 	var base runtime.MemStats
 	runtime.ReadMemStats(&base)
 	hp := &heapPeak{}
-	res, truncated, err := Compare(hp.wrap(seqA), hp.wrap(seqB), true, 10_000)
-	if err != nil || truncated || len(res) != n/100 {
-		t.Fatalf("%d résultats, tronqué %v, %v", len(res), truncated, err)
+	o, err := Compare(hp.wrap(seqA), hp.wrap(seqB), true, 10_000)
+	if err != nil || o.Truncated || len(o.Results) != n/100 {
+		t.Fatalf("%d résultats, tronqué %v, %v", len(o.Results), o.Truncated, err)
 	}
 	if hp.n != 2*n {
 		t.Fatalf("%d entrées lues, attendu %d", hp.n, 2*n)

@@ -108,6 +108,8 @@ type compareBody struct {
 	ContentCompared bool              `json:"contentCompared"`
 	Results         []snapshot.Result `json:"results"`
 	Truncated       bool              `json:"truncated"`
+	Unknown         []snapshot.Result `json:"unknown"`
+	UnknownCount    *int              `json:"unknownCount"`
 }
 
 func decodeCompare(t *testing.T, rec *httptest.ResponseRecorder) (compareBody, map[string]snapshot.Result) {
@@ -424,6 +426,83 @@ func TestCompareCurrentContainerChanged(t *testing.T) {
 	}
 	if got := sf.files(t); len(got) != 1 {
 		t.Fatalf("fichiers : %v", got)
+	}
+}
+
+// Review of tranche 9 (auditor, proved): the unknown of a photo of the
+// metadata are counted apart; 20 000 of them never hide the file added.
+func TestCompareUnknownApart(t *testing.T) {
+	sf, c := snapSetup(t, false)
+	var es []snapshot.Entry
+	for i := range 20_000 {
+		es = append(es, cmpFile(fmt.Sprintf("/f%05d", i), "", 1))
+	}
+	s1 := sf.putSnap(t, webID, "", "", es...)
+	s2 := sf.putSnap(t, webID, "", "", append(es, cmpFile("/zz-added", "", 1))...)
+	rec := sf.do("GET", "/api/snapshots/"+s1+"/compare?with="+s2, "", c)
+	b, by := decodeCompare(t, rec)
+	if b.Truncated || len(b.Results) != 1 || by["/zz-added"].Kind != "added" {
+		t.Fatalf("changements : %+v, tronqué %v", b.Results, b.Truncated)
+	}
+	if b.UnknownCount == nil || *b.UnknownCount != 20_000 || len(b.Unknown) != snapshot.MaxUnknownPaths {
+		t.Fatalf("inconnus : %v comptés, %d listés", b.UnknownCount, len(b.Unknown))
+	}
+	for _, r := range b.Unknown {
+		if r.Kind != "unknown" {
+			t.Fatalf("liste des inconnus : %+v", r)
+		}
+	}
+	// Nothing unknown: the fields are there all the same.
+	key, keyID := sf.key(t)
+	s3 := sf.putSnap(t, webID, "", keyID, cmpFile("/f", hmacHex(key, "a"), 1))
+	b, _ = decodeCompare(t, sf.do("GET", "/api/snapshots/"+s3+"/compare?with="+s3, "", c))
+	if b.UnknownCount == nil || *b.UnknownCount != 0 || b.Unknown == nil {
+		t.Fatalf("sans inconnu : %+v", b)
+	}
+}
+
+// gatedInspect holds the first Inspect of web until open is closed.
+type gatedInspect struct {
+	*dockerx.Fake
+	open    chan struct{}
+	entered chan struct{}
+	n       atomic.Int32
+}
+
+func (d *gatedInspect) Inspect(ctx context.Context, id string) (dockerx.ContainerInfo, error) {
+	if d.n.Add(1) == 1 {
+		close(d.entered)
+		<-d.open
+	}
+	return d.Fake.Inspect(ctx, id)
+}
+
+// Review of tranche 9 (auditor, proved): a snapshot that takes the agent's
+// slot while the comparison waits for its Inspect. The comparison must be
+// refused (409), never run without the slot: its job would have no done
+// channel, and its end would close a nil channel (a panic of the agent).
+func TestCompareCurrentClaimRace(t *testing.T) {
+	fake := snapFake(t)
+	g := &gatedInspect{Fake: fake, open: make(chan struct{}), entered: make(chan struct{})}
+	sf := newSnapFixture(t, false, g, fake)
+	c := sf.session(t)
+	_, keyID := sf.key(t)
+	sid := sf.putSnap(t, webID, "", keyID, cmpDir("/etc"))
+	got := make(chan *httptest.ResponseRecorder, 1)
+	go func() { got <- sf.do("GET", "/api/snapshots/"+sid+"/compare?with=current", "", c) }()
+	<-g.entered // past the check of the job in progress, in its Inspect
+	sf.walker.gate = make(chan struct{})
+	if rec := sf.do("POST", "/api/containers/web/snapshots", "", c); rec.Code != http.StatusAccepted {
+		t.Fatalf("prise : %d %s", rec.Code, rec.Body)
+	}
+	close(g.open)
+	rec := <-got
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("comparaison sans la place de l'agent : %d %s", rec.Code, rec.Body)
+	}
+	close(sf.walker.gate)
+	if l, body := sf.idle(t, c); l.Last["result"] != "ok" {
+		t.Fatalf("prise : %s", body)
 	}
 }
 
