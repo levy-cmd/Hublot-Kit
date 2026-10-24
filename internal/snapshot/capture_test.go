@@ -522,6 +522,38 @@ func TestCaptureArchiveLimits(t *testing.T) {
 	}
 }
 
+// Review of tranche 8 (audit): an export keeps its entries until the sort;
+// long names and link targets are capped in all, as the tar index is
+// (v0.1.2), else ~450 000 links of 4 KiB names and targets take ~5.4 GiB.
+func TestCaptureArchiveNameCap(t *testing.T) {
+	long := strings.Repeat("n", 1000)
+	var es []tarEntry
+	for i := range 40 {
+		es = append(es, tarEntry{tar.Header{Name: fmt.Sprintf("/%s%03d", long, i), Typeflag: tar.TypeSymlink,
+			Linkname: "/" + long, ModTime: time.Unix(1700000000, 0)}, ""})
+	}
+	raw := mkTar(t, es...)
+	lim := DefaultLimits
+	if lim.MaxNameBytes != 256<<20 {
+		t.Fatalf("plafond de noms par défaut : %d, attendu 256 Mio (celui de l'index tar)", lim.MaxNameBytes)
+	}
+	lim.MaxNameBytes = 64 << 10 // 40 × ~2 Kio = 80 Kio
+	for _, key := range [][]byte{testKey, nil} {
+		var c Collector
+		if err := CaptureArchive(bg, bytes.NewReader(raw), nil, key, lim, &c); !errors.Is(err, fsview.ErrTooLarge) {
+			t.Fatalf("clé %v : %v, attendu ErrTooLarge", key != nil, err)
+		}
+		if len(c.Entries) != 0 {
+			t.Fatalf("%d entrées écrites malgré le refus", len(c.Entries))
+		}
+	}
+	lim.MaxNameBytes = 128 << 10
+	var c Collector
+	if err := CaptureArchive(bg, bytes.NewReader(raw), nil, testKey, lim, &c); err != nil || len(c.Entries) != 40 {
+		t.Fatalf("sous le plafond : %d entrées, %v", len(c.Entries), err)
+	}
+}
+
 // Without a key (the count): every entry, no content read.
 func TestCaptureWithoutKeyReadsNothing(t *testing.T) {
 	w := (&fakeWalker{}).file("/a", "123").file("/b", "456")

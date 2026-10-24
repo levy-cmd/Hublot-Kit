@@ -11,6 +11,7 @@ package fsview
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"os"
@@ -168,6 +169,54 @@ func mountTmpfs(t *testing.T, dir string) {
 		t.Skipf("mount tmpfs refusé (%v) : ce test demande CAP_SYS_ADMIN", err)
 	}
 	t.Cleanup(func() { unix.Unmount(dir, unix.MNT_DETACH) })
+}
+
+// Without any privilege (CI job go, scripts/test-linux.sh), on a mount that
+// is already there: /dev of the machine's "/" is a tmpfs (container) or a
+// devtmpfs (host), never the root's mount, and no pseudo filesystem.
+func TestWalkExistingMountNotTraversed(t *testing.T) {
+	host := openTestRoot(t, "/")
+	vs, err := walkAll(t, host, func(v visit) error {
+		if v.e.Type == TypeDir {
+			return fs.SkipDir
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("Walk : %v", err)
+	}
+	if v, ok := find(vs, "/dev"); !ok || v.e.Type != TypeMount || v.open != nil {
+		t.Fatalf("/dev : %+v (présent : %v), attendu mount", v.e, ok)
+	}
+	for _, v := range vs {
+		if strings.HasPrefix(v.p, "/dev/") {
+			t.Errorf("%s visité sous un montage", v.p)
+		}
+	}
+}
+
+// Review of tranche 8: the listings of the directories on the way down are
+// all held at once (a deep tree whose every level has thousands of long
+// links); their names and targets are capped in all, like the tar index.
+func TestWalkHeldNamesCap(t *testing.T) {
+	old := walkMaxHeld
+	t.Cleanup(func() { walkMaxHeld = old })
+	if walkMaxHeld != DefaultIndexLimits.MaxNameBytes {
+		t.Fatalf("plafond par défaut : %d, attendu celui de l'index tar (%d)", walkMaxHeld, DefaultIndexLimits.MaxNameBytes)
+	}
+	fsys, rp, _ := newRoot(t)
+	target := strings.Repeat("t", 1000)
+	for i := range 20 {
+		must(t, os.Symlink(target, filepath.Join(rp, fmt.Sprintf("l%02d", i))))
+	}
+	walkMaxHeld = 64 << 10
+	if _, err := walkAll(t, fsys, nil); err != nil {
+		t.Fatalf("sous le plafond : %v", err)
+	}
+	walkMaxHeld = 8 << 10 // 20 × ~1 Kio
+	if _, err := walkAll(t, fsys, nil); !errors.Is(err, ErrTooLarge) {
+		t.Fatalf("au-delà du plafond : %v, attendu ErrTooLarge", err)
+	}
 }
 
 func TestWalkMountNotTraversed(t *testing.T) {

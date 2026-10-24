@@ -8,6 +8,7 @@ import (
 	"archive/tar"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -96,6 +97,12 @@ func (sf *snapFixture) snapJob() (*snapJob, bool) { return sf.srv.snap.current("
 
 func newSnapFixture(t *testing.T, readOnly bool, docker dockerx.Client, fake *dockerx.Fake) *snapFixture {
 	t.Helper()
+	return newSnapFixtureStore(t, readOnly, docker, fake, nil)
+}
+
+// newSnapFixtureStore: store nil opens the real one in the data directory.
+func newSnapFixtureStore(t *testing.T, readOnly bool, docker dockerx.Client, fake *dockerx.Fake, store *snapshot.Store) *snapFixture {
+	t.Helper()
 	sf := &snapFixture{fixture: &fixture{docker: fake, fs: fsview.NewMemFS()}}
 	sf.walker = &memWalker{MemFS: sf.fs}
 	sf.fs.AddDir("/etc").AddFile("/etc/motd", []byte("bonjour")).AddFile("/etc/secret", []byte("s3cr3t-contenu")).AddLink("/etc/l", "motd")
@@ -114,9 +121,11 @@ func newSnapFixture(t *testing.T, readOnly bool, docker dockerx.Client, fake *do
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { d.Close() })
-	sf.store, err = snapshot.Open(d)
-	if err != nil {
-		t.Fatal(err)
+	sf.store = store
+	if store == nil {
+		if sf.store, err = snapshot.Open(d); err != nil {
+			t.Fatal(err)
+		}
 	}
 	t.Cleanup(func() { sf.store.Close() })
 	ap := filepath.Join(dir, "audit.log")
@@ -550,11 +559,31 @@ func TestSnapshotKeyRefused(t *testing.T) {
 	}
 	os.Chmod(p, 0o644)
 	rec := sf.do("POST", "/api/containers/web/snapshots", "", c)
-	if rec.Code != http.StatusInternalServerError || !strings.Contains(rec.Body.String(), "snapshot.key") {
+	// Review of tranche 8: a fixed detail that says it (e2267be), never the
+	// text of the error, which goes to the log, masked.
+	if rec.Code != http.StatusInternalServerError || !strings.Contains(rec.Body.String(), `"detail":"`+snapKeyDetail+`"`) ||
+		strings.Contains(rec.Body.String(), "0644") || strings.Contains(rec.Body.String(), "mode") {
 		t.Fatalf("clé ouverte au groupe : %d %s", rec.Code, rec.Body)
 	}
 	if n := sf.walker.walks.Load(); n != 0 {
 		t.Fatalf("%d parcours", n)
+	}
+}
+
+// A store refused at startup (or failing): fixed details, nothing of the
+// error's text (a path of the host, say) in any answer.
+func TestSnapshotStoreErrorsFixedDetail(t *testing.T) {
+	fake := snapFake(t)
+	bad := snapshot.Unavailable(errors.New("snapshots refused: /srv/hôte/secret-chemin"))
+	sf := newSnapFixtureStore(t, false, fake, fake, bad)
+	c := sf.session(t)
+	for _, m := range []struct{ method, path string }{
+		{"POST", "/api/containers/web/snapshots"}, {"GET", "/api/snapshots"}, {"DELETE", "/api/snapshots/" + snapshot.NewID()},
+	} {
+		rec := sf.do(m.method, m.path, "", c)
+		if rec.Code != http.StatusInternalServerError || strings.Contains(rec.Body.String(), "secret-chemin") {
+			t.Fatalf("%s %s : %d %s", m.method, m.path, rec.Code, rec.Body)
+		}
 	}
 }
 
