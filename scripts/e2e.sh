@@ -20,10 +20,16 @@ trap cleanup EXIT
 docker run --name hublot-e2e -e DB_PASSWORD=s3cr3t-e2e -e API_TOKEN=s3cr3t-1 -e API_TOKEN=s3cr3t-2 -e GREETING=bonjour alpine:3 sh -c 'echo "bonjour hublot" > /root/note.txt'
 # Diff de contenu (plan v0.2, tranche 7) : un conteneur arrêté qui remplace la
 # première ligne de /etc/motd et en ajoute une à la fin (avec un U+202E),
-# lancé par une étiquette de test posée sur alpine:3. Puis l'étiquette est retirée (Review Focus 5) : le nom du conteneur ne désigne
-# plus d'image, et le diff doit passer par l'ID. Rien d'autre n'est supprimé.
+# lancé par une étiquette de test posée sur alpine:3. Il retire aussi des
+# lignes de cinq fichiers (numéros de la gouttière après une suppression) :
+# au milieu, au début, à la fin, deux blocs voisins, une suppression suivie
+# d'un ajout. Puis l'étiquette est retirée (Review Focus 5) : le nom du
+# conteneur ne désigne plus d'image, et le diff doit passer par l'ID. Rien
+# d'autre n'est supprimé.
 docker tag alpine:3 hublot-e2e-motd
-docker run --name hublot-e2e-motd hublot-e2e-motd sh -c 'sed -i "1s/.*/Bienvenue sur Hublot/" /etc/motd && printf "ligne ajoutée par hublot \342\200\256gpj.exe\n" >> /etc/motd'
+docker run --name hublot-e2e-motd hublot-e2e-motd sh -c 'sed -i "1s/.*/Bienvenue sur Hublot/" /etc/motd && printf "ligne ajoutée par hublot \342\200\256gpj.exe\n" >> /etc/motd &&
+  sed -i 30,32d /etc/protocols && sed -i 1,2d /etc/passwd && sed -i 34,35d /etc/group &&
+  sed -i -e 5,6d -e 8,9d /etc/inittab && sed -i -e 5d -e "8a ajout hublot" /etc/profile'
 docker rmi -f hublot-e2e-motd >/dev/null
 if docker image inspect hublot-e2e-motd >/dev/null 2>&1; then echo "l'étiquette hublot-e2e-motd existe encore" >&2; exit 1; fi
 # Image à secrets témoins (spec v0.2 §5.4) : un argument de construction dans

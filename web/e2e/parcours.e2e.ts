@@ -189,6 +189,68 @@ test('connexion, liste, panneaux fichiers et diff', async ({ page }) => {
 	expect(imageCalls[0].split('/')[3]).toBe(radio.imageId.replace(/^sha256:/, ''));
 	await page.unroute(imageFile);
 
+	// The numbers RENDERED in the two gutters, row by row (review after
+	// tranche 10: shifted after a removed block). Each row of the view is
+	// matched with the number drawn at its height in each gutter; the
+	// number must point to a line of the same text, in the image (left) or
+	// in the container (right).
+	const hex = radio.imageId.replace(/^sha256:/, '');
+	const fileText = (url: string) =>
+		page.evaluate(async (u) => {
+			for (;;) {
+				const r = await fetch(u);
+				if (r.status === 200) return r.text();
+				if (r.status !== 202) throw new Error(`${u}: ${r.status}`);
+				await new Promise((ok) => setTimeout(ok, 500));
+			}
+		}, url);
+	const cases: [string, number][] = [
+		['/etc/protocols', 3], // in the middle
+		['/etc/passwd', 2], // at the start
+		['/etc/group', 2], // at the end
+		['/etc/inittab', 4], // two blocks, one line apart
+		['/etc/profile', 1] // a removal, then an addition
+	];
+	for (const [path, removedLines] of cases) {
+		await page.goto(`/?c=${motd}&panel=diff`);
+		await page.getByRole('link', { name: path, exact: true }).click();
+		await expect(content.locator('.cm-deletedLine')).toHaveCount(removedLines, { timeout: 30_000 });
+		const q = `?path=${encodeURIComponent(path)}`;
+		const imageLines = (await fileText(`/api/images/${hex}/fs/file${q}`)).split('\n');
+		const containerLines = (await fileText(`/api/containers/${motd}/fs/file${q}`)).split('\n');
+		const view = await content.evaluate((root) => {
+			const top = (e: Element) => Math.round(e.getBoundingClientRect().top);
+			const rows = [...root.querySelectorAll('.cm-line, .cm-deletedLine')].map((e) => ({
+				top: top(e),
+				text: e.textContent ?? '',
+				removed: e.classList.contains('cm-deletedLine')
+			}));
+			const cells = [...root.querySelectorAll('.hk-num')].map((g) =>
+				[...g.querySelectorAll('.cm-gutterElement')]
+					.filter((el) => (el as HTMLElement).style.visibility !== 'hidden')
+					.flatMap((el) => [...el.querySelectorAll(':scope > div > div')])
+					.map((d) => ({ top: top(d), text: d.textContent ?? '' }))
+			);
+			return { rows, cells };
+		});
+		expect(view.cells).toHaveLength(2);
+		const at = (cells: { top: number; text: string }[], y: number) => cells.find((c) => Math.abs(c.top - y) <= 2)?.text;
+		const seen = view.rows.map((r) => {
+			const a = at(view.cells[0], r.top);
+			const b = at(view.cells[1], r.top);
+			const image = a && a !== '+' ? imageLines[Number(a) - 1] : null;
+			const container = b && b !== '−' ? containerLines[Number(b) - 1] : null;
+			return { row: r.text, removed: r.removed, a, b, image, container };
+		});
+		const wrong = seen.filter(
+			(s) =>
+				s.a === undefined ||
+				s.b === undefined ||
+				(s.removed ? s.b !== '−' || s.image !== s.row : s.container !== s.row || (s.a !== '+' && s.image !== s.row))
+		);
+		expect(wrong, `${path}: ${JSON.stringify(wrong.slice(0, 3))}`).toEqual([]);
+	}
+
 	// Another container drops the diff shown.
 	const other = await page.getByRole('link', { name: 'hublot-e2e', exact: true }).first().getAttribute('href');
 	expect(other).not.toMatch(/[?&](diff|change)=/);
