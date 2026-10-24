@@ -24,6 +24,7 @@ import (
 	"github.com/levy-cmd/hublot-kit/internal/config"
 	"github.com/levy-cmd/hublot-kit/internal/dockerx"
 	"github.com/levy-cmd/hublot-kit/internal/fsview"
+	"github.com/levy-cmd/hublot-kit/internal/snapshot"
 	"github.com/levy-cmd/hublot-kit/internal/web"
 )
 
@@ -35,6 +36,7 @@ var selfCgroup = func() ([]byte, error) { return os.ReadFile("/proc/self/cgroup"
 
 const usage = `Usage: hublot [options]
        hublot reset-token [--data-dir DIR]
+       hublot rotate-snapshot-key [--data-dir DIR]
        hublot --version
 
 Options (each has a HUBLOT_* equivalent):
@@ -46,8 +48,10 @@ Options (each has a HUBLOT_* equivalent):
   --public-origin URL    public origin behind a reverse proxy
   --max-conns-per-ip N   connections at once per source address (default 64)
 
-Subcommand:
+Subcommands (agent stopped):
   reset-token            create a new access token and invalidate the old one
+  rotate-snapshot-key    create a new snapshot key: older snapshots then
+                         compare by their metadata only
 `
 
 func main() {
@@ -64,7 +68,8 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 		return 0
 	}
 	resetToken := len(args) > 0 && args[0] == "reset-token"
-	if resetToken {
+	rotateKey := len(args) > 0 && args[0] == "rotate-snapshot-key"
+	if resetToken || rotateKey {
 		args = args[1:]
 	}
 	cfg, err := config.Load(args, getenv)
@@ -76,10 +81,12 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 		fmt.Fprintln(stderr, "configuration:", err)
 		return 2
 	}
-	if err := prepareDataDir(cfg.DataDir); err != nil {
+	dataDir, err := prepareDataDir(cfg.DataDir)
+	if err != nil {
 		fmt.Fprintf(stderr, "data directory %s: %v\n", cfg.DataDir, err)
 		return 1
 	}
+	defer dataDir.Close()
 
 	if resetToken {
 		tok, err := auth.ResetToken(cfg.DataDir)
@@ -88,6 +95,16 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 			return 1
 		}
 		fmt.Fprintf(stdout, "New access token (shown only once): %s\n", tok)
+		return 0
+	}
+
+	if rotateKey {
+		id, err := snapshot.RotateKey(dataDir)
+		if err != nil {
+			fmt.Fprintln(stderr, "rotate-snapshot-key:", err)
+			return 1
+		}
+		fmt.Fprintf(stdout, "New snapshot key: %s. Snapshots taken with the old key now compare by their metadata only.\n", id)
 		return 0
 	}
 
@@ -152,12 +169,16 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 		fmt.Fprintln(stderr, "WARNING: private cgroup namespace (/proc/self/cgroup = 0::/): the explorer will answer container_changed. Start the agent with --cgroupns=host.")
 	}
 
+	snapshots := openSnapshots(dataDir, stderr)
+	defer snapshots.Close()
+
 	srv.Handler = api.New(api.Deps{
 		Docker: docker, Verifier: verifier, Audit: auditLog, Version: version,
 		Sessions: auth.NewSessions(auth.SessionTTL, time.Now),
 		Limiter:  auth.NewLimiter(5, time.Minute, time.Now),
 		ReadOnly: cfg.ReadOnly, TLS: cfg.TLS(), PublicOrigin: cfg.PublicOrigin,
 		Static: web.Handler(), ScriptHashes: web.ScriptHashes(),
+		Snapshots: snapshots,
 	})
 	errc := make(chan error, 1)
 	go func() {
@@ -185,6 +206,21 @@ func run(ctx context.Context, args []string, getenv func(string) string, stdout,
 		}
 	}
 	return 0
+}
+
+// openSnapshots opens the snapshot store and its key (spec v0.2 §5.7). A
+// refusal does not stop the agent: the snapshot routes answer internal with
+// the reason, and the warning says it now.
+func openSnapshots(dataDir *os.File, stderr io.Writer) *snapshot.Store {
+	st, err := snapshot.Open(dataDir)
+	if err != nil {
+		fmt.Fprintf(stderr, "WARNING: snapshots disabled: %v\n", err)
+		return snapshot.Unavailable(fmt.Errorf("snapshots disabled at startup: %w", err))
+	}
+	if _, _, err := st.Key(); err != nil {
+		fmt.Fprintf(stderr, "WARNING: snapshots will be refused: %v\n", err)
+	}
+	return st
 }
 
 // newServer is the agent's HTTP server, with the delays of api.ConfigureServer
@@ -327,30 +363,38 @@ func (c *limitedConn) Read(p []byte) (int, error) {
 // lives there: a directory pre-created by someone else, e.g. /tmp/hublot,
 // would let its owner plant their own token) and must not be writable by
 // group or others.
-func prepareDataDir(dir string) error {
+func prepareDataDir(dir string) (*os.File, error) {
 	dir = filepath.Clean(dir)
 	if err := os.MkdirAll(filepath.Dir(dir), 0o700); err != nil {
-		return err
+		return nil, err
 	}
 	created := true
 	if err := os.Mkdir(dir, 0o700); errors.Is(err, fs.ErrExist) {
 		created = false
 	} else if err != nil {
-		return err
+		return nil, err
 	}
 	d, err := os.OpenFile(dir, os.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NOFOLLOW, 0)
 	if errors.Is(err, syscall.ELOOP) || errors.Is(err, syscall.ENOTDIR) {
 		// The open already refused; Lstat only picks the message (Linux
 		// answers ELOOP for a link, macOS ENOTDIR).
 		if li, lerr := os.Lstat(dir); lerr == nil && li.Mode()&fs.ModeSymlink != 0 {
-			return errors.New("it is a symbolic link: refused; use a dedicated directory instead, for example /var/lib/hublot-kit")
+			return nil, errors.New("it is a symbolic link: refused; use a dedicated directory instead, for example /var/lib/hublot-kit")
 		}
-		return errors.New("not a directory")
+		return nil, errors.New("not a directory")
 	}
 	if err != nil {
-		return err
+		return nil, err
 	}
-	defer d.Close()
+	if err := checkDataDir(d, created); err != nil {
+		d.Close()
+		return nil, err
+	}
+	return d, nil
+}
+
+// checkDataDir runs the checks of prepareDataDir on its descriptor.
+func checkDataDir(d *os.File, created bool) error {
 	fi, err := d.Stat()
 	if err != nil {
 		return err

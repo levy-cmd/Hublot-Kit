@@ -54,8 +54,24 @@ type figuresJSON struct {
 	Files      *filesJSON `json:"files"`
 }
 
-// filesJSON: source "index" here; "snapshot" and "count" come with the
-// snapshots (spec v0.2 §5.7, plan v0.2 tranche 8).
+// filesFigure is the "Files" figure, at no cost (spec v0.2 §5.3): the index
+// of a stopped container already served, else the last snapshot of the
+// container, with its date, else a count still kept (count.go), else nil
+// (the interface offers the count).
+func (s *server) filesFigure(info dockerx.ContainerInfo) *filesJSON {
+	if n, at, ok := s.d.Views.CachedCount(info); ok {
+		return &filesJSON{Count: n, Source: "index", At: at.UTC().Format(time.RFC3339Nano)}
+	}
+	if h, ok := s.latestSnapshot(info.ID); ok {
+		return &filesJSON{Count: h.Entries, Source: "snapshot", At: h.CreatedAt.UTC().Format(time.RFC3339Nano)}
+	}
+	if r, ok := s.snap.countByID(info.ID); ok {
+		return &filesJSON{Count: r.n, Source: "count", At: r.at.UTC().Format(time.RFC3339Nano)}
+	}
+	return nil
+}
+
+// filesJSON: source "index", "snapshot" or "count".
 type filesJSON struct {
 	Count  int    `json:"count"`
 	Source string `json:"source"`
@@ -202,9 +218,7 @@ func (s *server) figures(c *figureCache) http.HandlerFunc {
 			fail(err)
 			return
 		}
-		if n, at, ok := s.d.Views.CachedCount(info); ok {
-			out.Files = &filesJSON{Count: n, Source: "index", At: at.UTC().Format(time.RFC3339Nano)}
-		}
+		out.Files = s.filesFigure(info)
 		writeJSON(w, http.StatusOK, out)
 	}
 }

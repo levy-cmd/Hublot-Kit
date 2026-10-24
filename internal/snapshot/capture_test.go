@@ -368,22 +368,59 @@ func (slowWalker) Walk(ctx context.Context, fn func(string, fsview.Entry, func()
 
 // rawSparse is a PAX entry declared sparse, of logical size 2^60, with 5
 // bytes of data: GNU.sparse.* records (format 0.1).
+// Written by hand: archive/tar's writer refuses GNU.sparse records.
 func rawSparse(t *testing.T) []byte {
 	t.Helper()
-	var b bytes.Buffer
-	tw := tar.NewWriter(&b)
-	h := &tar.Header{Name: "/bomb", Typeflag: tar.TypeReg, Size: 5, Mode: 0o644, Format: tar.FormatPAX,
-		PAXRecords: map[string]string{"GNU.sparse.map": "0,5", "GNU.sparse.numblocks": "1", "GNU.sparse.size": strconv.FormatInt(1<<60, 10)}}
-	if err := tw.WriteHeader(h); err != nil {
-		t.Fatal(err)
+	rec := paxRecord("GNU.sparse.map", "0,5") + paxRecord("GNU.sparse.numblocks", "1") +
+		paxRecord("GNU.sparse.size", strconv.FormatInt(1<<60, 10))
+	var out []byte
+	out = append(out, rawHeader("PaxHeaders/bomb", tar.TypeXHeader, int64(len(rec)))...)
+	out = append(out, padBlock([]byte(rec))...)
+	out = append(out, rawHeader("bomb", tar.TypeReg, 5)...)
+	out = append(out, padBlock([]byte("hello"))...)
+	out = append(out, rawHeader("after", tar.TypeReg, 1)...)
+	out = append(out, padBlock([]byte("A"))...)
+	return append(out, make([]byte, 1024)...)
+}
+
+func rawHeader(name string, typ byte, size int64) []byte {
+	b := make([]byte, 512)
+	copy(b[0:100], name)
+	copy(b[100:108], "0000644\x00")
+	copy(b[108:116], "0000000\x00")
+	copy(b[116:124], "0000000\x00")
+	copy(b[124:136], fmt.Sprintf("%011o\x00", size))
+	copy(b[136:148], "14531464000\x00")
+	b[156] = typ
+	copy(b[257:263], "ustar\x00")
+	copy(b[263:265], "00")
+	for i := 148; i < 156; i++ {
+		b[i] = ' '
 	}
-	tw.Write([]byte("hello"))
-	if err := tw.WriteHeader(&tar.Header{Name: "/after", Typeflag: tar.TypeReg, Size: 1, Mode: 0o644}); err != nil {
-		t.Fatal(err)
+	sum := 0
+	for _, c := range b {
+		sum += int(c)
 	}
-	tw.Write([]byte("A"))
-	tw.Close()
-	return b.Bytes()
+	copy(b[148:156], fmt.Sprintf("%06o\x00 ", sum))
+	return b
+}
+
+func paxRecord(k, v string) string {
+	n := len(k) + len(v) + 3
+	for {
+		s := strconv.Itoa(n) + " " + k + "=" + v + "\n"
+		if len(s) == n {
+			return s
+		}
+		n = len(s)
+	}
+}
+
+func padBlock(b []byte) []byte {
+	if r := len(b) % 512; r != 0 {
+		b = append(b, make([]byte, 512-r)...)
+	}
+	return b
 }
 
 func TestCaptureArchiveSparse(t *testing.T) {

@@ -20,7 +20,24 @@ const (
 	TypeDir     EntryType = "dir"
 	TypeSymlink EntryType = "symlink"
 	TypeOther   EntryType = "other" // device, FIFO, socket
+	// Entries of a Walk that are not walked (spec v0.2 §5.7), never returned
+	// by List: a mount point (another mount ID than the root's), and a
+	// pseudo filesystem or a directory that could not be opened.
+	TypeMount        EntryType = "mount"
+	TypeInaccessible EntryType = "inaccessible"
 )
+
+// Walker walks a whole container tree for a snapshot (spec v0.2 §5.7):
+// depth first, the names of each directory sorted, so that paths come in
+// the order of their components ("/a", "/a/b", "/a-b"). fn gets each path
+// but "/", its entry, and for a regular file an open func, valid while fn
+// runs (nil for anything else). fn may return fs.SkipDir (for a directory:
+// not walked), fs.SkipAll (end, no error) or any error (end, that error).
+// Walk returns ErrTruncated once done if a directory had more than
+// MaxEntries names: the walk is then partial.
+type Walker interface {
+	Walk(ctx context.Context, fn func(p string, e Entry, open func() (io.ReadCloser, error)) error) error
+}
 
 type Entry struct {
 	Name       string
@@ -94,6 +111,7 @@ var (
 	ErrContainerChanged = errors.New("the container changed")
 	ErrTooLarge         = errors.New("too large")
 	ErrIndexing         = errors.New("indexing in progress")
+	ErrTruncated        = errors.New("a directory has more entries than the listing cap: partial walk")
 )
 
 // CleanPath returns the absolute, lexically cleaned form of a container path.

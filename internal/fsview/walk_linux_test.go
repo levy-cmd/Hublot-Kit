@@ -222,26 +222,28 @@ func TestWalkStaysInRoot(t *testing.T) {
 	must(t, os.Symlink(marker, filepath.Join(rp, "d", "secret")))
 	must(t, os.Symlink(filepath.Dir(marker), filepath.Join(rp, "d", "e", "hostdir")))
 	must(t, os.Symlink("../../../..", filepath.Join(rp, "up")))
-	vs, err := walkAll(t, fsys, nil)
-	if err != nil {
-		t.Fatalf("Walk : %v", err)
-	}
 	read := map[string]string{}
-	for _, v := range vs {
-		if v.p != CleanPath(v.p) || v.p == "/" {
-			t.Errorf("chemin %q : pas un chemin propre sous la racine", v.p)
-		}
+	vs, err := walkAll(t, fsys, func(v visit) error {
 		if v.open == nil {
-			continue
+			return nil
 		}
 		rc, err := v.open()
 		if err != nil {
 			t.Errorf("open(%s) : %v", v.p, err)
-			continue
+			return nil
 		}
 		b, _ := io.ReadAll(rc)
 		rc.Close()
 		read[v.p] = string(b)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("Walk : %v", err)
+	}
+	for _, v := range vs {
+		if v.p != CleanPath(v.p) || v.p == "/" {
+			t.Errorf("chemin %q : pas un chemin propre sous la racine", v.p)
+		}
 	}
 	for p, c := range read {
 		if c == "HOST-SECRET" || created[p] != c {
@@ -300,17 +302,41 @@ func TestWalkLinkRace(t *testing.T) {
 	}
 }
 
+var atime2001 = time.Date(2001, 1, 1, 0, 0, 0, 0, time.UTC)
+
+// ageAtime sets the atime of f to 2001, its mtime to now, and returns it.
+func ageAtime(t *testing.T, f string) {
+	t.Helper()
+	must(t, unix.UtimesNanoAt(unix.AT_FDCWD, f, []unix.Timespec{unix.NsecToTimespec(atime2001.UnixNano()), unix.NsecToTimespec(time.Now().UnixNano())}, 0))
+}
+
+func atimeOf(t *testing.T, f string) time.Time {
+	t.Helper()
+	var st unix.Stat_t
+	must(t, unix.Stat(f, &st))
+	return time.Unix(st.Atim.Unix()).UTC()
+}
+
 // relatime updates an atime older than the mtime on any read: the atime is
-// aged first, else the test would pass without O_NOATIME.
+// aged first, else the test would pass without O_NOATIME. A plain read of
+// a sibling must change it (else the mount is noatime: no conclusion).
 func TestWalkNoAtime(t *testing.T) {
 	requireRoot(t)
 	rp := t.TempDir()
-	mountTmpfs(t, rp)
+	if err := unix.Mount("tmpfs", rp, "tmpfs", 0, "size=4m"); err == nil {
+		t.Cleanup(func() { unix.Unmount(rp, unix.MNT_DETACH) })
+	}
 	fsys := openTestRoot(t, rp)
 	f := filepath.Join(rp, "f")
 	must(t, os.WriteFile(f, []byte("contenu"), 0o644))
-	old := time.Date(2001, 1, 1, 0, 0, 0, 0, time.UTC)
-	must(t, unix.UtimesNanoAt(unix.AT_FDCWD, f, []unix.Timespec{unix.NsecToTimespec(old.UnixNano()), unix.NsecToTimespec(time.Now().UnixNano())}, 0))
+	ageAtime(t, f)
+	probe := filepath.Join(rp, "probe")
+	must(t, os.WriteFile(probe, []byte("témoin"), 0o644))
+	ageAtime(t, probe)
+	os.ReadFile(probe)
+	if atimeOf(t, probe).Equal(atime2001) {
+		t.Skip("une lecture sans O_NOATIME ne change pas l'atime ici (montage noatime) : test non concluant")
+	}
 	_, err := walkAll(t, fsys, func(v visit) error {
 		if v.p == "/f" {
 			rc, err := v.open()
@@ -325,10 +351,8 @@ func TestWalkNoAtime(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Walk : %v", err)
 	}
-	var st unix.Stat_t
-	must(t, unix.Stat(f, &st))
-	if at := time.Unix(st.Atim.Unix()).UTC(); !at.Equal(old) {
-		t.Fatalf("atime %v après la lecture, attendu %v (O_NOATIME absent)", at, old)
+	if at := atimeOf(t, f); !at.Equal(atime2001) {
+		t.Fatalf("atime %v après la lecture, attendu %v (O_NOATIME absent)", at, atime2001)
 	}
 }
 

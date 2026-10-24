@@ -20,6 +20,7 @@ import (
 	"github.com/levy-cmd/hublot-kit/internal/files"
 	"github.com/levy-cmd/hublot-kit/internal/fsview"
 	"github.com/levy-cmd/hublot-kit/internal/secrets"
+	"github.com/levy-cmd/hublot-kit/internal/snapshot"
 )
 
 type Deps struct {
@@ -40,6 +41,9 @@ type Deps struct {
 	PublicOrigin string       // normalized, or ""
 	Static       http.Handler // embedded UI; nil in API tests
 	ScriptHashes []string     // CSP sources of the UI's inline scripts (web.ScriptHashes)
+	// Snapshots is the store of spec v0.2 §5.7 (snapshot.Unavailable when
+	// refused at startup); nil: the snapshot routes answer internal.
+	Snapshots *snapshot.Store
 }
 
 // logClock is the clock used by throttleLog; tests may replace it before New.
@@ -84,6 +88,7 @@ type server struct {
 	// F6: limits of the logs streams, and one slot per stream open.
 	logLimits logLimits
 	streams   *streamSlots
+	snap      *snapService // snapshots.go, count.go
 }
 
 // Spec §13 (FUSE): at most 4 file operations at once per container, each one
@@ -109,6 +114,7 @@ func New(d Deps) http.Handler {
 			Open: d.OpenFS, Forget: d.Views.Forget},
 		logLimits: defaultLogLimits,
 		streams:   newStreamSlots(defaultLogLimits.MaxStreams),
+		snap:      newSnapService(),
 	}
 	s.loginLog.write = s.writeAudit
 	session := func(h http.HandlerFunc) http.Handler { return requireSession(d.Sessions, h) }
