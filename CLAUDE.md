@@ -6,6 +6,7 @@ Interface web pour explorer l'intérieur des conteneurs Docker d'un serveur. Age
 - Spec technique (fait foi) : `docs/superpowers/specs/2026-10-07-hublot-kit-v0.1-design.md`
 - Résultats du spike : `docs/superpowers/spikes/2026-10-07-resultats-spike.md`
 - Plans par phase : `docs/superpowers/plans/`
+- Registres de phase (`.claude/handoff/`) et définitions d'agents (`.claude/agents/`) : copies locales, ignorées par Git ; leur source est le dépôt privé `levy-cmd/Hublot-Kit-registres` (`handoff/` et `agents/` à sa racine). Sur une machine neuve : `git clone git@github.com:levy-cmd/Hublot-Kit-registres.git /tmp/hk-registres && mkdir -p .claude && cp -R /tmp/hk-registres/handoff /tmp/hk-registres/agents .claude/`. Une entrée de registre écrite en local se pousse aussi dans ce dépôt privé.
 
 ## Règles durables
 - Accès aux fichiers d'un conteneur : uniquement par les mécanismes de la spec §5 (pidfd + cgroup, `pathrs-lite`, fichiers réguliers, refus `fstatfs` des pseudo-fs, chemins d'écriture sans lien). Jamais `filepath.Join` / `os.Open` sur un chemin du conteneur.
@@ -16,7 +17,7 @@ Interface web pour explorer l'intérieur des conteneurs Docker d'un serveur. Age
 
 ## Orchestration (tranches verticales, plan adaptatif)
 - **Tranche verticale** : une fonctionnalité se livre de bout en bout (code, tests, doc, vérification sur la cible) ; elle n'est pas répartie en couches entre plusieurs tâches.
-- **Fixe / révisable** : l'objectif métier et les critères d'acceptation, écrits dans le plan, ne changent pas sans l'accord de l'utilisateur. Le plan d'exécution peut évoluer selon les résultats ; chaque révision est consignée au registre de la phase (`.claude/handoff/<phase>.registre.md`) avec sa raison.
+- **Fixe / révisable** : l'objectif métier et les critères d'acceptation, écrits dans le plan, ne changent pas sans l'accord de l'utilisateur. Le plan d'exécution peut évoluer selon les résultats ; chaque révision est consignée au registre de la phase (`.claude/handoff/<phase>.registre.md`, local, source dans le dépôt privé) avec sa raison.
 - **Contrat avant parallèle** : avant deux implémentations en parallèle, écrire au registre le contrat partagé (formats, interfaces) et la propriété des fichiers. Un fichier n'a qu'un seul écrivain à la fois ; le travail parallèle se fait en worktree ; la fusion revient au coordinateur, suivie de `make test`.
 - **Terminé** veut dire : tests pertinents exécutés, revue `relecteur` et revue Codex (`codex:codex-rescue` en lecture seule) concordantes ou arbitrées au registre, CI verte si la branche est poussée.
 - **Déléguer quand ça rapporte** (travail vraiment parallèle, contexte à isoler, regard indépendant), jamais pour multiplier les agents. Chaque délégation donne : objectif, périmètre et exclusions, contexte, critères d'acceptation, rapport attendu.
@@ -25,4 +26,4 @@ Interface web pour explorer l'intérieur des conteneurs Docker d'un serveur. Age
 - **Hygiène** : après un agent qui crée des branches, vérifier la branche du dépôt principal. Une mutation qui affaiblit une garde de sécurité se joue sur une copie (ou par un faux journal), jamais dans le dépôt : le classifieur la refuse, et on ne la contourne pas.
 - **Suppressions** : un agent ne supprime que ce qu'il a créé lui-même dans sa tâche (conteneurs, volumes, images, fichiers, branches). Jamais de `docker image prune`, `docker system prune` ni de nettoyage global sans l'accord de l'utilisateur.
 - **Correctifs de sécurité** : le dépôt est public. Une branche de correctif de faille ne se pousse qu'avec ses correctifs et `make test` au vert, jamais avec les seuls tests rouges, qui décriraient une attaque encore ouverte.
-- **Rôles** : la session principale coordonne ; `implementeur` écrit (`.claude/agents/implementeur.md`) ; `relecteur` relit sans écrire (`.claude/agents/relecteur.md`). Les prompts ne recopient pas ces règles, ils donnent la tâche, les fichiers possédés et le contrat.
+- **Rôles** : la session principale coordonne ; `implementeur` écrit (`.claude/agents/implementeur.md`) ; `relecteur` relit sans écrire (`.claude/agents/relecteur.md`) ; ces deux définitions sont locales, source dans le dépôt privé. Les prompts ne recopient pas ces règles, ils donnent la tâche, les fichiers possédés et le contrat.

@@ -128,7 +128,7 @@ Aucun n'est retiré ; chacun a une seule tâche ou tranche qui le prouve.
 | Verrou : seul un lancement confirmé sur un tag publie ; job `verify` : signatures, sommes, SBOM SPDX des archives et de l'image, plateformes (7) | tranche C (écrit) ; tâche 9, étapes 2 et 3 (éprouvé) |
 | Doc « Verify the release » conforme à `verify-release.sh` (identité, émetteur, couverture de la signature) (7, revue) | tranche C, étapes 1 et 5 |
 | Spec §8, §10, §13 à jour (8) | tâche 8, étape 1 |
-| Audit avant publication : `gitleaks`, `.claude/handoff/*`, adresses des commits (8) | tâche 8, étape 2 |
+| Audit avant publication : `gitleaks`, `.claude/handoff/*` (retiré du suivi le 2026-10-24, désormais dans le dépôt privé `levy-cmd/Hublot-Kit-registres`), adresses des commits (8) | tâche 8, étape 2 |
 | Revue de toute la branche (8) | tâche 8, étape 3 |
 
 ## Global Constraints
@@ -3411,7 +3411,7 @@ gh pr create --base main --title "docs : constats du Lancement (v0.1.0)" --body 
 
 #### Constats des tranches A, B et C
 
-- Au registre de la phase (`.claude/handoff/phase-lancement.registre.md`), une entrée par tranche (règles « Orchestration »).
+- Au registre de la phase (`.claude/handoff/phase-lancement.registre.md`, désormais dans le dépôt privé `levy-cmd/Hublot-Kit-registres`), une entrée par tranche (règles « Orchestration »).
 
 #### Constats de la tâche 8
 
@@ -3422,7 +3422,7 @@ gh pr create --base main --title "docs : constats du Lancement (v0.1.0)" --body 
   - `gitleaks` v8.30.1 (conteneur sur `hk-ubuntu`, dépôt monté en lecture seule, image supprimée ensuite) sur tout l'historique (`--all`, branches distantes comprises) : **238 commits analysés, `no leaks found`**, rapport JSON vide (`[]`). Les 240 commits hors fusions moins 2 qui ne font que supprimer (`dd5e116`, `9521bd3`) ; gitleaks ne lit que les lignes ajoutées.
   - Auteurs et adresses : `Livaille An-nour <51993811+levy-cmd@users.noreply.github.com>` (adresse « noreply » de GitHub, aucune adresse personnelle) et `GitHub <noreply@github.com>` (fusions faites dans l'interface web). Le nom `levy` figure aussi dans `.claude/handoff/spike-semaine-1.md` (`de: levy`).
   - Aucun PDF ni `.superpowers` dans l'historique ; aucun chemin `/Users/…`, `/private/…` ni adresse IP réelle (seulement des adresses d'exemple dans les tests).
-  - Deviendraient publics, à trancher par l'utilisateur avant la tâche 10, étape 5 : `CLAUDE.md`, `.claude/agents/*` et `.claude/handoff/*` (cinq fichiers suivis, plus trois passations supprimées mais présentes dans l'historique) : orchestration par agents (Claude, Codex), revues, défauts trouvés puis corrigés, refus du classifieur de permissions ; le lien `claude.ai` du cahier des charges (spec, ligne 5 : privé, inaccessible au public, mais visible) ; des détails de la machine de développement (`/opt/homebrew/bin`, `$HOME/.docker/run/docker.sock`, disque du Mac à 91 %, noms et versions des VM `hk-ubuntu` et `hk-fedora`, `~/.lima/hk-ubuntu/lima.yaml`) ; l'état du compte GitHub dans le plan (compte `User`, offre Free, dépôt privé) ; toutes les branches poussées (dont `phase/observation-t7-wip`) et les PR, dont la PR brouillon #6.
+  - Deviendraient publics, à trancher par l'utilisateur avant la tâche 10, étape 5 : `CLAUDE.md`, `.claude/agents/*` et `.claude/handoff/*` (cinq fichiers suivis, plus trois passations supprimées mais présentes dans l'historique) : orchestration par agents (Claude, Codex), revues, défauts trouvés puis corrigés, refus du classifieur de permissions ; le lien `claude.ai` du cahier des charges (spec, ligne 5 : privé, inaccessible au public, mais visible) ; des détails de la machine de développement (`/opt/homebrew/bin`, `$HOME/.docker/run/docker.sock`, disque du Mac à 91 %, noms et versions des VM `hk-ubuntu` et `hk-fedora`, `~/.lima/hk-ubuntu/lima.yaml`) ; l'état du compte GitHub dans le plan (compte `User`, offre Free, dépôt privé) ; toutes les branches poussées (dont `phase/observation-t7-wip`) et les PR, dont la PR brouillon #6. Suite (2026-10-24, décision de l'utilisateur) : `.claude/agents/` et `.claude/handoff/` sont retirés du suivi et vivent dans le dépôt privé `levy-cmd/Hublot-Kit-registres` ; l'historique n'est pas réécrit.
 - **Revue de branche** (étape 3) et relecture (étape 5) : à faire par la session principale (`relecteur` puis Codex).
 - **Cases cochées** : avant la tâche 1, tâches 1 à 6, tranches A à C (validées au registre), et les étapes 1, 2 et 4 de cette tâche. La mutation « retirer `--cgroupns=host` » de la tâche 4 n'a pas été jouée (refusée par le classifieur de permissions) : le test de la garde cgroup de la tranche A la remplace (registre).
 
