@@ -18,7 +18,7 @@
 # protège les jetons de signature, pas ce que npm produit) ;
 # le texte de la page de release ; les bundles .sigstore.json eux-mêmes (absents
 # de checksums.txt : chacun porte son certificat, vérifié par cosign) ; aucune
-# provenance SLSA n'est publiée en v0.1.
+# provenance SLSA n'est publiée en v0.1 et v0.2.
 #
 # Usage : scripts/verify-release.sh vX.Y.Z[-rc.N] [IMAGE_TAG_EN_PLUS ...]
 #   scripts/verify-release.sh v0.1.0-rc.1

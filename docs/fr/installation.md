@@ -24,10 +24,11 @@ docker run -d --name hublot-kit \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -v hublot-data:/data \
   -p 127.0.0.1:7878:7878 \
-  ghcr.io/levy-cmd/hublot-kit:0.1
+  ghcr.io/levy-cmd/hublot-kit:0.2
 ```
 
-`0.1` suit les correctifs 0.1.x ; `0.1.0` ne bouge jamais. Il n'y a pas d'étiquette `latest`.
+`0.2` suit les correctifs 0.2.x ; `0.2.0` ne bouge jamais. Il n'y a pas d'étiquette `latest`. `0.1` reste
+disponible pour la série 0.1.x.
 
 ### À quoi sert chaque option
 
@@ -104,7 +105,7 @@ L'alternative au conteneur : le binaire statique, lancé en root par systemd. V�
 ([Vérifier la release](#vérifier-la-release)). Utilisez `amd64` ou `arm64`.
 
 ```sh
-V=0.1.2
+V=0.2.0
 ARCH=amd64
 curl -fLO "https://github.com/levy-cmd/Hublot-Kit/releases/download/v$V/hublot-kit_${V}_linux_${ARCH}.tar.gz"
 tar -xzf "hublot-kit_${V}_linux_${ARCH}.tar.gz"
@@ -200,7 +201,7 @@ Avec Docker, tirez l'image, supprimez le conteneur et relancez la commande de [D
 `hublot-data` garde le jeton.
 
 ```sh
-docker pull ghcr.io/levy-cmd/hublot-kit:0.1
+docker pull ghcr.io/levy-cmd/hublot-kit:0.2
 docker rm -f hublot-kit
 ```
 
@@ -255,7 +256,7 @@ La signature de `checksums.txt` suivie de la somme suffit ; chaque archive a aus
 (`<archive>.sigstore.json`), contrôle direct facultatif par la même commande `cosign verify-blob`.
 
 ```sh
-V=0.1.2
+V=0.2.0
 ARCH=amd64
 BASE="https://github.com/levy-cmd/Hublot-Kit/releases/download/v$V"
 curl -fLO "$BASE/hublot-kit_${V}_linux_${ARCH}.tar.gz"
@@ -273,16 +274,16 @@ sha256sum --ignore-missing -c checksums.txt
 
 L'image est signée par son empreinte, pour linux/amd64 et linux/arm64, et porte une attestation SBOM. La signature
 couvre l'index de l'image, qui désigne par empreinte l'image de chaque plateforme et son attestation SBOM. L'identité
-ci-dessous accepte toute release `v0.1.N` et refuse une pré-version (`-rc.N`).
+ci-dessous accepte toute release `v0.2.N` et refuse une pré-version (`-rc.N`).
 
 ```sh
 cosign verify \
-  --certificate-identity-regexp '^https://github\.com/levy-cmd/Hublot-Kit/\.github/workflows/release\.yml@refs/tags/v0\.1\.[0-9]+$' \
+  --certificate-identity-regexp '^https://github\.com/levy-cmd/Hublot-Kit/\.github/workflows/release\.yml@refs/tags/v0\.2\.[0-9]+$' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  ghcr.io/levy-cmd/hublot-kit:0.1
-docker buildx imagetools inspect ghcr.io/levy-cmd/hublot-kit:0.1 --format '{{ json .SBOM }}'
+  ghcr.io/levy-cmd/hublot-kit:0.2
+docker buildx imagetools inspect ghcr.io/levy-cmd/hublot-kit:0.2 --format '{{ json .SBOM }}'
 ```
 
-Pour lancer exactement l'image vérifiée, remplacez `:0.1` dans la commande de [Docker](#docker-recommandé) par
+Pour lancer exactement l'image vérifiée, remplacez `:0.2` dans la commande de [Docker](#docker-recommandé) par
 l'empreinte de l'image vérifiée : `cosign verify` affiche du JSON, où `critical.image.docker-manifest-digest` la
 donne (`sha256:…`). La référence devient `ghcr.io/levy-cmd/hublot-kit@sha256:…`.

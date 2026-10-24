@@ -13,7 +13,7 @@ cd "$(dirname "$0")/.."
 . scripts/release-lib.sh
 errors=0
 err() { echo "ERREUR : $*" >&2; errors=$((errors + 1)); }
-block() { awk '/^docker run -d --name hublot-kit/{on=1} on{print} on&&/ghcr\.io\/levy-cmd\/hublot-kit:0\.1$/{exit}' "$1"; }
+block() { awk '/^docker run -d --name hublot-kit/{on=1} on{print} on&&/ghcr\.io\/levy-cmd\/hublot-kit:0\.2$/{exit}' "$1"; }
 code_blocks() { awk '/^ *```/{inside=!inside; next} inside' "$1"; }
 # Ancres des titres d'un fichier Markdown, hors blocs de code : minuscules,
 # ponctuation retirée (lettres accentuées gardées), espaces changés en tirets.
@@ -69,7 +69,7 @@ done
 gr=.goreleaser.yaml
 img=$(awk '/^dockers_v2:/{d=1} d&&/images:/{gsub(/.*\[|\].*/,""); print; exit}' "$gr")
 [ "$img" = ghcr.io/levy-cmd/hublot-kit ] || err "$gr : image « $img », la doc cite ghcr.io/levy-cmd/hublot-kit"
-grep -qF -- '- "{{ if not .Prerelease }}{{ .Major }}.{{ .Minor }}{{ end }}"' "$gr" || err "$gr : pas d'étiquette X.Y, que cite la doc (:0.1)"
+grep -qF -- '- "{{ if not .Prerelease }}{{ .Major }}.{{ .Minor }}{{ end }}"' "$gr" || err "$gr : pas d'étiquette X.Y, que cite la doc (:0.2)"
 # Toutes les étiquettes des blocs `tags:` de dockers_v2, quelle que soit leur
 # forme (liste, guillemets, gabarit, ou liste en ligne `tags: [...]`), hors
 # commentaires : aucune ne doit contenir latest, même produite par un gabarit
@@ -87,7 +87,7 @@ tags=$(awk '
 for f in README.md README.fr.md docs/en/install.md docs/fr/installation.md; do
   [ -f "$f" ] || continue
   for ref in $(grep -oiE 'ghcr\.io/[a-z0-9._/-]+(:[a-z0-9._-]+|@sha256)?' "$f" | sort -u); do
-    case $ref in "$img:0.1" | "$img@sha256") ;; *) err "$f : image « $ref », attendu $img:0.1 (ou $img@sha256:…)" ;; esac
+    case $ref in "$img:0.2" | "$img@sha256") ;; *) err "$f : image « $ref », attendu $img:0.2 (ou $img@sha256:…)" ;; esac
   done
 done
 
@@ -168,7 +168,7 @@ for f in docs/en/install.md docs/fr/installation.md; do
   [ -f "$f" ] || continue
   grep -qF -- '--certificate-identity "https://github.com/levy-cmd/Hublot-Kit/.github/workflows/release.yml@refs/tags/v$V"' "$f" ||
     err "$f : identité de signature des archives"
-  grep -qF -- "--certificate-identity-regexp '^https://github\.com/levy-cmd/Hublot-Kit/\.github/workflows/release\.yml@refs/tags/v0\.1\.[0-9]+\$'" "$f" ||
+  grep -qF -- "--certificate-identity-regexp '^https://github\.com/levy-cmd/Hublot-Kit/\.github/workflows/release\.yml@refs/tags/v0\.2\.[0-9]+\$'" "$f" ||
     err "$f : identité de signature de l'image"
   grep -qF -- '--certificate-oidc-issuer https://token.actions.githubusercontent.com' "$f" || err "$f : émetteur OIDC"
   grep -qF 'checksums.txt.sigstore.json' "$f" || err "$f : bundle de checksums.txt"
