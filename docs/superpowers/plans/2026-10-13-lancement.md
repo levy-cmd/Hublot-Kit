@@ -3101,7 +3101,7 @@ git log --all --format='%an <%ae>' | sort -u
 git log --all --oneline -- '*.pdf' '.superpowers' | head -n 3
 ```
 
-Expected: `no leaks found` (sinon, lister chaque fuite à l'utilisateur, sans rien réécrire) ; les quatre fichiers `.claude/handoff/*` (à relire : ils deviennent publics) ; la liste des auteurs et adresses (elles deviennent publiques) ; aucun PDF ni `.superpowers` dans l'historique.
+Expected: `no leaks found` (sinon, lister chaque fuite à l'utilisateur, sans rien réécrire) ; les quatre fichiers `.claude/handoff/*` (à relire : ils deviennent publics ; étape passée, depuis le 2026-10-24 ces fichiers sont dans le dépôt privé, voir les constats de la tâche 8) ; la liste des auteurs et adresses (elles deviennent publiques) ; aucun PDF ni `.superpowers` dans l'historique.
 
 - [ ] **Step 3: Revue de branche** — demander la revue complète de `phase/lancement` (sous-agent indépendant + Codex) contre ce plan et la spec ; corriger ; cocher les cases ; noter sous « Constats de la tâche 8 » : verdicts de la revue, résultat de l'audit (les résultats VM sont au registre, tranches A et B).
 
@@ -3311,7 +3311,7 @@ done
 
 Expected: `IMAGE OK : ghcr.io/levy-cmd/hublot-kit:0.1` sur les deux VM.
 
-- [x] **Step 5: ARRÊT : accord de l'utilisateur requis — rendre le dépôt public**, après réponse aux constats de l'audit (tâche 8, étape 2). Rappeler : tout l'historique, les plans, `.claude/handoff/*` et les adresses e-mail des commits deviennent publics. Après le « oui » explicite :
+- [x] **Step 5: ARRÊT : accord de l'utilisateur requis — rendre le dépôt public**, après réponse aux constats de l'audit (tâche 8, étape 2). Rappeler : tout l'historique, les plans, `.claude/handoff/*` (étape passée ; depuis le 2026-10-24, ces fichiers sont dans le dépôt privé, voir les constats de la tâche 8) et les adresses e-mail des commits deviennent publics. Après le « oui » explicite :
 
 ```bash
 gh repo edit levy-cmd/Hublot-Kit --visibility public --accept-visibility-change-consequences
