@@ -17,6 +17,7 @@ import {
 	planCost,
 	snapshotPlans,
 	takeSnapshot,
+	unknownSummary,
 	type CompareResult,
 	type Comparison,
 	type SnapshotRow
@@ -168,6 +169,24 @@ describe('snapshots', () => {
 		expect(findResult(c, '/added')?.kind).toBe('added');
 		expect(findResult(c, '/same')?.kind).toBe('unknown');
 		expect(findResult(c, '/none')).toBeNull();
+	});
+
+	// Review of tranche 9: past the 10 000 changes the agent stops, and the
+	// unknown it counted are a floor, said so in both languages.
+	it('says "at least" for the unknown of a truncated comparison', () => {
+		const side = { id: 'x' } as Comparison['a'];
+		const unknown = Array.from({ length: 1000 }, (_, i): CompareResult => ({ path: `/u${i}`, kind: 'unknown', type: 'file', fields: [] }));
+		const c: Comparison = { a: side, b: side, contentCompared: false, truncated: false, results: [], unknown, unknownCount: 12_345 };
+		for (const l of ['fr', 'en'] as const) {
+			const exact = unknownSummary(c, l);
+			expect(exact.summary).toContain((12_345).toLocaleString(l));
+			expect(exact.more).toContain((11_345).toLocaleString(l));
+			expect(`${exact.summary} ${exact.more}`).not.toMatch(/au moins|at least/i);
+			const floor = unknownSummary({ ...c, truncated: true }, l);
+			expect(floor.summary).toMatch(l === 'fr' ? /^Au moins 12.345 / : /^At least 12,345 /);
+			expect(floor.more).toMatch(l === 'fr' ? /au moins 11.345 / : /at least 11,345 /);
+		}
+		expect(unknownSummary({ ...c, unknown: unknown.slice(0, 5), unknownCount: 5 }, 'en').more).toBeNull();
 	});
 
 	it('shows whole percents below 100', () => {

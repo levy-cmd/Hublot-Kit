@@ -3,6 +3,7 @@ import * as merge from '@codemirror/merge';
 import { Chunk } from '@codemirror/merge';
 import { Text } from '@codemirror/state';
 import { ApiError, type Change, type Preview } from './api.ts';
+import { tl } from './i18n/index.ts';
 import {
 	aLineOf,
 	deletedAt,
@@ -333,5 +334,31 @@ describe('lineDiff: the bounded diff behind the view', () => {
 		const big = 'w'.repeat(REFINE_MAX + 1);
 		lineDiff(`${big}\n`, `${big}x\n`, refine);
 		expect(Math.max(...calls)).toBeLessThanOrEqual(2 * REFINE_MAX);
+	});
+});
+
+// Review of tranche 7: the fallback to one block is said, not silent.
+describe('the diff that falls back to one block', () => {
+	const a = Array.from({ length: 3000 }, (_, i) => `a${i}`).join('\n');
+	const b = Array.from({ length: 3000 }, (_, i) => `b${i}`).join('\n');
+	it('lineDiff tells it, and only then', () => {
+		let coarse = 0;
+		lineDiff(`same\n${a}\nend`, `same\n${b}\nend`, undefined, () => coarse++);
+		expect(coarse).toBe(1);
+		lineDiff('a\nb\nc\n', 'a\nB\nc\n', undefined, () => coarse++);
+		lineDiff('a\n', 'a\n', undefined, () => coarse++);
+		expect(coarse).toBe(1);
+	});
+	it('the view tells it to the panel', async () => {
+		let coarse = 0;
+		await diffState({ kind: 'modified', original: a, modified: b, equal: null }, 'diff', true, () => coarse++);
+		expect(coarse).toBeGreaterThan(0);
+		coarse = 0;
+		await diffState({ kind: 'modified', original: 'a\nb\n', modified: 'a\nB\n', equal: null }, 'diff', true, () => coarse++);
+		expect(coarse).toBe(0);
+	});
+	it('has a message in both languages', () => {
+		expect(tl('fr', 'diff.coarse')).not.toBe('diff.coarse');
+		expect(tl('en', 'diff.coarse')).not.toBe('diff.coarse');
 	});
 });

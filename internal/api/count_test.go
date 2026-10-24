@@ -4,8 +4,13 @@ package api
 // §5.7), written before the code.
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
+	"io"
 	"net/http"
+	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -117,5 +122,62 @@ func TestFiguresFilesSources(t *testing.T) {
 	sf.idle(t, c)
 	if f := figures(); f == nil || f.Source != "snapshot" || f.Count != 5 || f.At == "" {
 		t.Fatalf("après la prise : %+v", f)
+	}
+}
+
+// lockedDocker: once the export of a stopped container has started,
+// dockerd keeps the container's lock a while after the agent closed the
+// archive; an Inspect waits for it, until its context ends.
+type lockedDocker struct {
+	*dockerx.Fake
+	locked atomic.Bool
+}
+
+func (d *lockedDocker) GetArchive(ctx context.Context, id, path string) (io.ReadCloser, error) {
+	d.locked.Store(true)
+	return d.Fake.GetArchive(ctx, id, path)
+}
+
+func (d *lockedDocker) Inspect(ctx context.Context, id string) (dockerx.ContainerInfo, error) {
+	if d.locked.Load() {
+		<-ctx.Done()
+		return dockerx.ContainerInfo{}, fmt.Errorf("%w: %v", dockerx.ErrUnavailable, ctx.Err())
+	}
+	return d.Fake.Inspect(ctx, id)
+}
+
+// Review of tranche 8: a count stopped at a cap after the first wait. The
+// next poll got 503 (its Inspect waited for dockerd's lock, held after the
+// export was cut) instead of the 413 of the count.
+func TestCountCapAfterFirstWait(t *testing.T) {
+	oldLimits, oldWait := snapLimits, countFirstWait
+	snapLimits.MaxEntries, countFirstWait = 2, 10*time.Millisecond
+	t.Cleanup(func() { snapLimits, countFirstWait = oldLimits, oldWait })
+	fake := snapFake(t)
+	fake.ArchiveGate = make(chan struct{})
+	d := &lockedDocker{Fake: fake}
+	sf := newSnapFixture(t, false, d, fake)
+	c := sf.session(t)
+	if rec := sf.do("GET", "/api/containers/db/count", "", c); rec.Code != http.StatusAccepted {
+		t.Fatalf("premier relevé : %d %s", rec.Code, rec.Body)
+	}
+	close(fake.ArchiveGate)
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(5 * time.Millisecond) {
+		if j, _ := sf.snapJob(); j == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("comptage jamais fini")
+		}
+	}
+	start := time.Now()
+	rec := sf.do("GET", "/api/containers/db/count", "", c)
+	if rec.Code != http.StatusRequestEntityTooLarge || !strings.Contains(rec.Body.String(), `"too_large"`) || time.Since(start) > 2*time.Second {
+		t.Fatalf("relevé suivant : %d %s en %s", rec.Code, rec.Body, time.Since(start))
+	}
+	// Delivered once, whatever the ref: the next request is a new count.
+	d.locked.Store(false)
+	if code, _, body := sf.count(t, c, dbID); code != http.StatusRequestEntityTooLarge || fake.Calls()[1] != dbID+":/" {
+		t.Fatalf("nouveau comptage : %d %s, archives %v", code, body, fake.Calls())
 	}
 }
