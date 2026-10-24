@@ -87,6 +87,9 @@ func TestCompareKinds(t *testing.T) {
 		unknownB,
 		link2,
 	}
+	byPath := func(x, y Entry) int { return ComparePaths(x.Path, y.Path) }
+	slices.SortFunc(a, byPath)
+	slices.SortFunc(b, byPath)
 	got := compareAll(t, a, b, true)
 	want := map[string]struct {
 		kind, typ string

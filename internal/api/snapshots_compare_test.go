@@ -210,7 +210,7 @@ func TestCompareBadIDs(t *testing.T) {
 	_, keyID := sf.key(t)
 	s1 := sf.putSnap(t, webID, "", keyID, cmpDir("/etc"))
 	for path, code := range map[string]int{
-		"/api/snapshots/../x/compare?with=current":                                  http.StatusNotFound,
+		"/api/snapshots/..%2Fx/compare?with=current":                                http.StatusNotFound,
 		"/api/snapshots/" + strings.ToUpper(s1) + "/compare?with=current":           http.StatusNotFound,
 		"/api/snapshots/" + snapshot.NewID() + "/compare?with=" + s1:                http.StatusNotFound,
 		"/api/snapshots/" + s1 + "/compare?with=" + snapshot.NewID():                http.StatusNotFound,
@@ -277,6 +277,62 @@ func TestCompareCurrent(t *testing.T) {
 		t.Fatalf("parcours refait : %d → %d", walks, n)
 	}
 	sf.noMAC(t, append(bodies, rec.Body.String())...)
+}
+
+// A snapshot of another key (rotated since): the current container is
+// compared by its metadata, without reading any content.
+func TestCompareCurrentOtherKey(t *testing.T) {
+	sf, c := snapSetup(t, false)
+	key, _ := sf.key(t)
+	sid := sf.putSnap(t, webID, "", "ffffffffffffffff", cmpDir("/etc"), cmpFile("/etc/motd", hmacHex(key, "autre"), 7))
+	rec, _ := sf.poll(t, "/api/snapshots/"+sid+"/compare?with=current", c)
+	b, by := decodeCompare(t, rec)
+	if b.ContentCompared || by["/etc/motd"].Kind == "modified" {
+		t.Fatalf("contenu comparé avec une autre clé : %s", rec.Body)
+	}
+	if n := sf.walker.read.Load(); n != 0 {
+		t.Fatalf("%d octets lus pour une comparaison sans empreinte", n)
+	}
+}
+
+// Without a write deadline, nothing is compared nor sent (v0.1.2: fail
+// closed).
+func TestCompareNoWriteDeadline(t *testing.T) {
+	sf, c := snapSetup(t, false)
+	key, keyID := sf.key(t)
+	s1 := sf.putSnap(t, webID, "", keyID, cmpFile("/etc/motd", hmacHex(key, "a"), 1))
+	s2 := sf.putSnap(t, webID, "", keyID, cmpFile("/etc/new", hmacHex(key, "b"), 1))
+	for _, with := range []string{s2, "current"} {
+		r := httptest.NewRequest("GET", "http://example.com/api/snapshots/"+s1+"/compare?with="+with, nil)
+		r.AddCookie(c)
+		rec := httptest.NewRecorder()
+		sf.h.ServeHTTP(rec, r)
+		if rec.Code == http.StatusOK || rec.Code == http.StatusAccepted || strings.Contains(rec.Body.String(), "/etc/") {
+			t.Errorf("with=%s sans délai d'écriture : %d %q", with, rec.Code, rec.Body)
+		}
+	}
+	if j, _ := sf.snapJob(); j != nil {
+		t.Fatalf("un travail a démarré : %+v", j)
+	}
+}
+
+// A result describes one state of the container: restarted since, it is
+// computed again.
+func TestCompareCurrentKeptPerState(t *testing.T) {
+	sf, c := snapSetup(t, false)
+	sid := sf.takeWeb(t, c)
+	path := "/api/snapshots/" + sid + "/compare?with=current"
+	rec, _ := sf.poll(t, path, c)
+	decodeCompare(t, rec)
+	walks := sf.walker.walks.Load()
+	web := sf.docker.Infos[webID]
+	web.Details.StartedAt = "2026-10-24T09:00:00Z"
+	sf.docker.Infos[webID], sf.docker.Infos["web"] = web, web
+	rec, _ = sf.poll(t, path, c)
+	decodeCompare(t, rec)
+	if n := sf.walker.walks.Load(); n != walks+1 {
+		t.Fatalf("après un redémarrage : %d parcours, attendu %d", n, walks+1)
+	}
 }
 
 // tree is the state of a directory: names, sizes, modes, modification times.
@@ -348,7 +404,16 @@ func TestCompareCurrentContainerChanged(t *testing.T) {
 	c := sf.session(t)
 	_, keyID := sf.key(t)
 	sid := sf.putSnap(t, webID, "", keyID, cmpDir("/etc"))
-	rec, bodies := sf.poll(t, "/api/snapshots/"+sid+"/compare?with=current", c)
+	// The walk ends after the first answer (202): the error reaches a poll,
+	// which must get it without asking Docker again (whose answer changed).
+	sf.walker.gate = make(chan struct{})
+	path := "/api/snapshots/" + sid + "/compare?with=current"
+	first := sf.do("GET", path, "", c)
+	close(sf.walker.gate)
+	if first.Code != http.StatusAccepted {
+		t.Fatalf("première réponse : %d %s", first.Code, first.Body)
+	}
+	rec, bodies := sf.poll(t, path, c)
 	if rec.Code != http.StatusConflict || !strings.Contains(rec.Body.String(), `"container_changed"`) {
 		t.Fatalf("conteneur arrêté pendant le parcours : %d %s", rec.Code, rec.Body)
 	}
@@ -458,8 +523,10 @@ func TestImageMatch(t *testing.T) {
 			t.Errorf("%s : %d %s, attendu %v", p, rec.Code, rec.Body, want)
 		}
 	}
-	// A snapshot of another key never matches, even the same content.
-	other := sf.putSnap(t, webID, cmpImg, "ffffffffffffffff", cmpFile("/etc/os-release", hmacHex([]byte("k"), "NAME=hublot-test\n"), 17))
+	// A snapshot that names another key never matches, whatever its MAC
+	// (here, the one the agent's key would give).
+	key, _ := sf.key(t)
+	other := sf.putSnap(t, webID, cmpImg, "ffffffffffffffff", cmpFile("/etc/os-release", hmacHex(key, "NAME=hublot-test\n"), 17))
 	if rec, _ := sf.poll(t, matchPath(other, "%2Fetc%2Fos-release"), c); strings.TrimSpace(rec.Body.String()) != `{"match":false}` {
 		t.Errorf("autre clé : %d %s", rec.Code, rec.Body)
 	}
@@ -471,6 +538,36 @@ func TestImageMatch(t *testing.T) {
 	}
 	if n := sf.docker.ImageSaveCalls.Load(); n != saves {
 		t.Errorf("export demandé pour une entrée sans MAC")
+	}
+}
+
+// A file noted without MAC (budget, too large) proves nothing: false,
+// without asking Docker anything.
+func TestImageMatchSkippedMAC(t *testing.T) {
+	sf, c, _ := imageMatchFixture(t, nil, matchImage(t), nil)
+	_, keyID := sf.key(t)
+	skipped := cmpFile("/etc/os-release", "", 17)
+	skipped.MACSkipped = snapshot.SkipBudget
+	sid := sf.putSnap(t, webID, cmpImg, keyID, skipped)
+	rec := sf.do("GET", matchPath(sid, "%2Fetc%2Fos-release"), "", c)
+	if strings.TrimSpace(rec.Body.String()) != `{"match":false}` {
+		t.Fatalf("%d %s", rec.Code, rec.Body)
+	}
+	if n, m := sf.docker.ImageSaveCalls.Load(), sf.docker.ImageCalls.Load(); n+m != 0 {
+		t.Fatalf("Docker interrogé : %d exports, %d inspect", n, m)
+	}
+}
+
+// A size other than the image's says false from the index: no extraction
+// (one export only, the index's).
+func TestImageMatchSizeFromIndex(t *testing.T) {
+	sf, c, sid := imageMatchFixture(t, nil, matchImage(t), map[string]string{"/etc/motd": "bonjour!"})
+	rec, _ := sf.poll(t, matchPath(sid, "%2Fetc%2Fmotd"), c)
+	if strings.TrimSpace(rec.Body.String()) != `{"match":false}` {
+		t.Fatalf("%d %s", rec.Code, rec.Body)
+	}
+	if n := sf.docker.ImageSaveCalls.Load(); n != 1 {
+		t.Fatalf("%d exports, attendu 1 (l'index seul)", n)
 	}
 }
 
