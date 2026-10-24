@@ -13,7 +13,11 @@ cd "$(dirname "$0")/.."
 . scripts/release-lib.sh
 errors=0
 err() { echo "ERREUR : $*" >&2; errors=$((errors + 1)); }
-block() { awk '/^docker run -d --name hublot-kit/{on=1} on{print} on&&/ghcr\.io\/levy-cmd\/hublot-kit:0\.2$/{exit}' "$1"; }
+# Bloc docker run d'un fichier : de la première ligne jusqu'à la dernière
+# ligne de la commande de la spec §8 (l'image), série comprise.
+block() {
+  LAST=$(printf '%s\n' "$want" | tail -n 1) awk '/^docker run -d --name hublot-kit/{on=1} on{print} on&&$0==ENVIRON["LAST"]{exit}' "$1"
+}
 code_blocks() { awk '/^ *```/{inside=!inside; next} inside' "$1"; }
 # Ancres des titres d'un fichier Markdown, hors blocs de code : minuscules,
 # ponctuation retirée (lettres accentuées gardées), espaces changés en tirets.
@@ -24,6 +28,9 @@ anchors() {
 
 want=$(hk_spec_command)
 [ -n "$want" ] || err "commande docker run introuvable dans la spec §8"
+# Série X.Y de l'image citée par la doc : l'étiquette de la commande de la spec.
+serie=$(printf '%s\n' "$want" | sed -n 's/^ *ghcr\.io\/levy-cmd\/hublot-kit:\([0-9][0-9]*\.[0-9][0-9]*\)$/\1/p')
+[ -n "$serie" ] || err "spec §8 : étiquette d'image X.Y introuvable dans la commande docker run"
 
 pairs="README.md:README.fr.md docs/en/guide.md:docs/fr/guide.md docs/en/install.md:docs/fr/installation.md docs/en/security.md:docs/fr/securite.md docs/en/limitations.md:docs/fr/limites.md"
 for p in $pairs; do
@@ -69,7 +76,7 @@ done
 gr=.goreleaser.yaml
 img=$(awk '/^dockers_v2:/{d=1} d&&/images:/{gsub(/.*\[|\].*/,""); print; exit}' "$gr")
 [ "$img" = ghcr.io/levy-cmd/hublot-kit ] || err "$gr : image « $img », la doc cite ghcr.io/levy-cmd/hublot-kit"
-grep -qF -- '- "{{ if not .Prerelease }}{{ .Major }}.{{ .Minor }}{{ end }}"' "$gr" || err "$gr : pas d'étiquette X.Y, que cite la doc (:0.2)"
+grep -qF -- '- "{{ if not .Prerelease }}{{ .Major }}.{{ .Minor }}{{ end }}"' "$gr" || err "$gr : pas d'étiquette X.Y, que cite la doc (:$serie)"
 # Toutes les étiquettes des blocs `tags:` de dockers_v2, quelle que soit leur
 # forme (liste, guillemets, gabarit, ou liste en ligne `tags: [...]`), hors
 # commentaires : aucune ne doit contenir latest, même produite par un gabarit
@@ -87,7 +94,7 @@ tags=$(awk '
 for f in README.md README.fr.md docs/en/install.md docs/fr/installation.md; do
   [ -f "$f" ] || continue
   for ref in $(grep -oiE 'ghcr\.io/[a-z0-9._/-]+(:[a-z0-9._-]+|@sha256)?' "$f" | sort -u); do
-    case $ref in "$img:0.2" | "$img@sha256") ;; *) err "$f : image « $ref », attendu $img:0.2 (ou $img@sha256:…)" ;; esac
+    case $ref in "$img:$serie" | "$img@sha256") ;; *) err "$f : image « $ref », attendu $img:$serie (ou $img@sha256:…)" ;; esac
   done
 done
 
@@ -164,12 +171,36 @@ grep -qx 'name_template: checksums.txt' <(sed 's/^ *//' "$gr") || err "$gr : che
 grep -qF 'identity="https://github.com/$repo/.github/workflows/release.yml@refs/tags/$tag"' "$vr" ||
   err "$vr : identité différente de celle de la doc"
 grep -qxF 'issuer=https://token.actions.githubusercontent.com' "$vr" || err "$vr : émetteur différent de celui de la doc"
+# Versions de la doc d'installation (Minor de la revue de la PR #12) : chaque
+# doc a au moins une ligne V=, toutes de même valeur X.Y.Z, de la série X.Y
+# de l'étiquette d'image des commandes docker run (égales à celle de la spec
+# §8, contrôlé plus haut) ; la regex cosign de l'image vise cette même série.
+vs=
+for f in docs/en/install.md docs/fr/installation.md; do
+  [ -f "$f" ] || continue
+  fv=$(grep '^V=' "$f" || true)
+  [ -n "$fv" ] || { err "$f : aucune ligne V="; continue; }
+  vs=$(printf '%s\n%s\n' "$vs" "$fv" | grep . | sort -u)
+done
+case $(printf '%s' "$vs" | awk 'END { print NR }') in
+  0) ;;
+  1)
+    v=${vs#V=}
+    if ! printf '%s\n' "$v" | grep -qxE '[0-9]+\.[0-9]+\.[0-9]+'; then
+      err "docs d'installation : V=$v n'a pas la forme X.Y.Z"
+    elif [ "${v%.*}" != "$serie" ]; then
+      err "docs d'installation : V=$v est de la série ${v%.*}, l'image documentée est :$serie (attendu V=$serie.x)"
+    fi
+    ;;
+  *) err "docs d'installation : lignes V= différentes ($(printf '%s\n' "$vs" | tr '\n' ' ' | sed 's/ $//'))" ;;
+esac
+serie_re=$(printf '%s' "$serie" | sed 's/\./\\./g')
 for f in docs/en/install.md docs/fr/installation.md; do
   [ -f "$f" ] || continue
   grep -qF -- '--certificate-identity "https://github.com/levy-cmd/Hublot-Kit/.github/workflows/release.yml@refs/tags/v$V"' "$f" ||
     err "$f : identité de signature des archives"
-  grep -qF -- "--certificate-identity-regexp '^https://github\.com/levy-cmd/Hublot-Kit/\.github/workflows/release\.yml@refs/tags/v0\.2\.[0-9]+\$'" "$f" ||
-    err "$f : identité de signature de l'image"
+  grep -qF -- "--certificate-identity-regexp '^https://github\.com/levy-cmd/Hublot-Kit/\.github/workflows/release\.yml@refs/tags/v$serie_re\.[0-9]+\$'" "$f" ||
+    err "$f : identité de signature de l'image (regex cosign de la série $serie attendue)"
   grep -qF -- '--certificate-oidc-issuer https://token.actions.githubusercontent.com' "$f" || err "$f : émetteur OIDC"
   grep -qF 'checksums.txt.sigstore.json' "$f" || err "$f : bundle de checksums.txt"
 done
