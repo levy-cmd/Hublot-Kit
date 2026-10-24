@@ -26,7 +26,7 @@ export type SnapshotRow = {
 };
 
 export type SnapshotJob = {
-	kind: 'snapshot' | 'count';
+	kind: 'snapshot' | 'count' | 'compare';
 	snapshot?: string;
 	containerId?: string;
 	containerName?: string;
@@ -122,3 +122,80 @@ export function sourceLabel(s: SnapshotSource): string {
 export function percent(p: number): number {
 	return Math.max(0, Math.min(99, Math.floor(p * 100)));
 }
+
+// The comparison (spec v0.2 §5.7, Q59): between two photos, or a photo and
+// the current container. No content is kept: between two photos "modified"
+// only says that the fingerprints differ; against the current container
+// the page shows the current content, and a line diff only when the agent
+// proves (image-match) that the old content was the image's version.
+
+export const KINDS = ['added', 'deleted', 'modified', 'meta', 'type', 'unknown'] as const;
+export type CompareKind = (typeof KINDS)[number];
+
+export type CompareResult = { path: string; kind: CompareKind; type: string; fields: string[] };
+
+/** A side of a comparison: a snapshot, or the current container (id "current"). */
+export type CompareSide = Omit<SnapshotRow, 'containerGone'>;
+
+export type Comparison = {
+	a: CompareSide;
+	b: CompareSide;
+	contentCompared: boolean;
+	results: CompareResult[];
+	truncated: boolean;
+};
+
+/** "current", or the ID of another snapshot. Throws ApiError "indexing" while the current one is captured. */
+export const compareSnapshots = (sid: string, withId: string, signal?: AbortSignal) =>
+	api<Comparison>(`/snapshots/${encodeURIComponent(sid)}/compare?with=${encodeURIComponent(withId)}`, { signal });
+
+/** Whether the old content of path was exactly the image's version: a bare boolean. */
+export const imageMatch = (sid: string, path: string, signal?: AbortSignal) =>
+	api<{ match: boolean }>(`/snapshots/${encodeURIComponent(sid)}/image-match?path=${encodeURIComponent(path)}`, {
+		signal
+	}).then((r) => r.match === true);
+
+/** A directory whose modification time alone changed: hidden by default. */
+export const dirTimeOnly = (r: CompareResult) =>
+	r.kind === 'meta' && r.type === 'dir' && r.fields.length === 1 && r.fields[0] === 'mtime';
+
+export function kindCounts(results: CompareResult[], showDirTime: boolean): Record<CompareKind, number> {
+	const out = Object.fromEntries(KINDS.map((k) => [k, 0])) as Record<CompareKind, number>;
+	for (const r of results) if (showDirTime || !dirTimeOnly(r)) out[r.kind]++;
+	return out;
+}
+
+/** The results shown: of the kinds chosen, the directories whose mtime alone changed only on demand. */
+export function filterResults(results: CompareResult[], kinds: ReadonlySet<CompareKind>, showDirTime: boolean): CompareResult[] {
+	return results.filter((r) => kinds.has(r.kind) && (showDirTime || !dirTimeOnly(r)));
+}
+
+/**
+ * The snapshots b of the comparison of a may be: those of the same
+ * container, then those of another container of the same name (recreated
+ * by Compose), the most recent first; never a itself.
+ */
+export function compareCandidates(rows: SnapshotRow[], a: SnapshotRow): SnapshotRow[] {
+	const rank = (r: SnapshotRow) => (r.containerId === a.containerId ? 0 : 1);
+	return rows
+		.filter((r) => r.id !== a.id && (r.containerId === a.containerId || r.containerName === a.containerName))
+		.sort((x, y) => rank(x) - rank(y) || y.createdAt.localeCompare(x.createdAt));
+}
+
+/**
+ * What the page shows of a result's content: nothing between two photos
+ * (nothing is kept), nothing for a deleted file or what is not a file;
+ * against the current container, the current content, or for a modified
+ * file the diff with the image when image-match proves it.
+ */
+export function contentPlan(r: CompareResult, current: boolean): 'none' | 'current' | 'match' {
+	if (!current || r.type !== 'file' || r.kind === 'deleted') return 'none';
+	return r.kind === 'modified' ? 'match' : 'current';
+}
+
+/** The label of a changed field ("size", "mode"…). */
+export const fieldLabel = (f: string) => {
+	const key = `snapshots.field.${f}`;
+	const s = t(key);
+	return s === key ? f : s;
+};

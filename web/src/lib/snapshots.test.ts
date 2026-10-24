@@ -1,7 +1,23 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ApiError } from './api.ts';
 import { t } from './i18n/index.ts';
-import { groupSnapshots, percent, planCost, snapshotPlans, takeSnapshot, type SnapshotRow } from './snapshots.ts';
+import {
+	compareCandidates,
+	compareSnapshots,
+	contentPlan,
+	fieldLabel,
+	filterResults,
+	groupSnapshots,
+	imageMatch,
+	kindCounts,
+	KINDS,
+	percent,
+	planCost,
+	snapshotPlans,
+	takeSnapshot,
+	type CompareResult,
+	type SnapshotRow
+} from './snapshots.ts';
 
 const row = (id: string, containerId: string, name: string, createdAt: string, gone?: boolean): SnapshotRow => ({
 	id,
@@ -66,6 +82,70 @@ describe('snapshots', () => {
 		await expect(takeSnapshot('x', false)).rejects.toEqual(new ApiError(413, 'too_large', '20'));
 		vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ error: 'conflict' }), { status: 409 })));
 		await expect(takeSnapshot('x', false)).rejects.toMatchObject({ code: 'conflict' });
+	});
+
+	// Spec v0.2 §5.7: the directories whose mtime alone changed are hidden by default.
+	it('filters by kind, the directories whose date alone changed on demand', () => {
+		const rs: CompareResult[] = [
+			{ path: '/etc', kind: 'meta', type: 'dir', fields: ['mtime'] },
+			{ path: '/etc/motd', kind: 'modified', type: 'file', fields: [] },
+			{ path: '/etc/new', kind: 'added', type: 'file', fields: [] },
+			{ path: '/var', kind: 'meta', type: 'dir', fields: ['mode', 'mtime'] },
+			{ path: '/x', kind: 'meta', type: 'file', fields: ['mtime'] }
+		];
+		expect(filterResults(rs, new Set(KINDS), false).map((r) => r.path)).toEqual(['/etc/motd', '/etc/new', '/var', '/x']);
+		expect(filterResults(rs, new Set(KINDS), true)).toHaveLength(5);
+		expect(filterResults(rs, new Set(['added']), true).map((r) => r.path)).toEqual(['/etc/new']);
+		expect(kindCounts(rs, false)).toEqual({ added: 1, deleted: 0, modified: 1, meta: 2, type: 0, unknown: 0 });
+		expect(kindCounts(rs, true).meta).toBe(3);
+	});
+
+	// Q59: no content is kept; against the current container, its content,
+	// and for a modified file the diff when image-match proves it.
+	it('shows a content only against the current container', () => {
+		const r = (kind: CompareResult['kind'], type = 'file'): CompareResult => ({ path: '/f', kind, type, fields: [] });
+		for (const k of KINDS) expect(contentPlan(r(k), false)).toBe('none');
+		expect(contentPlan(r('modified'), true)).toBe('match');
+		expect(contentPlan(r('added'), true)).toBe('current');
+		expect(contentPlan(r('unknown'), true)).toBe('current');
+		expect(contentPlan(r('meta'), true)).toBe('current');
+		expect(contentPlan(r('deleted'), true)).toBe('none');
+		expect(contentPlan(r('modified', 'dir'), true)).toBe('none');
+		expect(contentPlan(r('type', 'symlink'), true)).toBe('none');
+	});
+
+	it('offers to compare with the same container, then the same name', () => {
+		const a = row('a', 'c1', 'web', '2026-10-02T10:00:00Z');
+		const rows = [
+			a,
+			row('older', 'c1', 'web', '2026-10-01T10:00:00Z'),
+			row('newer', 'c1', 'web', '2026-10-03T10:00:00Z'),
+			row('recreated', 'c2', 'web', '2026-10-04T10:00:00Z'),
+			row('other', 'c3', 'db', '2026-10-05T10:00:00Z')
+		];
+		expect(compareCandidates(rows, a).map((r) => r.id)).toEqual(['newer', 'older', 'recreated']);
+	});
+
+	it('asks the comparison and the match by the snapshot ID, the path encoded', async () => {
+		const sid = '0b7d5c1e-8f3a-4c2b-9d1e-123456789abc';
+		const fetch = vi.fn(async () => new Response(JSON.stringify({ match: true }), { status: 200 }));
+		vi.stubGlobal('fetch', fetch);
+		await expect(imageMatch(sid, '/etc/a b&c')).resolves.toBe(true);
+		expect(fetch).toHaveBeenCalledWith(`/api/snapshots/${sid}/image-match?path=%2Fetc%2Fa%20b%26c`, expect.anything());
+		// Anything but a true boolean is false.
+		vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ match: 'yes' }), { status: 200 })));
+		await expect(imageMatch(sid, '/f')).resolves.toBe(false);
+		vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ error: 'indexing', progress: 0.5 }), { status: 202 })));
+		await expect(compareSnapshots(sid, 'current')).rejects.toMatchObject({ code: 'indexing' });
+	});
+
+	it('names every kind and field (the i18n test checks both languages)', () => {
+		for (const k of KINDS) expect(t(`snapshots.kind.${k}`)).not.toBe(`snapshots.kind.${k}`);
+		for (const f of ['size', 'mode', 'uid', 'gid', 'mtime', 'link']) {
+			expect(t(`snapshots.field.${f}`)).not.toBe(`snapshots.field.${f}`);
+			expect(fieldLabel(f)).toBe(t(`snapshots.field.${f}`));
+		}
+		expect(fieldLabel('later')).toBe('later');
 	});
 
 	it('shows whole percents below 100', () => {

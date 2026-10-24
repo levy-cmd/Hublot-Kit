@@ -137,6 +137,16 @@ Une seule photo (ou un seul comptage) à la fois pour tout l'agent ; la page sui
 
 Les photos sont groupées par conteneur, la plus récente d'abord. Une photo « partielle » a atteint le budget d'empreintes (1 Gio) ou un dossier de plus de 10 000 entrées : des fichiers y sont notés sans empreinte. L'agent garde 20 photos par conteneur et 1 Gio en tout ; au-delà, une nouvelle prise est refusée, et rien n'est jamais supprimé de lui-même : supprimez une photo depuis la page. Les photos d'un conteneur supprimé restent, marquées « conteneur supprimé ».
 
+### Comparer
+
+« Comparer », sur une photo, la confronte à une autre photo du même conteneur (ou d'un conteneur du même nom, recréé par exemple par Compose), ou au **conteneur actuel**. Chaque différence a un genre : **ajouté**, **supprimé**, **modifié** (l'empreinte du contenu a changé), **métadonnées** (taille, droits, propriétaire, groupe, date ou cible d'un lien seulement), **type changé** (un fichier devenu dossier, par exemple) ou **inconnu** (même taille et même date, mais une empreinte manque ou n'est pas de la même clé : rien ne peut être dit du contenu). Les entrées identiques n'apparaissent pas. Des cases filtrent par genre ; les dossiers dont seule la date change sont masqués par défaut. Au-delà de 10 000 différences, seules les 10 000 premières sont montrées.
+
+Ce que la comparaison **ne montre pas** : l'ancien contenu d'un fichier, puisqu'il n'est jamais copié.
+
+- **Entre deux photos** : « modifié » dit seulement que l'empreinte a changé ; aucun contenu n'est montré.
+- **Contre le conteneur actuel** : l'agent relit le conteneur comme pour une photo (même coût, même confirmation, une seule à la fois), mais n'écrit rien ; le résultat est gardé 5 min. Pour un fichier, la page montre son **contenu actuel**, avec les règles de l'aperçu (secrets, binaire, 2 Mio). Pour un fichier modifié, elle montre un **diff ligne à ligne** dans un seul cas : quand l'empreinte de l'ancienne version égale celle du même fichier dans l'image du conteneur. L'ancienne version était alors exactement celle de l'image, que l'agent relit (empreinte de la couche vérifiée). Sinon, la page dit « ancienne version non conservée ».
+- Une photo des métadonnées, ou une photo prise avant un changement de clé (`hublot rotate-snapshot-key`), ne se compare que par les métadonnées : un fichier de même taille et de même date y est « inconnu ».
+
 ## La page d'un conteneur et le téléphone
 
 Chaque conteneur a sa page, `/c/<identifiant>`, avec les onglets Aperçu, Logs, Diff, Fichiers et Secrets. C'est aussi ce qu'ouvre un téléphone : la liste, puis le détail en page pleine. Les anciens liens de la v0.1 (`?tab=changes`, `?tab=xray`) mènent toujours au bon onglet. La modification de fichiers reste pensée pour un ordinateur.

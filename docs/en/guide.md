@@ -137,6 +137,16 @@ One photo (or one count) at a time for the whole agent; the page follows its pro
 
 Photos are grouped by container, the most recent first. A "partial" photo reached the fingerprint budget (1 GiB) or a directory of more than 10,000 entries: some files are noted without a fingerprint. The agent keeps 20 photos per container and 1 GiB in all; past that, a new photo is refused, and nothing is ever deleted by the agent itself: delete a photo from the page. The photos of a removed container stay, marked "container removed".
 
+### Comparing
+
+"Compare", on a photo, sets it against another photo of the same container (or of a container of the same name, recreated by Compose for instance), or against the **current container**. Each difference has a kind: **added**, **deleted**, **modified** (the fingerprint of the content changed), **metadata** (size, permissions, owner, group, date or link target only), **type changed** (a file turned into a directory, for instance) or **unknown** (same size and same date, but a fingerprint is missing or not of the same key: nothing can be said of the content). Identical entries do not appear. Boxes filter by kind; the directories whose date alone changed are hidden by default. Past 10,000 differences, only the first 10,000 are shown.
+
+What the comparison **does not show**: the old content of a file, since it is never copied.
+
+- **Between two photos**: "modified" only says that the fingerprint changed; no content is shown.
+- **Against the current container**: the agent reads the container again as for a photo (same cost, same confirmation, one at a time), but writes nothing; the result is kept 5 min. For a file, the page shows its **current content**, with the rules of the preview (secrets, binary, 2 MiB). For a modified file, it shows a **line diff** in one case only: when the fingerprint of the old version equals that of the same file in the container's image. The old version was then exactly the image's, which the agent reads again (the layer's digest checked). Otherwise the page says "old version not kept".
+- A photo of the metadata, or a photo taken before a key change (`hublot rotate-snapshot-key`), is compared by its metadata only: a file of the same size and date is "unknown" there.
+
 ## A container's page and the phone
 
 Each container has its page, `/c/<id>`, with the Overview, Logs, Diff, Files and Secrets tabs. This is also what a phone opens: the list, then the detail as a full page. The old links of v0.1 (`?tab=changes`, `?tab=xray`) still lead to the right tab. Editing files remains designed for a computer.
