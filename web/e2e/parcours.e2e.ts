@@ -125,8 +125,19 @@ test('connexion, liste, panneaux fichiers et diff', async ({ page }) => {
 	const imageCalls: string[] = [];
 	let extracting = true;
 	const imageFile = /\/api\/images\/[^/]+\/fs\/file\?/;
+	// A barrier, through the same route: the page's requests are routed in
+	// the order they are sent, so once it has come back, every request the
+	// page sent before it has been counted (no fixed wait, whatever the load).
+	const barrierPath = '/api/images/barrier/fs/file';
+	const settled = () =>
+		page.evaluate((p) => fetch(`${p}?path=%2F`).then((r) => r.text()).then(() => undefined, () => undefined), barrierPath);
+	// The page's clock is Playwright's: it flows as usual, and runFor below
+	// fires its timers without waiting for them.
+	await page.clock.install();
 	await page.route(imageFile, (route) => {
-		imageCalls.push(new URL(route.request().url()).pathname);
+		const path = new URL(route.request().url()).pathname;
+		if (path === barrierPath) return route.fulfill({ status: 404, contentType: 'application/json', body: '{}' });
+		imageCalls.push(path);
 		if (!extracting) return route.continue();
 		return route.fulfill({
 			status: 202,
@@ -141,9 +152,16 @@ test('connexion, liste, panneaux fichiers et diff', async ({ page }) => {
 	// another panel stops asking the agent; shown again, it asks again.
 	await panels.getByRole('link', { name: 'Logs en direct' }).click();
 	await expect(page).toHaveURL(/panel=logs/);
-	await page.waitForTimeout(500);
+	await expect(content).toBeHidden();
+	await settled(); // a request sent just before the panel was hidden is counted
 	const asked = imageCalls.length;
-	await page.waitForTimeout(4500);
+	// Five retries' worth of the page's time (files.ts pollDelay, 2 s), one
+	// step at a time: a request a timer sends is counted (barrier) before the
+	// next step, so a retry it would schedule is fired by the next one.
+	for (let i = 0; i < 5; i++) {
+		await page.clock.runFor(3000);
+		await settled();
+	}
 	expect(imageCalls.length).toBe(asked);
 	await panels.getByRole('link', { name: "Diff avec l'image" }).click();
 	await expect.poll(() => imageCalls.length).toBeGreaterThan(asked);
