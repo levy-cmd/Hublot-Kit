@@ -120,6 +120,8 @@
 	let noDiff = $derived(result && 'reason' in result ? result : null);
 	let host = $state<HTMLDivElement>();
 	let failed = $state(false);
+	// Review of tranche 7: the diff fell back to one block, said so.
+	let coarse = $state(false);
 
 	$effect(() => {
 		const target = host;
@@ -128,10 +130,13 @@
 		let current = true;
 		let destroy = () => {};
 		failed = false;
+		coarse = false;
 		mountDiff(target, d, `${t('diff.title')} ${change.path}`)
-			.then((remove) => {
-				if (current) destroy = remove;
-				else remove();
+			.then((m) => {
+				if (current) {
+					destroy = m.remove;
+					coarse = m.coarse;
+				} else m.remove();
 			})
 			.catch(() => {
 				if (current) failed = true;
@@ -181,6 +186,9 @@
 	{/if}
 	{#if failed}
 		<p role="alert">{t('error.unknown')}</p>
+	{/if}
+	{#if coarse}
+		<p class="note" role="status">{t('diff.coarse')}</p>
 	{/if}
 	{#if !(input.kind === 'modified' && input.equal === 'bytes')}
 		<div class="diff" bind:this={host}></div>

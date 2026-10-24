@@ -11,6 +11,8 @@ export default {
 		'The agent reads the image export, or the archive of the stopped container, once. The diff shows at the end.',
 	'diff.equal.bytes': 'Same content as in the image: only the metadata (mode, owner, date) changed.',
 	'diff.equal.eol': 'Same text, different line endings (CRLF and LF).',
+	'diff.coarse':
+		'Too many differences for a line-by-line diff: everything between the common start and end is shown as one replaced block.',
 	'diff.reason.binary.image': 'No diff: the image version is a binary file.',
 	'diff.reason.binary.container': 'No diff: the container version is a binary file.',
 	'diff.reason.too_large.image': 'No diff: the image version is over 2 MiB, or its layer takes too long to read.',

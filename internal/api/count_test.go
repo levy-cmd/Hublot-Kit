@@ -131,10 +131,11 @@ func TestFiguresFilesSources(t *testing.T) {
 type lockedDocker struct {
 	*dockerx.Fake
 	locked atomic.Bool
+	free   atomic.Bool // an export that leaves no lock behind
 }
 
 func (d *lockedDocker) GetArchive(ctx context.Context, id, path string) (io.ReadCloser, error) {
-	d.locked.Store(true)
+	d.locked.Store(!d.free.Load())
 	return d.Fake.GetArchive(ctx, id, path)
 }
 
@@ -177,7 +178,21 @@ func TestCountCapAfterFirstWait(t *testing.T) {
 	}
 	// Delivered once, whatever the ref: the next request is a new count.
 	d.locked.Store(false)
-	if code, _, body := sf.count(t, c, dbID); code != http.StatusRequestEntityTooLarge || fake.Calls()[1] != dbID+":/" {
+	if code, _, body := sf.count(t, c, dbID); code != http.StatusRequestEntityTooLarge || len(fake.Calls()) != 2 {
 		t.Fatalf("nouveau comptage : %d %s, archives %v", code, body, fake.Calls())
+	}
+	// A count that succeeds is never served by its ref: the container's
+	// state is checked, and a new state is counted again.
+	d.locked.Store(false)
+	d.free.Store(true)
+	snapLimits.MaxEntries = oldLimits.MaxEntries
+	if code, out, body := sf.count(t, c, "db"); code != http.StatusOK || out.Count != 3 || len(fake.Calls()) != 3 {
+		t.Fatalf("comptage réussi : %d %s, archives %v", code, body, fake.Calls())
+	}
+	db := fake.Infos[dbID]
+	db.FinishedAt = "2026-10-10T10:00:00Z"
+	fake.Infos["db"], fake.Infos[dbID] = db, db
+	if code, _, body := sf.count(t, c, "db"); code != http.StatusOK || len(fake.Calls()) != 4 {
+		t.Fatalf("après un redémarrage : %d %s, archives %v", code, body, fake.Calls())
 	}
 }

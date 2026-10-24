@@ -11,6 +11,8 @@ export default {
 		"L'agent relit l'export de l'image, ou l'archive du conteneur arrêté, une seule fois. Le diff s'affiche à la fin.",
 	'diff.equal.bytes': "Contenu identique à celui de l'image : seules les métadonnées (droits, propriétaire, date) ont changé.",
 	'diff.equal.eol': 'Même texte, fins de ligne différentes (CRLF et LF).',
+	'diff.coarse':
+		'Trop de différences pour un diff ligne à ligne : tout ce qui se trouve entre le début et la fin communs est montré en un seul bloc remplacé.',
 	'diff.reason.binary.image': "Pas de diff : la version de l'image est un fichier binaire.",
 	'diff.reason.binary.container': 'Pas de diff : la version du conteneur est un fichier binaire.',
 	'diff.reason.too_large.image': "Pas de diff : la version de l'image dépasse 2 Mio, ou sa couche est trop longue à lire.",

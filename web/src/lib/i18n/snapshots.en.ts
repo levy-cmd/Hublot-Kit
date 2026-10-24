@@ -101,5 +101,8 @@ export default {
 	'snapshots.field.link': 'link target',
 	'snapshots.compare.unknown': '{n} files that cannot be compared: no fingerprint of the content (same size, same date)',
 	'snapshots.compare.unknownMore': '… and {n} more, counted without being listed.',
+	'snapshots.compare.unknownAtLeast':
+		'At least {n} files that cannot be compared: no fingerprint of the content (same size, same date); the comparison stopped before the end',
+	'snapshots.compare.unknownMoreAtLeast': '… and at least {n} more, counted without being listed.',
 	'snapshots.compare.noChange': 'No visible change: nothing added, deleted, nor any metadata changed.'
 };

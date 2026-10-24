@@ -218,8 +218,11 @@ function myers(A: Int32Array, B: Int32Array, maxD: number): [number, number, num
 	return blocks.reverse();
 }
 
-/** The changes from a to b, bounded (see above); refine: the character diff of a small block. */
-export function lineDiff(a: string, b: string, refine?: (a: string, b: string) => readonly Span[]): Span[] {
+/**
+ * The changes from a to b, bounded (see above); refine: the character diff
+ * of a small block; coarse: called when the diff falls back to one block.
+ */
+export function lineDiff(a: string, b: string, refine?: (a: string, b: string) => readonly Span[], coarse?: () => void): Span[] {
 	// A sentinel line end: every line ends with "\n", the blocks are clean
 	// slices; offsets past the real ends are brought back below.
 	const la = (a + '\n').split('\n');
@@ -243,9 +246,9 @@ export function lineDiff(a: string, b: string, refine?: (a: string, b: string) =
 	const size = midA.length + midB.length;
 	if (size === 0) return [];
 	const maxD = editLimit(size);
-	const blocks = myers(midA, midB, maxD)?.map(([i0, i1, j0, j1]) => [i0 + p, i1 + p, j0 + p, j1 + p]) ?? [
-		[p, A.length - s, p, B.length - s]
-	];
+	const found = myers(midA, midB, maxD);
+	if (!found) coarse?.();
+	const blocks = found?.map(([i0, i1, j0, j1]) => [i0 + p, i1 + p, j0 + p, j1 + p]) ?? [[p, A.length - s, p, B.length - s]];
 	const starts = (lines: string[]) => {
 		const o = new Int32Array(lines.length + 1);
 		for (let i = 0; i < lines.length; i++) o[i + 1] = o[i] + lines[i].length + 1;
@@ -287,8 +290,8 @@ export function numbering(mg: MergeMod, state: EditorState): LineChunk[] {
 	return lc;
 }
 
-/** The read-only state that shows d (dark: the page's theme). */
-export async function diffState(d: DiffInput, label: string, dark: boolean): Promise<EditorState> {
+/** The read-only state that shows d (dark: the page's theme; coarse: see lineDiff). */
+export async function diffState(d: DiffInput, label: string, dark: boolean, coarse?: () => void): Promise<EditorState> {
 	const [cm, st, mg] = await Promise.all([import('@codemirror/view'), import('@codemirror/state'), import('@codemirror/merge')]);
 	const { EditorView, GutterMarker, gutter, highlightSpecialChars, lineNumbers } = cm;
 	type Editor = InstanceType<View>;
@@ -340,7 +343,9 @@ export async function diffState(d: DiffInput, label: string, dark: boolean): Pro
 				syntaxHighlightDeletions: false,
 				diffConfig: {
 					override: (x, y) =>
-						lineDiff(x, y, (p, q) => mg.diff(p, q, { scanLimit: 500 })).map((c) => new mg.Change(c.fromA, c.toA, c.fromB, c.toB))
+						lineDiff(x, y, (p, q) => mg.diff(p, q, { scanLimit: 500 }), coarse).map(
+							(c) => new mg.Change(c.fromA, c.toA, c.fromB, c.toB)
+						)
 				}
 			}),
 			// Image side: the old number, "+" for a line the container added.
@@ -367,10 +372,11 @@ export async function diffState(d: DiffInput, label: string, dark: boolean): Pro
 	});
 }
 
-/** Draws d in parent; the returned function removes it. */
-export async function mountDiff(parent: HTMLElement, d: DiffInput, label: string): Promise<() => void> {
+/** Draws d in parent: remove takes it away; coarse, the diff fell back to one block (lineDiff). */
+export async function mountDiff(parent: HTMLElement, d: DiffInput, label: string): Promise<{ remove: () => void; coarse: boolean }> {
 	const { EditorView } = await import('@codemirror/view');
-	const state = await diffState(d, label, document.documentElement.dataset.theme !== 'light');
+	let coarse = false;
+	const state = await diffState(d, label, document.documentElement.dataset.theme !== 'light', () => (coarse = true));
 	const view = new EditorView({ parent, state });
-	return () => view.destroy();
+	return { remove: () => view.destroy(), coarse };
 }

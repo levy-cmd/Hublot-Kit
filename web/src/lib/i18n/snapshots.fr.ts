@@ -103,5 +103,8 @@ export default {
 	'snapshots.field.link': 'cible du lien',
 	'snapshots.compare.unknown': "{n} fichiers non comparables : pas d'empreinte du contenu (même taille, même date)",
 	'snapshots.compare.unknownMore': '… et {n} autres, comptés sans être listés.',
+	'snapshots.compare.unknownAtLeast':
+		"Au moins {n} fichiers non comparables : pas d'empreinte du contenu (même taille, même date) ; la comparaison s'est arrêtée avant la fin",
+	'snapshots.compare.unknownMoreAtLeast': '… et au moins {n} autres, comptés sans être listés.',
 	'snapshots.compare.noChange': 'Aucun changement visible : ni ajout, ni suppression, ni métadonnée changée.'
 };

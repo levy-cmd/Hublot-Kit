@@ -2,7 +2,7 @@
 // metadata and a keyed fingerprint of each file kept by the agent, never the
 // content. Neither a fingerprint nor the key id ever reaches the page.
 import { api, ApiError, type Figures } from './api.ts';
-import { t, tf } from './i18n/index.ts';
+import { t, tf, tl, type Lang } from './i18n/index.ts';
 
 export type SnapshotSource = 'procfs' | 'archive' | 'index';
 
@@ -158,6 +158,21 @@ export const CHANGE_KINDS = KINDS.filter((k) => k !== 'unknown');
 /** The result of path, a change or an unknown entry. */
 export const findResult = (c: Comparison, path: string): CompareResult | null =>
 	c.results.find((r) => r.path === path) ?? c.unknown.find((r) => r.path === path) ?? null;
+
+/**
+ * The lines that sum up the unknown in language l: more is null when every
+ * one is listed. Review of tranche 9: once truncated, the agent stopped
+ * comparing, and unknownCount is a floor, said "at least".
+ */
+export function unknownSummary(c: Comparison, l: Lang): { summary: string; more: string | null } {
+	const floor = c.truncated ? 'AtLeast' : '';
+	const fill = (key: string, n: number) => tl(l, key).replace('{n}', n.toLocaleString(l));
+	const rest = c.unknownCount - c.unknown.length;
+	return {
+		summary: fill(`snapshots.compare.unknown${floor}`, c.unknownCount),
+		more: rest > 0 ? fill(`snapshots.compare.unknownMore${floor}`, rest) : null
+	};
+}
 
 /** "current", or the ID of another snapshot. Throws ApiError "indexing" while the current one is captured. */
 export const compareSnapshots = (sid: string, withId: string, signal?: AbortSignal) =>

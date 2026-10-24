@@ -13,7 +13,7 @@
 	import {
 		compareCandidates, compareSnapshots, contentPlan, deleteSnapshot, dirTimeOnly, fieldLabel, filterResults,
 		CHANGE_KINDS, findResult, groupSnapshots, imageMatch, kindCounts, listSnapshots, percent, planCost, snapshotPlans, sourceLabel,
-		takeSnapshot, type CompareKind, type Comparison, type SnapshotList, type SnapshotPlan, type SnapshotRow
+		takeSnapshot, unknownSummary, type CompareKind, type Comparison, type SnapshotList, type SnapshotPlan, type SnapshotRow
 	} from '#lib/snapshots.ts';
 	import { withParams } from '#lib/url.ts';
 
@@ -380,7 +380,7 @@
 							{#if cmp.unknownCount > 0}
 								<!-- Review of tranche 9: the unknown apart, folded, never in the way of a change. -->
 								<details class="unknown">
-									<summary>{tf('snapshots.compare.unknown', { n: cmp.unknownCount.toLocaleString(lang) })}</summary>
+									<summary>{unknownSummary(cmp, lang).summary}</summary>
 									<ul>
 										{#each cmp.unknown as r (r.path)}
 											<li>
@@ -388,8 +388,8 @@
 											</li>
 										{/each}
 									</ul>
-									{#if cmp.unknownCount > cmp.unknown.length}
-										<p class="muted">{tf('snapshots.compare.unknownMore', { n: (cmp.unknownCount - cmp.unknown.length).toLocaleString(lang) })}</p>
+									{#if unknownSummary(cmp, lang).more}
+										<p class="muted">{unknownSummary(cmp, lang).more}</p>
 									{/if}
 								</details>
 							{/if}

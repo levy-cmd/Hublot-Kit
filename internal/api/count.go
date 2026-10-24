@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"net/http"
+	"slices"
 	"time"
 )
 
@@ -25,6 +26,7 @@ type countResult struct {
 	n   int
 	at  time.Time
 	err error
+	key string // the countKey of the state counted
 }
 
 // countKey: a count describes one state of the container.
@@ -32,17 +34,39 @@ func countKey(id, startedAt, finishedAt string) string {
 	return id + "\x00" + startedAt + "\x00" + finishedAt
 }
 
+// countErrKey: a failed count is also kept under each ref of its job
+// (review of tranche 8). After a cap, dockerd may hold the container's lock
+// a while after the export was cut: the next poll gets the result without
+// an Inspect, which would wait for that lock and answer 503.
+func countErrKey(ref string) string { return "\x01" + ref }
+
 // countFor returns the result kept for key; an error is delivered once.
 func (sv *snapService) countFor(key string) (countResult, bool) {
 	sv.mu.Lock()
 	defer sv.mu.Unlock()
-	r, ok := sv.counts[key]
+	return sv.takeCount(key)
+}
+
+// countErrFor returns the failed count of ref, once (countErrKey).
+func (sv *snapService) countErrFor(ref string) (countResult, bool) {
+	sv.mu.Lock()
+	defer sv.mu.Unlock()
+	return sv.takeCount(countErrKey(ref))
+}
+
+// takeCount: under sv.mu. An error goes away with every entry of its count.
+func (sv *snapService) takeCount(k string) (countResult, bool) {
+	r, ok := sv.counts[k]
 	if !ok || time.Since(r.at) > countTTL {
-		delete(sv.counts, key)
+		delete(sv.counts, k)
 		return countResult{}, false
 	}
 	if r.err != nil {
-		delete(sv.counts, key)
+		for k2, o := range sv.counts {
+			if o.key == r.key {
+				delete(sv.counts, k2)
+			}
+		}
 	}
 	return r, true
 }
@@ -100,6 +124,10 @@ func (s *server) count(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusConflict, "conflict", "a snapshot or a count is in progress")
 		return
 	}
+	if res, ok := s.snap.countErrFor(ref); ok {
+		writeCount(w, res)
+		return
+	}
 	ctx, cancel := context.WithTimeout(r.Context(), fsTimeout)
 	defer cancel()
 	info, err := s.d.Docker.Inspect(ctx, ref)
@@ -130,13 +158,20 @@ func (s *server) count(w http.ResponseWriter, r *http.Request) {
 		writeSnapError(w, err)
 		return
 	}
+	refs := slices.Clone(j.refs)
 	go func() {
 		defer release()
 		err := s.run(c, j, nil, nil)
 		if err == nil {
 			err = s.unchanged(info)
 		}
-		s.snap.keepCount(key, countResult{n: int(j.entries.Load()), at: time.Now(), err: err})
+		res := countResult{n: int(j.entries.Load()), at: time.Now(), err: err, key: key}
+		s.snap.keepCount(key, res)
+		if err != nil {
+			for _, ref := range refs {
+				s.snap.keepCount(countErrKey(ref), res)
+			}
+		}
 		s.snap.finish(j, nil)
 	}()
 	timer := time.NewTimer(countFirstWait)
