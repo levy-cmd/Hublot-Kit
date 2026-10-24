@@ -2606,7 +2606,7 @@ limactl shell hk-fedora -- sudo ausearch -m avc -ts recent 2>&1 | tail -n 3
 rm -rf "$snap"
 ```
 
-Expected, sur chaque VM : `ok édition (PUT fs/file)`, `ok envoi (POST fs/upload)`, `ok mise à jour …`, `IMAGE OK : ghcr.io/levy-cmd/hublot-kit:<V>-arm64` ; `0` refus AppArmor ; `<no matches>` ; Fedora en `Enforcing`. Noter noyau, version de Docker et API de chaque VM, commit et run, au registre (`.claude/handoff/phase-lancement.registre.md`), avec les verdicts de revue. **Un correctif** (doc, script, VM en échec) : nouveau commit, puis de nouveau les étapes 7 et 8 sur ce commit ; la CI et les VM portent toujours sur le dernier commit.
+Expected, sur chaque VM : `ok édition (PUT fs/file)`, `ok envoi (POST fs/upload)`, `ok mise à jour …`, `IMAGE OK : ghcr.io/levy-cmd/hublot-kit:<V>-arm64` ; `0` refus AppArmor ; `<no matches>` ; Fedora en `Enforcing`. Noter noyau, version de Docker et API de chaque VM, commit et run, au registre (`.claude/handoff/phase-lancement.registre.md`, désormais dans le dépôt privé `levy-cmd/Hublot-Kit-registres`), avec les verdicts de revue. **Un correctif** (doc, script, VM en échec) : nouveau commit, puis de nouveau les étapes 7 et 8 sur ce commit ; la CI et les VM portent toujours sur le dernier commit.
 
 - [x] **Step 9: Relecture (CLAUDE.md, « Orchestration »)** — `relecteur` puis Codex (`codex:codex-rescue`, lecture seule), concordants ou arbitrés au registre. Points : CI et VM portent sur le dernier commit ; la garde refuse aussi le détail procfs et ne laisse jamais passer le jeton ; le bloc A de `check-docs.sh` lit bien `.goreleaser.yaml` (pas une copie) ; la commande de la doc reste celle de §8 ; résultats VM complets. La tranche B attend les deux avis et la fusion de A.
 
