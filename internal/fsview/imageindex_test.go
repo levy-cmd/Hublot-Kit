@@ -1198,8 +1198,10 @@ func TestImageExtractAbandoned(t *testing.T) {
 // Idle or more, a cancellation then due) is played again, never counted
 // (review of the CI run 40115484785).
 func TestImageExtractPolledKeepsGoing(t *testing.T) {
-	const idle = 100 * time.Millisecond
-	for attempt := 1; ; attempt++ {
+	// Each starved run doubles Idle, up to 3.2 s: beyond the stalls seen in
+	// the Linux container, -race, the host saturated (1.3 s at most).
+	idle := 100 * time.Millisecond
+	for attempt := 1; ; attempt, idle = attempt+1, 2*idle {
 		open := make(chan struct{})
 		var closes atomic.Int32
 		h := newSaveHook(imageDocker(saveArchive(t, layerOf(t, tfile("f", "F")))), func(ctx context.Context, _ string, rc io.ReadCloser) io.ReadCloser {
@@ -1232,10 +1234,10 @@ func TestImageExtractPolledKeepsGoing(t *testing.T) {
 			time.Sleep(2 * time.Millisecond)
 		}
 		if gap >= idle {
-			if attempt == 5 {
-				t.Fatalf("5 essais affamés (écart de %v entre deux requêtes, Idle %v) : non concluant", gap, idle)
+			if attempt == 6 {
+				t.Fatalf("6 essais affamés (écart de %v entre deux requêtes, Idle %v) : non concluant", gap, idle)
 			}
-			t.Logf("essai %d affamé (écart de %v), rejoué", attempt, gap)
+			t.Logf("essai %d affamé (écart de %v, Idle %v), rejoué avec Idle doublé", attempt, gap, idle)
 			continue
 		}
 		if cancelled {
