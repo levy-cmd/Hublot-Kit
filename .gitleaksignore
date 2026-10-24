@@ -1,0 +1,8 @@
+# Témoin de l'e2e « images : liste, détail par ID, secrets masqués » (web/e2e/images.e2e.ts), image construite par scripts/e2e.sh.
+b2db5eee1998f55036382a96478809c75ea8e7b8:scripts/e2e.sh:generic-api-key:23
+# Témoin du test TestImageConfigMasked (imagesFake, point d'entrée masqué).
+132dd14304d52fff1878fea6813df19e5f8d504b:internal/api/images_test.go:curl-auth-header:64
+# Témoin de TestSecretsInventoryNeverLeaksValues (ghpWitness), somme de contrôle CRC32 invalide, ne peut pas être un jeton GitHub.
+9ab988566d0f32f04c39ed5fa690c12d2f956e9f:internal/api/secrets_inventory_test.go:github-pat:26
+# Témoin du test TestImageHistoryMasked, cité dans le plan v0.2 (tranche 5, étape 1).
+c5ab9c080673b17d5cdf66b77aa70de1ba80e941:docs/superpowers/plans/2026-10-23-v0.2.md:curl-auth-header:368
