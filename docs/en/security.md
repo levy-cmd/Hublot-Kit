@@ -110,7 +110,7 @@ Treat the access token like the root password of the server.
 ## Audit log
 
 `audit.log` in the data directory, one JSON line per event: failed logins, revealed variables, edited and uploaded
-files, snapshots taken and deleted. A failed login also records the IP address of the TCP connection (never `X-Forwarded-For`). It is append-only and is not rotated in v0.1.
+files, snapshots taken and deleted. A failed login also records the IP address of the TCP connection (never `X-Forwarded-For`). It is append-only and is not rotated.
 
 ## Docker socket
 

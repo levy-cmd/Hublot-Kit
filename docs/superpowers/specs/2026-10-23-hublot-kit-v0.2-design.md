@@ -1,7 +1,7 @@
 # Hublot-Kit v0.2 — Complément de spec
 
 - **Date** : 2026-10-23
-- **Statut** : toutes les décisions de l'utilisateur du 2026-10-23 sont appliquées (v0.2 §0.1), et aucune question ne reste ouverte. Correctifs de revue du 2026-10-23 intégrés (registre)
+- **Statut** : toutes les décisions de l'utilisateur du 2026-10-23 sont appliquées (v0.2 §0.1), et aucune question ne reste ouverte. Correctifs de revue du 2026-10-23 intégrés (registre). Implémentée (2026-10-24) : tranches 1 à 9 validées par le relecteur et par Codex, CI de la PR #10 verte ; tranche 10 (clôture) en cours. Les écarts constatés pendant l'exécution sont en v0.2 §11
 - **Référence** : la spec v0.1 (`2026-10-07-hublot-kit-v0.1-design.md`) reste la référence pour tout ce que ce document ne change pas. Ses numéros de section (§5.1, §7…) sont cités tels quels ; les sections de ce document sont notées « v0.2 §N ».
 - **Plan** : `docs/superpowers/plans/2026-10-23-v0.2.md` ; registre : `.claude/handoff/phase-v0.2.registre.md`.
 
@@ -318,7 +318,7 @@ Pour un chemin de la liste F5 d'un conteneur :
 - **modifié** : à gauche, la version de l'image du conteneur (`GET /api/images/{imageId}/fs/file?path=`, v0.2 §5.5) ; à droite, celle du conteneur (aperçu F2) ; diff unifié avec numéros de ligne (`@codemirror/merge`, Q65) ;
 - **ajouté** : le contenu du conteneur seul ; **supprimé** : celui de l'image seule.
 
-Pas de diff si l'un des deux côtés est binaire (octet nul dans les 8 premiers Ko, §6), dépasse 2 Mio, ou n'est pas un fichier régulier : un message le dit. Le diff est calculé dans le navigateur, sans route nouvelle. Le chemin de F5 est celui du conteneur ; il est résolu dans l'index de l'image avec les règles de §5.2 étape 5.
+Pas de diff si l'un des deux côtés est binaire (octet nul dans les 8 premiers Ko, §6), dépasse 2 Mio, ou n'est pas un fichier régulier : un message le dit. Le diff est calculé dans le navigateur, sans route nouvelle, par un diff de lignes borné (`lineDiff`, revue de la tranche 7) : lignes × modifications ≤ 10⁷ et 1 000 modifications au plus ; au-delà, tout ce qui sépare le début et la fin communs devient un seul bloc remplacé, et le panneau le dit (tranche 10). Affinage par caractère : 4 Kio par bloc et 64 Kio en tout. Le chemin de F5 est celui du conteneur ; il est résolu dans l'index de l'image avec les règles de §5.2 étape 5.
 
 ### 5.7 Snapshots (F18)
 
@@ -391,7 +391,7 @@ Les noms de fichiers du conteneur sont écrits dans les manifestes. Un nom peut 
 - **Contre le conteneur actuel** (`with=current`) : une prise en mémoire (même parcours, mêmes plafonds, même coût que la prise, rien n'est écrit), en `202 indexing` avec la progression ; elle compte comme la prise unique de l'agent ; résultat gardé 5 min. Pour un fichier `modified`, l'interface montre le **contenu actuel** (aperçu F2). Elle montre un **vrai diff unifié** dans un seul cas : `GET /api/snapshots/{sid}/image-match?path=` répond `{"match": true}`, c'est-à-dire quand le `mac` de l'ancienne version égale le HMAC, calculé à la demande, de la version de ce chemin dans l'image du conteneur (extraction de v0.2 §5.5). L'ancien contenu est alors exactement celui de l'image. La route ne renvoie qu'un booléen.
 - Deux snapshots de conteneurs différents se comparent (par exemple avant et après une recréation par Compose, qui change l'ID) : l'interface le propose quand le nom ou le couple projet et service est le même.
 
-**Comptage** — `GET /api/containers/{id}/count` : le même parcours (ou export), sans HMAC ni écriture ; `202 indexing` pendant le calcul, résultat gardé 5 min. Il alimente le chiffre « Fichiers » (v0.2 §5.3).
+**Comptage** — `GET /api/containers/{id}/count` : le même parcours (ou export), sans HMAC ni écriture ; `202 indexing` pendant le calcul, résultat gardé 5 min. Il alimente le chiffre « Fichiers » (v0.2 §5.3). Un comptage en échec (plafond, délai) est rendu une fois, au premier relevé qui le demande par l'une des références de sa tâche (ID donné, ID complet, nom), sans `Inspect` : après un export coupé, dockerd peut garder le verrou du conteneur, et l'`Inspect` aurait répondu 503 au lieu de 413 (tranche 10). Un comptage réussi passe toujours par l'`Inspect`, qui vérifie l'état du conteneur.
 
 ### 5.8 Recherche globale (F12)
 
@@ -501,10 +501,34 @@ Le sens de `indexing` (202) s'élargit : un travail en cours (index, extraction,
 | Clé de snapshot perdue ou supprimée | les comparaisons de contenu deviennent impossibles (`contentCompared: false`), les métadonnées restent comparables |
 | Labels de tiers porteurs de secrets non reconnus par §7 | liste blanche (v0.2 §5.2) ; sans révélation |
 | Historique d'image porteur de secrets de construction | `secrets.History` sur chaque `createdBy` (valeurs après `|N` toutes masquées, puis `secrets.Line`) ; les formes non reconnues de §13 restent non masquées, comme pour la commande |
-| Nom de fichier sensible dans la recherche | un seul index à la fois, déjà construit, rien de mémorisé ; la requête peut paraître dans les journaux d'un reverse proxy, ce que la doc dit |
+| Nom de fichier sensible dans la recherche | un seul index à la fois, déjà construit, rien de mémorisé ; la requête part dans le corps d'un POST, jamais dans une URL : seul un proxy qui journalise les corps la verrait, ce que la doc dit |
+| Valeur d'`ARG` qui contient elle-même ` /bin/sh -c `, suivie d'une commande en forme exec ou d'un `SHELL` autre que sh ou bash | **risque résiduel accepté** (tranche 5) : un seul marqueur de shell reste, et la suite de la ligne ne passe que par `secrets.Line` ; l'historique ne permet pas de distinguer la valeur de la commande ; cas jugé très peu probable par les deux revues ; écrit dans les limites |
+| Comparaison tronquée (plus de 10 000 changements) | `unknownCount` n'est alors qu'un minimum : l'interface dit « au moins N » (tranche 10) |
 | Statut de Docker non reconnu par l'analyseur (autre langue, autre version) | affiché tel quel |
 | Niveau de log déduit à tort | marqué comme heuristique ; le flux `stdout` ou `stderr` reste visible |
 
 ## 10. Planning
 
 Plan : `docs/superpowers/plans/2026-10-23-v0.2.md`, en tranches verticales. La nouvelle interface sur les fonctions existantes vient d'abord, puis une fonction nouvelle par tranche ; la publication se fait sur ARRÊT (Q67).
+
+## 11. Écarts constatés à l'exécution
+
+Tirés du registre (`.claude/handoff/phase-v0.2.registre.md`), qui garde le détail, les mesures et les arbitrages. Le texte des sections ci-dessus est déjà aligné sur eux.
+
+| Tranche | Écart | Raison |
+|---|---|---|
+| 1 | sous 90 rem, un panneau du bas ne se monte qu'à sa première ouverture ; un flux de logs se coupe quand son panneau est caché | un panneau caché lançait un export d'un conteneur arrêté (4 Gio, 5 min, conteneur verrouillé) ; un flux caché tenait l'une des 8 places |
+| 2 | `(*Views).Cached(info)` prend un `Inspect` que l'appelant vient de faire, et non un ID seul | la clé `ID + FinishedAt` doit décrire l'état présent sans `Inspect` caché |
+| 2 | les labels Compose qui portent des chemins de l'hôte (`project.config_files`, `project.working_dir`, `project.environment_file`) sont masqués | décision de la session principale, resserre Q60 |
+| 2, 3 | les calculs de `ContainerSize` d'un même conteneur sont regroupés ; toute attente d'un calcul expiré répond 504 | Codex ; une CI instable sous overlay2 |
+| 3 | `SearchCached(ctx, info, q, limit)` et `Indexing(ref)` ; recherche en POST, requête dans le corps, une seule valeur JSON (`decodeOne`) ; l'interface n'envoie que l'ID complet | revue : la requête n'est jamais dans une URL ; pas de correspondance par préfixe (v0.1.1), d'où la limite de l'ID court pendant un export |
+| 4 | inventaire borné (15 s et 1 000 conteneurs par parcours, 4 `Inspect` pour l'agent, 3 s chacun), parcours simultanés regroupés ; `args` sans texte (`{part, index, kind, name?}`), `name` tiré d'un texte resté en clair seulement | Codex et relecteur : un masque partiel laissait sortir un reste de la valeur |
+| 5 | l'onglet « Images » de la page Conteneurs, sans tranche dans le plan, est livré par la tranche 5 | révision du plan |
+| 5 | `secrets.History` masque les valeurs d'`ARG` et toute ligne `LABEL` ; `\|N` exige exactement N mots `NOM=` ; deux marqueurs de shell ou plus masquent toute la ligne ; `entrypoint` et `cmd` masqués bout à bout | BuildKit garde ces valeurs en clair ; risque résiduel accepté en v0.2 §9 |
+| 6 | sous overlay2, `docker save` donne des couches tar non compressées (containerd : gzip) ; une couche faite de zéros est une couche vide ; une erreur passagère d'extraction est oubliée après `Idle` | constaté en CI ; revue |
+| v0.1.2 | report dans la v0.2 : erreurs Docker à détail fixe sur toutes les routes, délai d'écriture sur les deux aperçus | audit de sécurité indépendant |
+| 7 | diff de lignes maison passé par `diffConfig.override`, borné (v0.2 §5.6) ; `highlightSpecialChars` ; le repli en un seul bloc est signalé (tranche 10) | ni `timeout` ni `scanLimit` ne bornaient `findMatch` : une ligne de 300 Ko déplacée gelait l'onglet 12 à 20 s |
+| 8 | `CaptureArchive` plafonne les noms et cibles gardés à 256 Mio ; mémoire chiffrée à 250 Mo mesurés, 500 Mo au pire ; un comptage en échec est rendu sans `Inspect` (tranche 10) | auditeur : environ 5,4 Gio au plafond de 4 Gio par un simple comptage |
+| 8 | réserves acceptées : `tar.Reader.Next()` lit un en-tête avant le contrôle (borné par `archive/tar`) ; la rétention de 1 Gio peut être dépassée de la taille d'un snapshot | Codex |
+| 9 | `Compare` prend des flux ; les `unknown` sont comptés à part (`unknownCount`, 1 000 listés), `truncated` ne porte que sur les vrais changements ; « au moins N » quand `truncated` (tranche 10) ; `image-match` lit 2 Mio au plus, `match: false` si la taille diffère | auditeur : 20 000 inconnus évinçaient un vrai ajout |
+| 10 | `TestNoDockerWritesOutsideFiles` lit les routes dans la source du routeur et classe chaque méthode de `dockerx.Client` en lecture ou écriture | une route future est couverte sans toucher au test |

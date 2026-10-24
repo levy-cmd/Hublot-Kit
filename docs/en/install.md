@@ -8,7 +8,7 @@
 - Linux amd64 or arm64.
 - Kernel 5.6 or later to read files; 5.8 or later to edit or upload files in a running container.
 - Docker Engine with API 1.44 or later (`docker version` shows it), overlay2 or containerd storage.
-- Not supported in v0.1: rootless Docker, `userns-remap`, Podman, Kubernetes.
+- Not supported: rootless Docker, `userns-remap`, Podman, Kubernetes.
 
 ## Docker (recommended)
 
@@ -93,7 +93,7 @@ Behind a proxy every connection comes from the proxy's address, and the agent ac
 address: enough for one or two users. For more, or a proxy that keeps a large pool of connections, raise it, for
 example `-e HUBLOT_MAX_CONNS_PER_IP=256` (512 at most, the cap for every address together).
 
-Without a proxy, `--tls-cert` and `--tls-key` serve HTTPS directly. v0.1 does not obtain certificates by itself.
+Without a proxy, `--tls-cert` and `--tls-key` serve HTTPS directly. Hublot-Kit does not obtain certificates by itself.
 
 ## Binary and systemd
 
@@ -187,7 +187,7 @@ sudo systemctl restart hublot-kit
 `--data-dir` must be dedicated to Hublot-Kit. It holds `token.sha256` (the hash of the token, never the token) and
 `audit.log`. Missing, it is created with mode 0700. Existing, its mode is kept, but the agent refuses to start if it
 is a symbolic link, if it belongs to another user, or if its group or others can write to it (`/tmp`, for example).
-Its files are never opened through a symbolic link. The audit log is not rotated in v0.1.
+Its files are never opened through a symbolic link. The audit log is not rotated.
 
 ## Upgrade
 
@@ -236,7 +236,7 @@ changed since. What it does not prove: that the code of the tag was reviewed, or
 what syft, for the archives, and BuildKit, for the image, found in the binary), nor anything about the web interface
 beyond its origin: it is built by `npm ci` from `web/package-lock.json` and embedded in the signed binary, so a
 compromised npm dependency would be signed too (building it in a separate job keeps the signing tokens away from npm,
-not its output). The text of the release page is not signed either. No SLSA provenance is published in v0.1.
+not its output). The text of the release page is not signed either. No SLSA provenance is published.
 
 Every release is checked by [scripts/verify-release.sh](../../scripts/verify-release.sh) before it is published: the
 commands below, with the same identity and issuer, plus each archive's own bundle, the SBOMs (SPDX, agent module

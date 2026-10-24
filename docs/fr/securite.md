@@ -118,7 +118,7 @@ Traitez le jeton d'accès comme le mot de passe root du serveur.
 
 `audit.log` dans le dossier de données, une ligne JSON par événement : connexions échouées, variables révélées,
 fichiers édités et envoyés, snapshots pris et supprimés. Une connexion échouée note aussi l'adresse IP de la connexion TCP (jamais
-`X-Forwarded-For`). Il est en ajout seul et n'est pas tourné en v0.1.
+`X-Forwarded-For`). Il est en ajout seul et n'est pas tourné.
 
 ## Socket Docker
 

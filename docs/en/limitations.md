@@ -1,13 +1,14 @@
-# Known limitations (v0.1)
+# Known limitations
 
-v0.1 is a first public version. This page lists what it does not do, and the cases it knowingly does not detect.
-The technical spec ([§13, in French](../superpowers/specs/2026-10-07-hublot-kit-v0.1-design.md)) has every detail.
+This page lists what Hublot-Kit does not do, and the cases it knowingly does not detect. The technical specs, in
+French, have every detail: [v0.1 §13](../superpowers/specs/2026-10-07-hublot-kit-v0.1-design.md), and
+[v0.2 §9](../superpowers/specs/2026-10-23-hublot-kit-v0.2-design.md) for what v0.2 adds.
 
 ## Scope
 
 - One Docker server, one user. Multiple servers or users: later.
 - Not supported: rootless Docker, `userns-remap`, Podman, Kubernetes.
-- Not in v0.1: processes and resources, start/stop/restart, web terminal (planned for v0.2); certificates from
+- Not done: processes and resources, start/stop/restart, web terminal (postponed after v0.2); certificates from
   Let's Encrypt (bring your own); rotation of the audit log.
 
 ## Host
@@ -108,6 +109,10 @@ The technical spec ([§13, in French](../superpowers/specs/2026-10-07-hublot-kit
 - **Cost of a read**: the preview of a file reads the export again up to the end of the layer that holds it, earlier layers included; at worst, the whole export (a few seconds for an image of a gigabyte). The export keeps a core and Docker's disk busy for its duration, without locking any container. Two reads at most for the whole agent, one per image; beyond, the preview waits and asks again.
 - Caps of the index: 4 GiB read, 16 GiB decompressed, 1,000,000 entries, 4 KiB per name or link target, 256 MiB of names, 5 minutes; of a read: 4 GiB, 16 GiB decompressed, 2 minutes. Beyond, `too_large`.
 - No download of the files of an image, and a preview of 2 MiB at most.
+- Build history: the values of the build arguments are masked, whatever their name. Accepted residual risk: the value
+  of an `ARG` that itself contains ` /bin/sh -c `, followed by a command in exec form or by a `SHELL` other than sh or
+  bash, leaves a single shell marker; the rest of the line is then masked by the ordinary rules only. The history
+  does not tell the value from the command, and the case is very unlikely.
 
 ## Snapshots (v0.2)
 
@@ -117,10 +122,12 @@ The technical spec ([§13, in French](../superpowers/specs/2026-10-07-hublot-kit
 - Caps: 500,000 entries (past it, refused: an incomplete manifest would show deletions); 1 GiB hashed, then the next files without a fingerprint ("partial"); 256 MiB per hashed file; 10,000 entries read per directory; 10 min for a running container, 4 GiB and 5 min for an export. Memory: an export keeps every entry until its end, about 500 bytes each (measured: a 37 MB peak for 36,784 entries), about 250 MB at the entry cap; the paths and link targets kept are capped at 256 MiB in all, as for the index (past it, refused), about 500 MB at worst; the walk of a running container writes as it goes (measured: 22 MB). The manifest takes about 42 bytes per entry once compressed (1.5 MB for 36,784).
 - Retention: 20 photos per container and 1 GiB in all, then refused; no automatic deletion.
 - With the key lost, deleted or changed (`rotate-snapshot-key`), older photos compare by their metadata only.
+- Past 10,000 differences, the comparison stops: the files of the same size and date it counted as "unknown" are then
+  a floor, shown as "at least N".
 
 ## Secret masking
 
-The X-ray masks secrets by name and by known forms. Not recognised in v0.1, among others:
+The X-ray masks secrets by name and by known forms. Not recognised, among others:
 
 - JSON values (`{"token": "…"}`), `user:password@host` without `://`, `password = …` with spaces, a variable named
   `DB_PWD`;
@@ -129,4 +136,4 @@ The X-ray masks secrets by name and by known forms. Not recognised in v0.1, amon
   `ApiKey …`;
 - some masks leave a remainder visible, and `env PWD=/srv` is masked although it is not a secret.
 
-The command itself cannot be revealed in v0.1 (`docker inspect` can).
+The command itself cannot be revealed (`docker inspect` can).

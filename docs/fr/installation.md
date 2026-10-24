@@ -9,7 +9,7 @@
 - Noyau 5.6 ou plus récent pour lire les fichiers ; 5.8 ou plus récent pour éditer ou envoyer des fichiers dans un
   conteneur actif.
 - Docker Engine avec l'API 1.44 ou plus récente (`docker version` l'indique), stockage overlay2 ou containerd.
-- Non pris en charge en v0.1 : Docker rootless, `userns-remap`, Podman, Kubernetes.
+- Non pris en charge : Docker rootless, `userns-remap`, Podman, Kubernetes.
 
 ## Docker (recommandé)
 
@@ -96,7 +96,7 @@ temps par adresse : assez pour un ou deux utilisateurs. Pour plus, ou pour un pr
 connexions, augmentez-la, par exemple `-e HUBLOT_MAX_CONNS_PER_IP=256` (512 au plus, le plafond pour toutes les
 adresses ensemble).
 
-Sans proxy, `--tls-cert` et `--tls-key` servent directement en HTTPS. La v0.1 n'obtient pas de certificat elle-même.
+Sans proxy, `--tls-cert` et `--tls-key` servent directement en HTTPS. Hublot-Kit n'obtient pas de certificat lui-même.
 
 ## Binaire et systemd
 
@@ -192,7 +192,7 @@ sudo systemctl restart hublot-kit
 `audit.log`. Absent, il est créé en 0700. Existant, ses droits ne sont pas modifiés, mais l'agent refuse de démarrer
 si c'est un lien symbolique, s'il appartient à un autre utilisateur, ou s'il est accessible en écriture au groupe ou à
 tous (`/tmp`, par exemple). Ses fichiers ne sont jamais ouverts à travers un lien symbolique. Le journal d'audit n'est
-pas tourné en v0.1.
+pas tourné.
 
 ## Mise à jour
 
@@ -241,8 +241,7 @@ depuis. Ce qu'elle ne prouve pas : que le code du tag a été relu, ni qu'un SBO
 pour les archives, et BuildKit, pour l'image, ont trouvé dans le binaire), ni rien de l'interface web au-delà de son
 origine : elle est construite par `npm ci` à partir de `web/package-lock.json` et embarquée dans le binaire signé ; une
 dépendance npm compromise serait donc signée aussi (la construire dans un job à part tient les jetons de signature loin
-de npm, pas son résultat). Le texte de la page de release n'est pas signé non plus. Aucune provenance SLSA n'est publiée
-en v0.1.
+de npm, pas son résultat). Le texte de la page de release n'est pas signé non plus. Aucune provenance SLSA n'est publiée.
 
 Chaque release est contrôlée par [scripts/verify-release.sh](../../scripts/verify-release.sh) avant sa publication :
 les commandes ci-dessous, avec la même identité et le même émetteur, plus le bundle propre à chaque archive, les SBOM

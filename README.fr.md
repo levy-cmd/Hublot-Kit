@@ -7,28 +7,39 @@
 [Read in English](README.md)
 
 Explorer l'intérieur des conteneurs Docker d'un serveur depuis un navigateur, sans terminal. Choisissez un conteneur
-et voyez ses fichiers, ce qui a changé depuis sa création, ses logs et sa configuration.
+et voyez ses fichiers, ce qui a changé depuis son image, ses logs et sa configuration ; parcourez les fichiers d'une
+image ; prenez une photo des fichiers d'un conteneur pour la comparer plus tard.
 
-![Liste des conteneurs](docs/images/containers.png)
-![Explorateur de fichiers avec les changements depuis la création](docs/images/explorer.png)
+![Liste des conteneurs, thème sombre](docs/images/containers.png)
+![Explorateur de fichiers avec les changements depuis l'image](docs/images/explorer.png)
 
-## Ce qu'il fait (v0.1)
+## Ce qu'il fait (v0.2)
 
-- **Conteneurs** : nom, image, statut, ports, durée de fonctionnement ; filtre et recherche.
+- **Conteneurs** : nom, image, projet Compose, statut, ports, durée de fonctionnement ; onglets, filtres, chiffres
+  clés (fichiers, taille de l'image, taille du conteneur) et labels, filtrés.
 - **Fichiers** : toute l'arborescence d'un conteneur actif ou arrêté, aperçu texte et image, taille, propriétaire,
   droits.
 - **Téléchargement** d'un fichier, ou d'un dossier en archive tar.
 - **Édition** d'un fichier texte ou **envoi** d'un fichier, après une confirmation qui rappelle le conteneur et le
   chemin.
-- **Changements** : ce qui a été ajouté, modifié ou supprimé depuis la création du conteneur.
+- **Diff avec l'image** : ce qui a été ajouté, modifié ou supprimé depuis l'image, et le diff ligne à ligne d'un
+  fichier modifié entre sa version dans l'image et dans le conteneur.
 - **Logs** : flux en direct, recherche, pause et reprise, téléchargement.
 - **Radiographie** : image, état, commande, environnement (secrets masqués, révélés un par un et journalisés), ports,
   réseaux, montages.
-- **Lecture seule** (`--read-only`) : aucune écriture.
+- **Images** : toutes les images du démon, leurs couches et leur configuration (masquée), et leurs fichiers en
+  lecture seule, sans créer de conteneur.
+- **Snapshots** : une photo des fichiers d'un conteneur (métadonnées et empreinte à clé, jamais le contenu), comparée
+  à une autre photo ou au conteneur actuel.
+- **Secrets** : les noms de tout ce que l'agent masque, dans tous les conteneurs ; jamais une valeur, sauf révélée,
+  une à la fois.
+- **Recherche** (`Ctrl K`) : conteneurs, projets Compose, pages, et fichiers d'un index déjà construit.
+- **Thèmes** : sombre par défaut, clair à la demande, mémorisé dans le navigateur.
+- **Lecture seule** (`--read-only`) : aucune écriture dans les conteneurs ; l'interface montre l'état réel de l'agent.
 
 Un serveur, un utilisateur, une interface en français et en anglais, un seul binaire statique avec l'interface
 embarquée, pas de base de données, aucune télémétrie. Les process et ressources, le démarrage et l'arrêt, et un
-terminal web sont prévus pour la v0.2.
+terminal web sont reportés après la v0.2.
 
 ## Démarrage rapide
 
@@ -64,11 +75,12 @@ Vous préférez un binaire lancé par systemd ? Voir [Binaire et systemd](docs/f
 
 ## Documentation
 
-- [Visite de l'interface](docs/fr/guide.md) : la disposition, les panneaux, le thème, la lecture seule telle que l'interface la montre.
+- [Visite de l'interface](docs/fr/guide.md) : la disposition, la recherche, les panneaux, les pages Images, Secrets
+  et Snapshots, le thème, la lecture seule telle que l'interface la montre.
 - [Installation](docs/fr/installation.md) : Docker, binaire et systemd, reverse proxy, jeton, mise à jour,
   désinstallation, vérification des signatures et des SBOM d'une release.
 - [Modèle de sécurité](docs/fr/securite.md) : ce que l'agent peut faire, ce qui le protège, comment l'exposer.
-- [Limites connues](docs/fr/limites.md) : ce que la v0.1 ne fait pas, ou ne détecte pas.
+- [Limites connues](docs/fr/limites.md) : ce que Hublot-Kit ne fait pas, ou ne détecte pas.
 
 ## Développement
 
@@ -83,8 +95,9 @@ make test-linux
 
 Sur macOS (Docker Desktop), `/proc/<pid>/root` n'existe que dans la machine virtuelle de Docker : l'agent tourne donc
 dans un conteneur, `make web && scripts/dev-agent.sh`. L'interface en mode développement passe par un proxy vers
-l'agent sur `127.0.0.1:7878` : `cd web && npm run dev`. La spec technique est dans
-[docs/superpowers/specs](docs/superpowers/specs/2026-10-07-hublot-kit-v0.1-design.md).
+l'agent sur `127.0.0.1:7878` : `cd web && npm run dev`. Les specs techniques sont dans docs/superpowers/specs :
+[v0.1](docs/superpowers/specs/2026-10-07-hublot-kit-v0.1-design.md), la référence, et
+[v0.2](docs/superpowers/specs/2026-10-23-hublot-kit-v0.2-design.md), son complément.
 
 ## Licence
 
