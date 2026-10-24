@@ -1136,7 +1136,8 @@ func TestImageExtractLimits(t *testing.T) {
 		h := newSaveHook(imageDocker(saveArchive(t, layerOf(t, tfile("a", "A"), tfile("b", "B")))), func(ctx context.Context, _ string, rc io.ReadCloser) io.ReadCloser {
 			return &held{ctx: ctx, open: open, rc: rc, closes: &closes}
 		})
-		fsys := readyImage(t, NewViews(h, Options{}), imgID)
+		v := NewViews(h, Options{})
+		fsys := readyImage(t, v, imgID)
 		fsys.Open(tctx, "/a")
 		for deadline := time.Now().Add(2 * time.Second); h.callsOf(imgID) < 2; time.Sleep(time.Millisecond) {
 			if time.Now().After(deadline) {
@@ -1146,7 +1147,12 @@ func TestImageExtractLimits(t *testing.T) {
 		if _, err := fsys.Open(tctx, "/b"); !errors.Is(err, ErrIndexing) {
 			t.Errorf("seconde extraction de l'image : %v", err)
 		}
-		time.Sleep(20 * time.Millisecond)
+		// An extraction is held from its start, under v.mu, before Open
+		// returns: none for /b means nothing was started (a state, not a
+		// 20 ms wait).
+		if held, _, _ := extractState(v, imgID, "/b"); held {
+			t.Error("extraction de /b lancée pendant celle de /a")
+		}
 		if n := h.callsOf(imgID); n != 2 {
 			t.Errorf("%d exports, attendu 2 (l'index, puis /a seul)", n)
 		}
@@ -1185,28 +1191,70 @@ func TestImageExtractAbandoned(t *testing.T) {
 	}
 }
 
-// A request keeps its extraction alive: polled every 20 ms, it is never
-// cancelled by Idle.
+// A request keeps its extraction alive: polled for 4 Idle, then until its
+// content, it is never cancelled by Idle. Idle is the subject, so time is:
+// the test concludes only on a run whose requests all came less than Idle
+// apart up to the content, measured; a run the machine starved (a gap of
+// Idle or more, a cancellation then due) is played again, never counted
+// (review of the CI run 40115484785).
 func TestImageExtractPolledKeepsGoing(t *testing.T) {
-	open := make(chan struct{})
-	var closes atomic.Int32
-	h := newSaveHook(imageDocker(saveArchive(t, layerOf(t, tfile("f", "F")))), func(ctx context.Context, _ string, rc io.ReadCloser) io.ReadCloser {
-		return &held{ctx: ctx, open: open, rc: rc, closes: &closes}
-	})
-	fsys := readyImage(t, NewViews(h, Options{Extract: ExtractLimits{Idle: 60 * time.Millisecond}}), imgID)
-	for range 15 {
-		fsys.Open(tctx, "/f")
-		time.Sleep(20 * time.Millisecond)
-	}
-	if closes.Load() != 0 {
-		t.Fatal("extraction annulée alors qu'elle est demandée")
-	}
-	close(open)
-	if got, err := readImage(t, fsys, "/f"); err != nil || got != "F" {
-		t.Errorf("%q, %v", got, err)
-	}
-	if n := h.callsOf(imgID); n != 2 {
-		t.Errorf("%d exports, attendu 2", n)
+	// Each starved run doubles Idle, up to 3.2 s: beyond the stalls seen in
+	// the Linux container, -race, the host saturated (1.3 s at most).
+	idle := 100 * time.Millisecond
+	for attempt := 1; ; attempt, idle = attempt+1, 2*idle {
+		open := make(chan struct{})
+		var closes atomic.Int32
+		h := newSaveHook(imageDocker(saveArchive(t, layerOf(t, tfile("f", "F")))), func(ctx context.Context, _ string, rc io.ReadCloser) io.ReadCloser {
+			return &held{ctx: ctx, open: open, rc: rc, closes: &closes}
+		})
+		fsys := readyImage(t, NewViews(h, Options{Extract: ExtractLimits{Idle: idle}}), imgID)
+		// gap: from before a request to after the next one, a bound of the
+		// time between their two resets of Idle.
+		var gap time.Duration
+		start := time.Now()
+		prev := start
+		poll := func() (io.ReadCloser, error) {
+			before := time.Now()
+			rc, err := fsys.Open(tctx, "/f")
+			gap = max(gap, time.Since(prev))
+			prev = before
+			return rc, err
+		}
+		for time.Since(start) < 4*idle {
+			poll()
+			time.Sleep(2 * time.Millisecond)
+		}
+		cancelled := closes.Load() != 0
+		close(open) // the export flows: polled until its content
+		rc, err := poll()
+		for deadline := time.Now().Add(5 * time.Second); errors.Is(err, ErrIndexing); rc, err = poll() {
+			if time.Now().After(deadline) {
+				t.Fatal("extraction jamais finie")
+			}
+			time.Sleep(2 * time.Millisecond)
+		}
+		if gap >= idle {
+			if attempt == 6 {
+				t.Fatalf("6 essais affamés (écart de %v entre deux requêtes, Idle %v) : non concluant", gap, idle)
+			}
+			t.Logf("essai %d affamé (écart de %v, Idle %v), rejoué avec Idle doublé", attempt, gap, idle)
+			continue
+		}
+		if cancelled {
+			t.Errorf("extraction annulée alors qu'elle est demandée (écart max %v, Idle %v)", gap, idle)
+		}
+		if err != nil {
+			t.Fatalf("Open : %v", err)
+		}
+		got, _ := io.ReadAll(rc)
+		rc.Close()
+		if string(got) != "F" {
+			t.Errorf("contenu %q", got)
+		}
+		if n := h.callsOf(imgID); n != 2 {
+			t.Errorf("%d exports, attendu 2 (écart max %v, Idle %v)", n, gap, idle)
+		}
+		return
 	}
 }
 
@@ -1297,21 +1345,44 @@ func TestImageIndexErrorCached(t *testing.T) {
 	}
 }
 
+// gatedSave holds every export until release is closed (or its context
+// ends): a build cannot end before the test lets it.
+type gatedSave struct {
+	*dockerx.Fake
+	release chan struct{}
+}
+
+func (g gatedSave) ImageSave(ctx context.Context, id string) (io.ReadCloser, error) {
+	select {
+	case <-g.release:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
+	return g.Fake.ImageSave(ctx, id)
+}
+
 // SearchImage reads only an index already served, never exports.
 func TestImageSearch(t *testing.T) {
 	f := imageDocker(saveArchive(t, layerOf(t, tdir("etc/"), tdir("etc/nginx/"), tfile("etc/nginx/nginx.conf", "x"))))
-	v := NewViews(f, Options{})
+	release := make(chan struct{})
+	v := NewViews(gatedSave{f, release}, Options{})
 	if hits, _, indexed := v.SearchImage(tctx, imgID, "nginx", 10); indexed || len(hits) != 0 {
 		t.Errorf("avant l'index : %v %v", hits, indexed)
 	}
 	if n := f.ImageSaveCalls.Load(); n != 0 {
 		t.Fatalf("la recherche a lancé %d export(s)", n)
 	}
-	// Built, but never served to the explorer (its request went away).
+	// Built, but never served to the explorer (its request went away). The
+	// export is held: the build cannot end before ForImage answers (CI run
+	// 40115484785, a tiny index built before the check of await).
 	if _, err := v.ForImage(tctx, imgID); !errors.Is(err, ErrIndexing) {
 		t.Fatalf("ForImage : %v", err)
 	}
-	for deadline := time.Now().Add(2 * time.Second); ; time.Sleep(time.Millisecond) {
+	if _, _, indexed := v.SearchImage(tctx, imgID, "nginx", 10); indexed {
+		t.Error("index en cours : indexed")
+	}
+	close(release)
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(time.Millisecond) {
 		v.mu.Lock()
 		b := v.builds[imageKey(imgID)]
 		v.mu.Unlock()
