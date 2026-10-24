@@ -2,11 +2,13 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ApiError } from './api.ts';
 import { t } from './i18n/index.ts';
 import {
+	CHANGE_KINDS,
 	compareCandidates,
 	compareSnapshots,
 	contentPlan,
 	fieldLabel,
 	filterResults,
+	findResult,
 	groupSnapshots,
 	imageMatch,
 	kindCounts,
@@ -16,6 +18,7 @@ import {
 	snapshotPlans,
 	takeSnapshot,
 	type CompareResult,
+	type Comparison,
 	type SnapshotRow
 } from './snapshots.ts';
 
@@ -146,6 +149,25 @@ describe('snapshots', () => {
 			expect(fieldLabel(f)).toBe(t(`snapshots.field.${f}`));
 		}
 		expect(fieldLabel('later')).toBe('later');
+	});
+
+	// Review of tranche 9: the unknown come apart, never among the filters.
+	it('finds a result among the changes or the unknown', () => {
+		expect(CHANGE_KINDS).not.toContain('unknown');
+		expect(CHANGE_KINDS).toHaveLength(KINDS.length - 1);
+		const side = { id: 'x' } as Comparison['a'];
+		const c: Comparison = {
+			a: side,
+			b: side,
+			contentCompared: false,
+			truncated: false,
+			results: [{ path: '/added', kind: 'added', type: 'file', fields: [] }],
+			unknown: [{ path: '/same', kind: 'unknown', type: 'file', fields: [] }],
+			unknownCount: 12_345
+		};
+		expect(findResult(c, '/added')?.kind).toBe('added');
+		expect(findResult(c, '/same')?.kind).toBe('unknown');
+		expect(findResult(c, '/none')).toBeNull();
 	});
 
 	it('shows whole percents below 100', () => {

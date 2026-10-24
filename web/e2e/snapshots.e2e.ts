@@ -89,10 +89,14 @@ test('snapshots : comparaison avec le conteneur actuel, diff seulement si l’im
 		await expect(section).toContainText('Aucune différence.');
 	} else {
 		// A photo of the metadata (another journey built the index first):
-		// a file of the same size and date is unknown, nothing else differs.
+		// a file of the same size and date is unknown, counted apart and
+		// folded (review of tranche 9), nothing else differs.
 		await expect(section).toContainText('Empreintes non comparables');
-		expect(real.results.length).toBeGreaterThan(0);
-		for (const r of real.results) expect(r.kind).toBe('unknown');
+		expect(real.results).toEqual([]);
+		expect(real.unknownCount).toBeGreaterThan(0);
+		for (const r of real.unknown) expect(r.kind).toBe('unknown');
+		await expect(section.locator('details.unknown summary')).toContainText('fichiers non comparables');
+		await expect(section.locator('details.unknown a').first()).toBeHidden();
 	}
 
 	// The page as it shows a modified file, the agent's answers replaced.

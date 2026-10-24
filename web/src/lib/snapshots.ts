@@ -141,9 +141,23 @@ export type Comparison = {
 	a: CompareSide;
 	b: CompareSide;
 	contentCompared: boolean;
+	/** The real changes (never "unknown"), at most 10 000, then truncated. */
 	results: CompareResult[];
 	truncated: boolean;
+	/**
+	 * The unknown apart (review of tranche 9: 20 000 of them must never
+	 * hide a file added): the first 1 000 listed, all counted.
+	 */
+	unknown: CompareResult[];
+	unknownCount: number;
 };
+
+/** The kinds the filters offer: the real changes; the unknown are summed up apart. */
+export const CHANGE_KINDS = KINDS.filter((k) => k !== 'unknown');
+
+/** The result of path, a change or an unknown entry. */
+export const findResult = (c: Comparison, path: string): CompareResult | null =>
+	c.results.find((r) => r.path === path) ?? c.unknown.find((r) => r.path === path) ?? null;
 
 /** "current", or the ID of another snapshot. Throws ApiError "indexing" while the current one is captured. */
 export const compareSnapshots = (sid: string, withId: string, signal?: AbortSignal) =>

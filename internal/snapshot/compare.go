@@ -11,7 +11,10 @@ import (
 // The comparison of two manifests (spec v0.2 §5.7, Q59): a merge of two
 // streams of entries, both in the order of the components (ComparePaths),
 // in O(n) and in constant memory: one entry of each side at a time, plus
-// the results, capped. No content is kept anywhere, so the only verdict on
+// the results, capped. The unknown are counted apart, a few of them
+// listed (review of tranche 9: without fingerprints every unchanged file
+// is unknown, and 20 000 of them filled the cap and hid a file added).
+// The real changes are never pushed out by them. No content is kept anywhere, so the only verdict on
 // a content is the comparison of two MACs of the same key.
 
 // Result is one difference. Kind: added, deleted, modified (MACs of the
@@ -31,9 +34,26 @@ type Result struct {
 // a path twice); merged anyway, every later entry would be wrong.
 var ErrOutOfOrder = errors.New("snapshot manifest not in the order of its components")
 
-// ErrResultsFull: the Merger has its limit of results and one more; Add
-// returns it to stop the capture that feeds it.
+// ErrResultsFull: the Merger has its limit of real changes and one more;
+// Add returns it to stop the capture that feeds it. The unknown never
+// fill it.
 var ErrResultsFull = errors.New("comparison: results full")
+
+// MaxUnknownPaths: the unknown listed by a comparison; past it, they are
+// counted only.
+const MaxUnknownPaths = 1000
+
+// Outcome is the end of a comparison. Results: the real changes (added,
+// deleted, modified, meta, type), at most the limit, then Truncated.
+// Unknown: the first MaxUnknownPaths entries of kind unknown; UnknownCount
+// counts them all (up to the end of the comparison, which a Truncated one
+// reaches early). All in the order of the components.
+type Outcome struct {
+	Results      []Result
+	Truncated    bool
+	Unknown      []Result
+	UnknownCount int
+}
 
 // Merger compares the entries of a (pulled from its stream) with those of
 // b, pushed by Add as a capture gives them (spec v0.2 §5.7: against the
@@ -51,6 +71,8 @@ type Merger struct {
 	same    bool
 	limit   int
 	results []Result
+	unknown []Result
+	nUnk    int
 	full    bool
 	partial bool
 	err     error
@@ -93,12 +115,18 @@ func (m *Merger) begin() error {
 }
 
 func (m *Merger) emit(r Result) error {
+	if r.Fields == nil {
+		r.Fields = []string{}
+	}
+	if r.Kind == "unknown" { // apart: never counted in the limit
+		if m.nUnk++; len(m.unknown) < MaxUnknownPaths {
+			m.unknown = append(m.unknown, r)
+		}
+		return nil
+	}
 	if len(m.results) >= m.limit {
 		m.full = true
 		return ErrResultsFull
-	}
-	if r.Fields == nil {
-		r.Fields = []string{}
 	}
 	m.results = append(m.results, r)
 	return nil
@@ -143,30 +171,37 @@ func (m *Merger) MarkPartial() { m.partial = true }
 // Partial reports MarkPartial.
 func (m *Merger) Partial() bool { return m.partial }
 
-// Finish takes the rest of a as deleted, and returns the results, in the
-// order of the components; truncated: there were more than the limit.
-func (m *Merger) Finish() (results []Result, truncated bool, err error) {
+// Finish takes the rest of a as deleted, and returns the outcome.
+func (m *Merger) Finish() (Outcome, error) {
 	defer m.stop()
 	if err := m.begin(); err != nil && !errors.Is(err, ErrResultsFull) {
-		return nil, false, err
+		return Outcome{}, err
 	}
 	for !m.full && m.has {
 		if err := m.emit(Result{Path: m.cur.Path, Kind: "deleted", Type: m.cur.Type}); err != nil {
 			break
 		}
 		if err := m.advance(); err != nil {
-			return nil, false, err
+			return Outcome{}, err
 		}
 	}
-	return m.results, m.full, nil
+	o := Outcome{Results: m.results, Truncated: m.full, Unknown: m.unknown, UnknownCount: m.nUnk}
+	if o.Results == nil {
+		o.Results = []Result{}
+	}
+	if o.Unknown == nil {
+		o.Unknown = []Result{}
+	}
+	return o, nil
 }
 
 // Close releases a without a result (an aborted capture).
 func (m *Merger) Close() { m.stop() }
 
 // Compare merges the manifests a and b (spec v0.2 §5.7): at most limit
-// results, then truncated. sameKey: the MACs of both are of the same key.
-func Compare(a, b iter.Seq2[Entry, error], sameKey bool, limit int) (results []Result, truncated bool, err error) {
+// real changes, then Truncated; the unknown apart. sameKey: the MACs of
+// both are of the same key.
+func Compare(a, b iter.Seq2[Entry, error], sameKey bool, limit int) (Outcome, error) {
 	m := NewMerger(a, sameKey, limit)
 	for e, err := range b {
 		if err == nil {
@@ -177,7 +212,7 @@ func Compare(a, b iter.Seq2[Entry, error], sameKey bool, limit int) (results []R
 		}
 		if err != nil {
 			m.Close()
-			return nil, false, err
+			return Outcome{}, err
 		}
 	}
 	return m.Finish()

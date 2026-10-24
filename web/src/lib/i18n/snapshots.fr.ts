@@ -100,5 +100,8 @@ export default {
 	'snapshots.field.uid': 'propriétaire',
 	'snapshots.field.gid': 'groupe',
 	'snapshots.field.mtime': 'date',
-	'snapshots.field.link': 'cible du lien'
+	'snapshots.field.link': 'cible du lien',
+	'snapshots.compare.unknown': "{n} fichiers non comparables : pas d'empreinte du contenu (même taille, même date)",
+	'snapshots.compare.unknownMore': '… et {n} autres, comptés sans être listés.',
+	'snapshots.compare.noChange': 'Aucun changement visible : ni ajout, ni suppression, ni métadonnée changée.'
 };

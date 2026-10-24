@@ -12,7 +12,7 @@
 	import Icon from '#lib/icons/Icon.svelte';
 	import {
 		compareCandidates, compareSnapshots, contentPlan, deleteSnapshot, dirTimeOnly, fieldLabel, filterResults,
-		groupSnapshots, imageMatch, kindCounts, KINDS, listSnapshots, percent, planCost, snapshotPlans, sourceLabel,
+		CHANGE_KINDS, findResult, groupSnapshots, imageMatch, kindCounts, listSnapshots, percent, planCost, snapshotPlans, sourceLabel,
 		takeSnapshot, type CompareKind, type Comparison, type SnapshotList, type SnapshotPlan, type SnapshotRow
 	} from '#lib/snapshots.ts';
 	import { withParams } from '#lib/url.ts';
@@ -145,14 +145,14 @@
 	let cmp = $state<Comparison | null>(null);
 	let cmpError = $state('');
 	let cmpProgress = $state<number | null>(null);
-	let shownKinds = $state<CompareKind[]>([...KINDS]);
+	let shownKinds = $state<CompareKind[]>([...CHANGE_KINDS]);
 	let showDirTime = $state(false);
 	let limit = $state(500);
 	let current = $derived(cmp?.b.id === 'current');
 	let counts = $derived(cmp ? kindCounts(cmp.results, showDirTime) : null);
 	let dirTimeCount = $derived(cmp ? cmp.results.filter(dirTimeOnly).length : 0);
 	let shown = $derived(cmp ? filterResults(cmp.results, new Set(shownKinds), showDirTime) : []);
-	let selected = $derived(cmp && selPath ? (cmp.results.find((r) => r.path === selPath) ?? null) : null);
+	let selected = $derived(cmp && selPath ? findResult(cmp, selPath) : null);
 	let plan = $derived(selected ? contentPlan(selected, current) : 'none');
 
 	const href = (set: Record<string, string | null>) => withParams(page.url.searchParams, set);
@@ -373,12 +373,30 @@
 						{#if !cmp.contentCompared}<p class="note">{t('snapshots.compare.notCompared')}</p>{/if}
 						{#if cmp.b.partial && current}<p class="note warn">{t('snapshots.compare.partial')}</p>{/if}
 						{#if cmp.truncated}<p class="note warn">{tf('snapshots.compare.truncated', { n: cmp.results.length.toLocaleString(lang) })}</p>{/if}
-						{#if cmp.results.length === 0}
+						{#if cmp.results.length === 0 && cmp.unknownCount === 0}
 							<p class="muted">{t('snapshots.compare.none')}</p>
 						{:else}
+							{#if cmp.results.length === 0}<p class="muted">{t('snapshots.compare.noChange')}</p>{/if}
+							{#if cmp.unknownCount > 0}
+								<!-- Review of tranche 9: the unknown apart, folded, never in the way of a change. -->
+								<details class="unknown">
+									<summary>{tf('snapshots.compare.unknown', { n: cmp.unknownCount.toLocaleString(lang) })}</summary>
+									<ul>
+										{#each cmp.unknown as r (r.path)}
+											<li>
+												<a href={href({ path: r.path })} aria-current={r.path === selPath ? 'true' : undefined} class="mono rpath">{r.path}</a>
+											</li>
+										{/each}
+									</ul>
+									{#if cmp.unknownCount > cmp.unknown.length}
+										<p class="muted">{tf('snapshots.compare.unknownMore', { n: (cmp.unknownCount - cmp.unknown.length).toLocaleString(lang) })}</p>
+									{/if}
+								</details>
+							{/if}
+							{#if cmp.results.length > 0}
 							<fieldset class="filters">
 								<legend>{t('snapshots.compare.filters')}</legend>
-								{#each KINDS as k (k)}
+								{#each CHANGE_KINDS as k (k)}
 									<label class="kind-filter">
 										<input type="checkbox" checked={shownKinds.includes(k)} onchange={(e) => toggleKind(k, e.currentTarget.checked)} />
 										<span class="badge {k}">{t(`snapshots.kind.${k}`)}</span>
@@ -392,10 +410,11 @@
 									</label>
 								{/if}
 							</fieldset>
+							{/if}
 							<div class="cgrid">
 								<div class="results">
 									{#if shown.length === 0}
-										<p class="muted">{t('snapshots.compare.noneShown')}</p>
+										{#if cmp.results.length > 0}<p class="muted">{t('snapshots.compare.noneShown')}</p>{/if}
 									{:else}
 										<ul aria-label={t('snapshots.compare.title')}>
 											{#each shown.slice(0, limit) as r (r.path)}
@@ -756,6 +775,27 @@
 	}
 	.content {
 		min-width: 0;
+	}
+	.unknown summary {
+		cursor: pointer;
+		color: var(--texte-doux);
+	}
+	.unknown ul {
+		list-style: none;
+		margin: 0.4rem 0 0;
+		padding: 0;
+		max-height: 40vh;
+		overflow: auto;
+	}
+	.unknown a {
+		display: block;
+		padding: 0.2rem 0.4rem;
+		color: inherit;
+		text-decoration: none;
+		overflow-wrap: anywhere;
+	}
+	.unknown a[aria-current] {
+		background: var(--releve);
 	}
 	.act .btn + .btn {
 		margin-left: 0.3rem;

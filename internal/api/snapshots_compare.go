@@ -116,6 +116,14 @@ type compareJSON struct {
 	ContentCompared bool              `json:"contentCompared"`
 	Results         []snapshot.Result `json:"results"`
 	Truncated       bool              `json:"truncated"`
+	// The unknown apart (review of tranche 9): never in the cap of results.
+	Unknown      []snapshot.Result `json:"unknown"`
+	UnknownCount int               `json:"unknownCount"`
+}
+
+func withOutcome(c compareJSON, o snapshot.Outcome) compareJSON {
+	c.Results, c.Truncated, c.Unknown, c.UnknownCount = o.Results, o.Truncated, o.Unknown, o.UnknownCount
+	return c
 }
 
 // headerJSON: a header as the API shows it (no keyId, no limits).
@@ -128,6 +136,9 @@ func headerJSON(h snapshot.Header) snapshotJSON {
 func marshalCompare(c compareJSON) ([]byte, error) {
 	if c.Results == nil {
 		c.Results = []snapshot.Result{}
+	}
+	if c.Unknown == nil {
+		c.Unknown = []snapshot.Result{}
 	}
 	return json.Marshal(c)
 }
@@ -212,7 +223,7 @@ func (s *server) snapshotCompare(w http.ResponseWriter, r *http.Request) {
 	defer release()
 	ctx := r.Context()
 	same := snapshot.ContentComparable(ha, hb)
-	res, truncated, err := snapshot.Compare(withCtx(ctx, seqA), withCtx(ctx, seqB), same, maxCompareResults)
+	o, err := snapshot.Compare(withCtx(ctx, seqA), withCtx(ctx, seqB), same, maxCompareResults)
 	if err != nil {
 		if ctx.Err() != nil {
 			return // the client is gone
@@ -220,7 +231,7 @@ func (s *server) snapshotCompare(w http.ResponseWriter, r *http.Request) {
 		writeStoreError(w, err)
 		return
 	}
-	b, err := marshalCompare(compareJSON{A: headerJSON(ha), B: headerJSON(hb), ContentCompared: same, Results: res, Truncated: truncated})
+	b, err := marshalCompare(withOutcome(compareJSON{A: headerJSON(ha), B: headerJSON(hb), ContentCompared: same}, o))
 	if err != nil {
 		writeStoreError(w, err)
 		return
@@ -332,16 +343,15 @@ func (s *server) compareCurrent(w http.ResponseWriter, r *http.Request, store *s
 		}
 		var ans []byte
 		if err == nil {
-			var res []snapshot.Result
-			var truncated bool
-			if res, truncated, err = m.Finish(); err == nil {
+			var o snapshot.Outcome
+			if o, err = m.Finish(); err == nil {
 				b := snapshotJSON{ID: "current", ContainerID: info.ID, ContainerName: info.Name, Project: project(info),
 					Image: info.Details.Image, ImageID: info.Details.ImageID, CreatedAt: started, FinishedAt: time.Now().UTC(),
 					State: "stopped", Source: c.src, Entries: sink.n, HashedBytes: sink.hashed, Partial: m.Partial()}
 				if running(info) {
 					b.State = "running"
 				}
-				ans, err = marshalCompare(compareJSON{A: headerJSON(ha), B: b, ContentCompared: key != nil, Results: res, Truncated: truncated})
+				ans, err = marshalCompare(withOutcome(compareJSON{A: headerJSON(ha), B: b, ContentCompared: key != nil}, o))
 			}
 		} else {
 			m.Close()

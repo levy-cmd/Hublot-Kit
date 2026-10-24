@@ -122,7 +122,7 @@ func decodeCompare(t *testing.T, rec *httptest.ResponseRecorder) (compareBody, m
 		t.Fatalf("%v : %s", err, rec.Body)
 	}
 	by := map[string]snapshot.Result{}
-	for _, r := range b.Results {
+	for _, r := range append(slices.Clone(b.Results), b.Unknown...) {
 		by[r.Path] = r
 	}
 	return b, by

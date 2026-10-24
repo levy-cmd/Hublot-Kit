@@ -98,5 +98,8 @@ export default {
 	'snapshots.field.uid': 'owner',
 	'snapshots.field.gid': 'group',
 	'snapshots.field.mtime': 'date',
-	'snapshots.field.link': 'link target'
+	'snapshots.field.link': 'link target',
+	'snapshots.compare.unknown': '{n} files that cannot be compared: no fingerprint of the content (same size, same date)',
+	'snapshots.compare.unknownMore': '… and {n} more, counted without being listed.',
+	'snapshots.compare.noChange': 'No visible change: nothing added, deleted, nor any metadata changed.'
 };
