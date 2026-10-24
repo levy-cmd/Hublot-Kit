@@ -15,6 +15,7 @@ build: web
 
 test: web-deps
 	scripts/test-release-lib.sh
+	scripts/test-check-docs.sh
 	go vet ./cmd/... ./internal/...
 	go test -race ./cmd/... ./internal/...
 	cd web && npm run check && npm run lint && npx vitest run

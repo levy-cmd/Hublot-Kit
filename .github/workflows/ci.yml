@@ -286,6 +286,7 @@ jobs:
           persist-credentials: false
       - run: bash scripts/check-docs.sh
       - run: bash scripts/test-release-lib.sh
+      - run: bash scripts/test-check-docs.sh
 
   # Plan Lancement, tranche C : scripts/verify-release.sh éprouvé sur de faux
   # jeux d'artefacts (faux gh, cosign, docker). Ni réseau, ni secret, ni Node :
