@@ -14,8 +14,11 @@ import {
 	needs,
 	reasonMessage,
 	sideOf,
+	lineDiff,
+	REFINE_MAX,
 	sides,
-	type Side
+	type Side,
+	type Span
 } from './contentdiff.ts';
 
 const text = (s: string, utf8 = true): Preview => ({ kind: 'text', text: s, etag: 'e', utf8 });
@@ -178,26 +181,123 @@ describe('the unified view of two large files (review of tranche 7)', () => {
 		const word = () => ((x = (x * 1103515245 + 12345) % 2147483648), (x % 100000).toString(36));
 		return Array.from({ length: 8500 }, () => Array.from({ length: 6 }, word).join(' ')).join('\n') + '\n';
 	};
-	it('is bounded in time, and numbers the chunks the view shows', async () => {
-		const original = big(1);
-		const modified = big(2);
-		expect(original.length).toBeGreaterThan(200_000);
+	// Bounded (1.5 s, the view built), and the numbers are those of the
+	// chunks the view shows: every line of each side numbered once, in order.
+	const bounded = async (original: string, modified: string) => {
 		await diffState({ kind: 'added', text: 'warm-up' }, 'diff', true); // modules loaded before timing
 		const t0 = performance.now();
 		const state = await diffState({ kind: 'modified', original, modified, equal: null }, 'diff', true);
 		const shown = merge.getChunks(state)!.chunks;
 		const nums = numbering(merge, state);
 		expect(performance.now() - t0).toBeLessThan(1500);
-		expect(shown.length).toBeGreaterThan(0);
 		expect(nums).toEqual(lineChunks(shown, merge.getOriginalDoc(state), state.doc));
-		// Every line of each side numbered once, in order.
+		// Walked in order: unchanged lines, then each chunk's removed lines
+		// (deletedAt) and added ones (no old number). aLineOf is checked on
+		// lines spread over the file.
 		const b = state.doc.lines;
-		const aSeen: number[] = [];
-		for (let l = 1; l <= b + 1; l++) {
-			aSeen.push(...deletedAt(nums, l));
-			const a = l <= b ? aLineOf(nums, l) : null;
-			if (a !== null) aSeen.push(a);
+		const step = Math.max(1, Math.floor(b / 1000));
+		let a = 1;
+		let l = 1;
+		const unchanged = (to: number) => {
+			for (; l < to; l++, a++) if (l % step === 0) expect(aLineOf(nums, l)).toBe(a);
+		};
+		for (const c of nums) {
+			expect(c.bFrom).toBeGreaterThanOrEqual(l);
+			unchanged(c.bFrom);
+			if (c.aCount > 0) {
+				expect(deletedAt(nums, c.bFrom)[0]).toBe(a);
+				a += c.aCount;
+			}
+			if (c.bCount > 0) expect(aLineOf(nums, c.bFrom)).toBeNull();
+			l += c.bCount;
 		}
-		expect(aSeen).toEqual(Array.from({ length: merge.getOriginalDoc(state).lines }, (_, i) => i + 1));
+		unchanged(b + 1);
+		expect(a - 1).toBe(merge.getOriginalDoc(state).lines);
+		return shown;
+	};
+	it('is bounded in time, and numbers the chunks the view shows', async () => {
+		const original = big(1);
+		expect(original.length).toBeGreaterThan(200_000);
+		expect((await bounded(original, big(2))).length).toBeGreaterThan(0);
+	});
+	// Second review: findMatch of @codemirror/merge is bounded by neither
+	// scanLimit nor timeout. A repetitive line of 300 KB moved held the tab
+	// 12 to 20 s.
+	it('a very long line moved', async () => {
+		const m = 'a'.repeat(300_000);
+		await bounded(`x\n${m}\ny\n`, `y\n${m}\nx\n`);
+	});
+	it('a repetitive block moved, short lines', async () => {
+		const m = 'ab\n'.repeat(100_000);
+		await bounded(`x\n${m}y\n`, `y\n${m}x\n`);
+	});
+	it('many identical lines', async () => {
+		await bounded('x\n'.repeat(500_000), 'x\n'.repeat(250_000) + 'y\n' + 'x\n'.repeat(250_000));
+		await bounded('x\n'.repeat(500_000), 'y\n'.repeat(500_000));
+	});
+	it('two files of 100 000 lines with nothing in common', async () => {
+		const lines = (p: string) => Array.from({ length: 100_000 }, (_, i) => `${p}${i}`).join('\n');
+		await bounded(lines('a'), lines('b'));
+	});
+	it('a single line of 2 MiB', async () => {
+		const m = 'ab'.repeat(1 << 20);
+		await bounded(m, m.slice(0, 1 << 20) + 'Z' + m.slice((1 << 20) + 1));
+		await bounded(m, 'ba'.repeat(1 << 20));
+	});
+	it('line endings in CR alone', async () => {
+		const ls = Array.from({ length: 50_000 }, (_, i) => `line ${i % 7}`);
+		await bounded(ls.join('\r'), [...ls].reverse().join('\r'));
+	});
+	it('many small regions, each refined', async () => {
+		const ls = Array.from({ length: 20_000 }, (_, i) => (i % 2 ? 'a'.repeat(3000) : `k${i}`));
+		await bounded(ls.join('\n'), ls.map((l, i) => (i % 2 ? l : `${l}!`)).join('\n'));
+	});
+});
+
+describe('lineDiff: the bounded diff behind the view', () => {
+	// The spans, applied to a, give b; between them a and b are equal.
+	const check = (a: string, b: string, spans: Span[]) => {
+		let ia = 0;
+		let ib = 0;
+		let out = '';
+		for (const s of spans) {
+			expect(s.fromA).toBeGreaterThanOrEqual(ia);
+			expect(s.fromA - ia).toBe(s.fromB - ib);
+			expect(a.slice(ia, s.fromA)).toBe(b.slice(ib, s.fromB));
+			out += a.slice(ia, s.fromA) + b.slice(s.fromB, s.toB);
+			ia = s.toA;
+			ib = s.toB;
+		}
+		expect(a.slice(ia)).toBe(b.slice(ib));
+		expect(out + a.slice(ia)).toBe(b);
+	};
+	const cases: [string, string][] = [
+		['', ''], ['', 'a'], ['a', ''], ['x', 'x\ny'], ['x\ny', 'x'], ['x\ny', 'x\nz'], ['a\nb\nc', 'a\nX\nc'],
+		['x\na\nb', 'a\nb'], ['a\nb\n', 'a\nb'], ['a\nb', 'a\nb\n'], ['1\n2\n3\n4\n5\n6', '1\nN\n2\n3\n5\n6\nM'],
+		['same\n', 'same\n'], ['\n\n\n', '\n']
+	];
+	for (const [a, b] of cases) it(`${JSON.stringify(a)} → ${JSON.stringify(b)}`, () => check(a, b, lineDiff(a, b)));
+	it('random edits, with and without refinement', () => {
+		let x = 3;
+		const r = (n: number) => ((x = (x * 1103515245 + 12345) % 2147483648), x % n);
+		for (let t = 0; t < 300; t++) {
+			const a = Array.from({ length: r(12) }, () => 'abc'[r(3)].repeat(1 + r(3))).join('\n');
+			const ls = a.split('\n');
+			for (let e = r(4); e > 0; e--) ls.splice(r(ls.length + 1), r(2), 'abcz'[r(4)]);
+			const b = ls.join('\n') + (r(3) ? '' : '\n');
+			check(a, b, lineDiff(a, b));
+			check(a, b, lineDiff(a, b, (p, q) => merge.diff(p, q)));
+		}
+	});
+	it('only lines that changed', () => {
+		expect(lineDiff('a\nb\nc\n', 'a\nB\nc\n')).toEqual([{ fromA: 2, toA: 3, fromB: 2, toB: 3 }]);
+	});
+	it('refines a small region to the characters, never a large one', () => {
+		const calls: number[] = [];
+		const refine = (p: string, q: string) => (calls.push(p.length + q.length), merge.diff(p, q));
+		expect(lineDiff('a\nhello world\nc', 'a\nhello there\nc', refine).every((s) => s.toA - s.fromA < 11)).toBe(true);
+		const big = 'w'.repeat(REFINE_MAX + 1);
+		lineDiff(`${big}\n`, `${big}x\n`, refine);
+		expect(Math.max(...calls)).toBeLessThanOrEqual(2 * REFINE_MAX);
 	});
 });
