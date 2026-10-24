@@ -126,6 +126,8 @@ const chrome = (EditorView: View, dark: boolean) =>
 			'.cm-content': { fontFamily: 'var(--mono)' },
 			'.cm-gutters': { backgroundColor: 'var(--surface)', color: 'var(--texte-doux)', borderRight: '1px solid var(--trait)' },
 			'.hk-num .cm-gutterElement': { padding: '0 0.4rem', textAlign: 'right', fontFamily: 'var(--mono)' },
+			'.hk-nums': { display: 'flex', flexDirection: 'column', height: '100%' },
+			'.hk-nums > div': { flex: '1 1 0', minHeight: '0' },
 			'&.cm-focused': { outline: '2px solid var(--focus)' },
 			'&.cm-focused .cm-selectionBackground, .cm-selectionBackground, ::selection': { backgroundColor: 'var(--selection)' },
 			'&.cm-merge-b .cm-changedLine, &.hk-added .cm-line': { backgroundColor: 'var(--diff-ajout)' },
@@ -295,8 +297,11 @@ export async function diffState(d: DiffInput, label: string, dark: boolean, coar
 	const [cm, st, mg] = await Promise.all([import('@codemirror/view'), import('@codemirror/state'), import('@codemirror/merge')]);
 	const { EditorView, GutterMarker, gutter, highlightSpecialChars, lineNumbers } = cm;
 	type Editor = InstanceType<View>;
-	// A number, or a column of them for a block of removed lines (one per
-	// line of the block, at the editor's line height).
+	// A number, or a column of them for a block of removed lines. The
+	// column shares the height of the block equally, one row per removed
+	// line (.hk-nums): the gutter element has the block's height, set by
+	// CodeMirror. Not defaultLineHeight: it is the height of the text, not
+	// of a line (14 px for 16.8), and the numbers drifted down the block.
 	class Nums extends GutterMarker {
 		readonly texts: string[];
 		constructor(texts: string[]) {
@@ -306,13 +311,10 @@ export async function diffState(d: DiffInput, label: string, dark: boolean, coar
 		eq(o: InstanceType<typeof GutterMarker>) {
 			return o instanceof Nums && o.texts.join() === this.texts.join();
 		}
-		toDOM(v: Editor) {
+		toDOM() {
 			const box = document.createElement('div');
-			for (const s of this.texts) {
-				const line = box.appendChild(document.createElement('div'));
-				line.style.height = `${v.defaultLineHeight}px`;
-				line.textContent = s;
-			}
+			box.className = 'hk-nums';
+			for (const s of this.texts) box.appendChild(document.createElement('div')).textContent = s;
 			return box;
 		}
 	}
