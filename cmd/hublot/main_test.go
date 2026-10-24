@@ -599,3 +599,86 @@ func TestLimitListener(t *testing.T) {
 	}
 	got[1].Close()
 }
+
+// Spec v0.2 §5.7: hublot rotate-snapshot-key, agent stopped, like reset-token.
+func TestRotateSnapshotKeySubcommand(t *testing.T) {
+	dir := t.TempDir()
+	var ids []string
+	for range 2 {
+		var out, errb bytes.Buffer
+		code := run(context.Background(), []string{"rotate-snapshot-key", "--data-dir", dir}, noenv, &out, &errb)
+		if code != 0 || !strings.Contains(out.String(), "New snapshot key") {
+			t.Fatalf("code %d, out %q, err %q", code, out.String(), errb.String())
+		}
+		ids = append(ids, out.String())
+		fi, err := os.Lstat(filepath.Join(dir, "snapshot.key"))
+		if err != nil || fi.Mode().Perm() != 0o600 || fi.Size() != 32 {
+			t.Fatalf("snapshot.key: %v %v", fi, err)
+		}
+	}
+	if ids[0] == ids[1] {
+		t.Fatalf("same key id after a rotation: %q", ids[0])
+	}
+	if _, err := os.Lstat(filepath.Join(dir, "token.sha256")); !os.IsNotExist(err) {
+		t.Fatalf("rotate-snapshot-key wrote a token: %v", err)
+	}
+	var out, errb bytes.Buffer
+	if code := run(context.Background(), []string{"--help"}, noenv, &out, &errb); code != 0 || !strings.Contains(out.String(), "rotate-snapshot-key") {
+		t.Fatalf("usage lacks rotate-snapshot-key: %q", out.String())
+	}
+}
+
+func TestRotateSnapshotKeyRefusesSymlinkDataDir(t *testing.T) {
+	parent := t.TempDir()
+	real := filepath.Join(parent, "real")
+	if err := os.Mkdir(real, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(parent, "link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	var out, errb bytes.Buffer
+	if code := run(context.Background(), []string{"rotate-snapshot-key", "--data-dir", link}, noenv, &out, &errb); code != 1 {
+		t.Fatalf("code %d, stderr %q", code, errb.String())
+	}
+	if _, err := os.Lstat(filepath.Join(real, "snapshot.key")); !os.IsNotExist(err) {
+		t.Fatalf("key written through the link: %v", err)
+	}
+}
+
+// The agent creates snapshots/ (0700) and the key (0600) at startup.
+func TestRunCreatesSnapshotStore(t *testing.T) {
+	dir := t.TempDir()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	var out, errb bytes.Buffer
+	if code := run(ctx, []string{"--data-dir", dir, "--listen", "127.0.0.1:0"}, noenv, &out, &errb); code != 0 {
+		t.Fatalf("code %d, stderr %q", code, errb.String())
+	}
+	if fi, err := os.Lstat(filepath.Join(dir, "snapshots")); err != nil || !fi.IsDir() || fi.Mode().Perm() != 0o700 {
+		t.Fatalf("snapshots/: %v %v", fi, err)
+	}
+	if fi, err := os.Lstat(filepath.Join(dir, "snapshot.key")); err != nil || fi.Mode().Perm() != 0o600 {
+		t.Fatalf("snapshot.key: %v %v", fi, err)
+	}
+}
+
+// A refused snapshots/ does not stop the agent: the snapshot routes answer
+// internal, and the warning says why.
+func TestRunWarnsRefusedSnapshotStore(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(dir, "snapshots"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	os.Chmod(filepath.Join(dir, "snapshots"), 0o755)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	var out, errb bytes.Buffer
+	if code := run(ctx, []string{"--data-dir", dir, "--listen", "127.0.0.1:0"}, noenv, &out, &errb); code != 0 {
+		t.Fatalf("code %d, stderr %q", code, errb.String())
+	}
+	if !strings.Contains(errb.String(), "WARNING") || !strings.Contains(errb.String(), "snapshots") {
+		t.Fatalf("no warning: %q", errb.String())
+	}
+}
