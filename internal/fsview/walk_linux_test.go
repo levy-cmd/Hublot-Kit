@@ -368,6 +368,30 @@ func TestWalkComponentOrder(t *testing.T) {
 	if got, want := paths(vs), []string{"/a", "/a/b", "/a/b/c", "/a-b"}; !slices.Equal(got, want) {
 		t.Fatalf("ordre : %v, attendu %v", got, want)
 	}
+	// Many names: the order of readdir (a hash on ext4, overlay) is not
+	// the order of the names.
+	d := filepath.Join(rp, "many")
+	must(t, os.Mkdir(d, 0o755))
+	var want []string
+	for i := range 200 {
+		n := strconv.Itoa(i*7919%1000) + "-x"
+		must(t, os.WriteFile(filepath.Join(d, n), nil, 0o644))
+		want = append(want, "/many/"+n)
+	}
+	slices.Sort(want)
+	vs, err = walkAll(t, fsys, nil)
+	if err != nil {
+		t.Fatalf("Walk : %v", err)
+	}
+	var got []string
+	for _, v := range vs {
+		if strings.HasPrefix(v.p, "/many/") {
+			got = append(got, v.p)
+		}
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("ordre de /many : %v", got[:10])
+	}
 }
 
 // Past MaxEntries names in a directory, the walk goes on and says it is
@@ -395,6 +419,65 @@ func TestWalkTruncatedDirectory(t *testing.T) {
 	}
 	if _, ok := find(vs, "/z"); !ok {
 		t.Error("/z absent : le parcours s'est arrêté au dossier tronqué")
+	}
+}
+
+// The pinned process ends during the walk: its result is thrown away
+// (container_changed), never served as a whole tree.
+func TestWalkProcessExited(t *testing.T) {
+	p, cmd := childView(t)
+	killed := false
+	err := p.Walk(ctx, func(path string, e Entry, _ func() (io.ReadCloser, error)) error {
+		if !killed {
+			killed = true
+			cmd.Process.Kill()
+			cmd.Wait()
+		}
+		if e.Type == TypeDir {
+			return fs.SkipDir
+		}
+		return nil
+	})
+	if !killed || !errors.Is(err, ErrContainerChanged) {
+		t.Fatalf("Walk : %v, attendu ErrContainerChanged", err)
+	}
+}
+
+// A read that never answers (a FUSE server, spec §13) is given up after
+// walkReadTimeout; the caller's buffer is never written afterwards.
+func TestWalkReadTimeout(t *testing.T) {
+	old := walkReadTimeout
+	t.Cleanup(func() { walkReadTimeout = old })
+	walkReadTimeout = 50 * time.Millisecond
+	r, wp, err := os.Pipe()
+	must(t, err)
+	t.Cleanup(func() { r.Close(); wp.Close() })
+	tf := &timedFile{f: r, w: &walk{ctx: ctx}, buf: make([]byte, 16)}
+	buf := make([]byte, 8)
+	start := time.Now()
+	done := make(chan error, 1)
+	go func() {
+		_, err := tf.Read(buf)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if !errors.Is(err, errReadTimeout) {
+			t.Fatalf("Read : %v, attendu errReadTimeout", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("lecture jamais abandonnée")
+	}
+	if d := time.Since(start); d > time.Second {
+		t.Fatalf("abandon après %v", d)
+	}
+	wp.Write([]byte("tardif!!"))
+	time.Sleep(20 * time.Millisecond)
+	if string(buf) == "tardif!!" {
+		t.Fatal("tampon de l'appelant écrit après l'abandon")
+	}
+	if _, err := tf.Read(buf); !errors.Is(err, errReadTimeout) {
+		t.Fatalf("Read après l'abandon : %v", err)
 	}
 }
 

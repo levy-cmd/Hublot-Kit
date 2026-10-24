@@ -316,6 +316,25 @@ func TestCaptureFileCap(t *testing.T) {
 	}
 }
 
+// A file that grew past the cap since its stat: read up to the cap and one
+// byte, never further.
+func TestCaptureFileGrew(t *testing.T) {
+	lim := DefaultLimits
+	lim.MaxFile = 1 << 20
+	w := &fakeWalker{}
+	w.items = append(w.items, fakeItem{p: "/log", e: fsview.Entry{Type: fsview.TypeFile, Size: 10}, content: strings.Repeat("x", 2<<20)})
+	var c Collector
+	if err := CaptureProcfs(bg, w, testKey, lim, &c); err != nil {
+		t.Fatal(err)
+	}
+	if e := byPath(&c)["/log"]; e.MAC != "" || e.MACSkipped != "too_large" {
+		t.Fatalf("/log : %+v", e)
+	}
+	if n := w.read.Load(); n > lim.MaxFile+1 {
+		t.Fatalf("%d octets lus, au plus %d attendus", n, lim.MaxFile+1)
+	}
+}
+
 func TestCaptureUnreadable(t *testing.T) {
 	w := &fakeWalker{}
 	w.items = append(w.items, fakeItem{p: "/x", e: fsview.Entry{Type: fsview.TypeFile, Size: 3}, openErr: fsview.ErrLinkInPath})

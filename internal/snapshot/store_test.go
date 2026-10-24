@@ -5,6 +5,9 @@ package snapshot
 // descriptor, no partial file ever left.
 
 import (
+	"bytes"
+	"compress/gzip"
+	"encoding/json"
 	"errors"
 	"io/fs"
 	"os"
@@ -199,7 +202,27 @@ func TestStoreAbortLeavesNothing(t *testing.T) {
 }
 
 func TestStoreIDFormat(t *testing.T) {
-	s := openStore(t, t.TempDir())
+	dir := t.TempDir()
+	s := openStore(t, dir)
+	// A file next to snapshots/ that "../victim" would name, a valid
+	// manifest of that ID: neither read nor deleted.
+	var b bytes.Buffer
+	zw := gzip.NewWriter(&b)
+	json.NewEncoder(zw).Encode(Header{ID: "../victim", ContainerID: "c1"})
+	zw.Close()
+	victim := filepath.Join(dir, "victim.jsonl.gz")
+	if err := os.WriteFile(victim, b.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.Reader("../victim"); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("Reader(../victim) : %v, attendu fs.ErrNotExist", err)
+	}
+	if err := s.Delete("../victim"); !errors.Is(err, fs.ErrNotExist) {
+		t.Errorf("Delete(../victim) : %v, attendu fs.ErrNotExist", err)
+	}
+	if _, err := os.Stat(victim); err != nil {
+		t.Fatalf("fichier hors de snapshots/ supprimé : %v", err)
+	}
 	if !regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`).MatchString(NewID()) {
 		t.Fatalf("NewID : %s, attendu un UUID v4 en minuscules", NewID())
 	}
