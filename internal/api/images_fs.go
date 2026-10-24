@@ -45,9 +45,8 @@ func imageFSRequest(w http.ResponseWriter, r *http.Request) (id, p string, ok bo
 }
 
 // writeImageFSError: the codes of the file routes (writeFSError), except
-// Docker's own errors and an unclassified one (writeDockerRouteError),
-// answered with a fixed detail (images.go): never the text of the daemon's
-// error.
+// Docker's own errors, answered with a fixed detail (images.go): never the
+// text of the daemon's error.
 func writeImageFSError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, dockerx.ErrNotFound):
@@ -56,7 +55,7 @@ func writeImageFSError(w http.ResponseWriter, err error) {
 		slog.Warn("image files: Docker", "err", secrets.Line(err.Error()))
 		writeError(w, http.StatusServiceUnavailable, "docker_unavailable", "Docker unavailable")
 	default:
-		writeDockerRouteError(w, err)
+		writeFSError(w, err)
 	}
 }
 
@@ -144,25 +143,6 @@ func (s *server) imageFSFile(w http.ResponseWriter, r *http.Request) {
 	writeTimed(w, b)
 }
 
-// previewChunk: the size of each timed write of a preview.
-const previewChunk = 32 << 10
-
-// writeTimed writes b by chunks, each within writeStallTimeout (v0.1.2,
-// counter-audit): a client that stopped reading is cut and frees the
-// handler; a slow client that reads goes on, each chunk renewing the
-// deadline. Past the first byte a failure aborts the response.
-func writeTimed(w http.ResponseWriter, b []byte) {
-	written := 0
-	tw := timedWriter{w, http.NewResponseController(w), &written}
-	for len(b) > 0 {
-		n := min(len(b), previewChunk)
-		if _, err := tw.Write(b[:n]); err != nil {
-			panic(http.ErrAbortHandler)
-		}
-		b = b[n:]
-	}
-}
-
 // imageFSSearch: the file search of the global search (spec v0.2 §5.8) in
 // the index of an image already served to the explorer (Views.SearchImage):
 // never an export, never a request to Docker, never 202. The query is in
@@ -199,7 +179,7 @@ func (s *server) imageFSSearch(w http.ResponseWriter, r *http.Request) {
 	}, nil)
 	release()
 	if err != nil {
-		writeDockerRouteError(w, err)
+		writeFSError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, res)

@@ -23,6 +23,10 @@ func (s *server) fsFile(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	if err := canTimeWrites(w); err != nil { // before reading anything (v0.1.2, Codex: fail closed)
+		writeFSError(w, err)
+		return
+	}
 	ctx := r.Context()
 	b, release, err := guarded(s.guard, ctx, info.ID, func() ([]byte, error) {
 		fsys, err := s.d.OpenFS(ctx, info.ID)
@@ -55,7 +59,7 @@ func (s *server) fsFile(w http.ResponseWriter, r *http.Request) {
 	if ct == binaryType {
 		return // no text preview for a binary file: the UI offers the download
 	}
-	w.Write(b)
+	writeTimed(w, b)
 }
 
 // previewType: PNG, JPEG, GIF or WebP as detected by http.DetectContentType;
@@ -70,4 +74,23 @@ func previewType(b []byte) string {
 		return binaryType
 	}
 	return "text/plain; charset=utf-8"
+}
+
+// previewChunk: the size of each timed write of a preview.
+const previewChunk = 32 << 10
+
+// writeTimed writes b by chunks, each within writeStallTimeout (v0.1.2,
+// counter-audit): a client that stopped reading is cut and frees the
+// handler; a slow client that reads goes on, each chunk renewing the
+// deadline. Past the first byte a failure aborts the response.
+func writeTimed(w http.ResponseWriter, b []byte) {
+	written := 0
+	tw := timedWriter{w, http.NewResponseController(w), &written}
+	for len(b) > 0 {
+		n := min(len(b), previewChunk)
+		if _, err := tw.Write(b[:n]); err != nil {
+			panic(http.ErrAbortHandler)
+		}
+		b = b[n:]
+	}
 }
