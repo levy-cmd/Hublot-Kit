@@ -40,7 +40,7 @@ disponible pour la série 0.1.x.
 | `--security-opt apparmor=unconfined` | hôtes AppArmor : sans elle, les conteneurs lancés en `--privileged` ou `apparmor=unconfined` ne s'explorent pas (l'erreur nomme cette option). Sans effet ailleurs. |
 | `--security-opt label=disable` | hôtes SELinux : permet à l'agent de lire les autres conteneurs et d'utiliser le socket Docker. Docker l'applique déjà à un conteneur lancé avec `--pid=host`, mais ce n'est pas un contrat documenté. N'utilisez aucune autre option `label=` : elle couperait l'agent du socket. Sans effet ailleurs. |
 | `-v /var/run/docker.sock:…` | le seul accès de l'agent à Docker. Le monter en `:ro` ne protège rien. |
-| `-v hublot-data:/data` | l'empreinte du jeton d'accès et le journal d'audit. |
+| `-v hublot-data:/data` | l'empreinte du jeton d'accès, le journal d'audit, et les snapshots et leur clé. |
 | `-p 127.0.0.1:7878:7878` | joignable depuis le serveur seulement ; passez par un tunnel SSH ou un reverse proxy. |
 
 `--privileged` n'est pas nécessaire. L'agent est déjà root sur l'hôte de fait : lever son confinement AppArmor, ou le
@@ -189,8 +189,9 @@ sudo systemctl restart hublot-kit
 
 ## Dossier de données
 
-`--data-dir` doit être dédié à Hublot-Kit. Il contient `token.sha256` (l'empreinte du jeton, jamais le jeton) et
-`audit.log`. Absent, il est créé en 0700. Existant, ses droits ne sont pas modifiés, mais l'agent refuse de démarrer
+`--data-dir` doit être dédié à Hublot-Kit. Il contient `token.sha256` (l'empreinte du jeton, jamais le jeton),
+`audit.log` et, dès le premier snapshot, `snapshot.key` (la clé HMAC des snapshots, 0600 ; une nouvelle avec
+`hublot rotate-snapshot-key`, agent arrêté) et `snapshots/` (leurs manifestes, 0700, jamais le contenu d'un fichier). Absent, il est créé en 0700. Existant, ses droits ne sont pas modifiés, mais l'agent refuse de démarrer
 si c'est un lien symbolique, s'il appartient à un autre utilisateur, ou s'il est accessible en écriture au groupe ou à
 tous (`/tmp`, par exemple). Ses fichiers ne sont jamais ouverts à travers un lien symbolique. Le journal d'audit n'est
 pas tourné.

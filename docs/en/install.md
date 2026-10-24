@@ -39,7 +39,7 @@ for the 0.1.x series.
 | `--security-opt apparmor=unconfined` | AppArmor hosts: without it, containers started with `--privileged` or `apparmor=unconfined` cannot be explored (the error names this option). No effect on other hosts. |
 | `--security-opt label=disable` | SELinux hosts: lets the agent read other containers and use the Docker socket. Docker already applies it to a container started with `--pid=host`, but that is not a documented contract. Do not use any other `label=` option: it would cut the agent off the socket. No effect on other hosts. |
 | `-v /var/run/docker.sock:…` | the agent's only way to Docker. Mounting it `:ro` protects nothing. |
-| `-v hublot-data:/data` | the hash of the access token and the audit log. |
+| `-v hublot-data:/data` | the hash of the access token, the audit log, and the snapshots and their key. |
 | `-p 127.0.0.1:7878:7878` | reachable from the server only; use an SSH tunnel or a reverse proxy. |
 
 `--privileged` is not needed. The agent is already root on the host in practice: lifting its AppArmor confinement,
@@ -185,8 +185,10 @@ sudo systemctl restart hublot-kit
 
 ## Data directory
 
-`--data-dir` must be dedicated to Hublot-Kit. It holds `token.sha256` (the hash of the token, never the token) and
-`audit.log`. Missing, it is created with mode 0700. Existing, its mode is kept, but the agent refuses to start if it
+`--data-dir` must be dedicated to Hublot-Kit. It holds `token.sha256` (the hash of the token, never the token),
+`audit.log`, and, once a snapshot has been taken, `snapshot.key` (the HMAC key of the snapshots, 0600; a new one
+with `hublot rotate-snapshot-key`, agent stopped) and `snapshots/` (their manifests, 0700, never the content of a
+file). Missing, it is created with mode 0700. Existing, its mode is kept, but the agent refuses to start if it
 is a symbolic link, if it belongs to another user, or if its group or others can write to it (`/tmp`, for example).
 Its files are never opened through a symbolic link. The audit log is not rotated.
 
