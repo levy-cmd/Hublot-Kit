@@ -64,6 +64,22 @@ edit regex 's/v0\\\.2\\\.\[0-9\]\+/v0\\.1\\.[0-9]+/'
 grep -qF 'v0\.1\.[0-9]+' "$tmp/regex/docs/en/install.md" || bad "regex : mutation non appliquée"
 refused regex "identité de signature de l'image"
 
+# Un seul fichier perd toutes ses lignes V= : l'autre ne suffit pas.
+fresh sans-v-en
+perl -ni -e 'print unless /^V=/' "$tmp/sans-v-en/docs/en/install.md"
+refused sans-v-en "docs/en/install.md : aucune ligne V="
+
+# Série 0.3 cohérente partout (spec §8, README, docs : image :0.3, V=0.3.0,
+# regex v0\.3\.) : doit passer, la série n'est écrite en dur nulle part.
+fresh serie-03
+for f in docs/superpowers/specs/2026-10-07-hublot-kit-v0.1-design.md README.md README.fr.md docs/en/*.md docs/fr/*.md; do
+  perl -pi -e 's/hublot-kit:0\.2(?![.\d])/hublot-kit:0.3/g; s/^V=0\.2\.0$/V=0.3.0/; s/v0\\\.2\\\./v0\\.3\\./g' "$tmp/serie-03/$f"
+done
+grep -q '^V=0\.3\.0$' "$tmp/serie-03/docs/fr/installation.md" && grep -qF 'v0\.3\.[0-9]+' "$tmp/serie-03/docs/fr/installation.md" &&
+  ! grep -rq 'hublot-kit:0\.2' "$tmp/serie-03/README.md" "$tmp/serie-03/docs/en" "$tmp/serie-03/docs/fr" || bad "serie-03 : mutation incomplète"
+bash "$tmp/serie-03/scripts/check-docs.sh" > "$tmp/out" 2>&1 && echo "ok série 0.3 cohérente : DOCS OK" ||
+  bad "serie-03 : refusée : $(grep ERREUR "$tmp/out" | head -n 3)"
+
 # La vraie doc passe.
 bash scripts/check-docs.sh > "$tmp/out" 2>&1 && echo "ok doc actuelle : DOCS OK" || bad "doc actuelle refusée : $(cat "$tmp/out")"
 
