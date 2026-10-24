@@ -1,0 +1,9 @@
+# demo-api configuration (demo data, read by nobody)
+listen: ":8080"
+log_level: info
+upstream:
+  orders: http://db:5432
+  timeout: 5s
+features:
+  dark_mode: true
+  new_checkout: false

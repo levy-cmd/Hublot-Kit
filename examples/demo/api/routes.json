@@ -1,0 +1,7 @@
+{
+  "routes": [
+    { "path": "/health", "method": "GET", "auth": false },
+    { "path": "/orders", "method": "GET", "auth": true },
+    { "path": "/orders", "method": "POST", "auth": true }
+  ]
+}

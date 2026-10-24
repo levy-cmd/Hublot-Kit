@@ -1,0 +1,71 @@
+# Hublot-Kit demo: four small containers to explore, and the agent itself.
+# Start and stop it with ./demo.sh up and ./demo.sh down (see README.md).
+# Every credential below is fake and says so.
+name: hublot-demo
+
+services:
+  # A distroless service: the image is a single static binary, no shell.
+  # `docker exec -it api sh` fails; Hublot-Kit still shows its files.
+  # demo.sh up copies the files of api/ into /etc/api.
+  api:
+    image: traefik/whoami:v1.11
+    container_name: api
+    command: ["--port", "8080", "--name", "demo-api"]
+
+  # A job runner that writes files and logs; demo.sh up stops it.
+  worker:
+    image: alpine:3.20.10
+    container_name: worker
+    command:
+      - sh
+      - -c
+      - |
+        trap 'echo "worker: stop requested, exiting"; exit 0' TERM
+        mkdir -p /var/lib/worker/out
+        echo "worker: started, queue demo-jobs"
+        i=0
+        while :; do
+          if [ $$i -lt 12 ]; then
+            i=$$((i + 1))
+            echo "job $$i: resized demo-image-$$i.png" > /var/lib/worker/out/job-$$i.txt
+            echo "worker: job $$i done" | tee -a /var/log/worker.log
+          fi
+          sleep 1 & wait
+        done
+
+  # nginx; demo.sh up edits /etc/nginx/nginx.conf, to show the diff with the image.
+  web:
+    image: nginx:1.27.5-alpine
+    container_name: web
+
+  # PostgreSQL with fake credentials, for the Secrets page.
+  db:
+    image: postgres:17.11-alpine
+    container_name: db
+    environment:
+      POSTGRES_USER: demo
+      POSTGRES_DB: demo
+      POSTGRES_PASSWORD: demo-password-not-secret
+      API_TOKEN: demo-token-not-secret
+      SESSION_SECRET: demo-session-secret-not-secret
+      DATABASE_URL: postgres://demo:demo-password-not-secret@db:5432/demo
+
+  # The agent, with the options of the documented docker run command.
+  hublot:
+    image: ghcr.io/levy-cmd/hublot-kit:0.2
+    container_name: hublot-demo
+    pid: host
+    cgroup: host
+    cap_add:
+      - SYS_PTRACE
+    security_opt:
+      - apparmor=unconfined
+      - label=disable
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - hublot-data:/data
+    ports:
+      - 127.0.0.1:7878:7878
+
+volumes:
+  hublot-data:
