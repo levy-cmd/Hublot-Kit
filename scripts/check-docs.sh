@@ -164,12 +164,32 @@ grep -qx 'name_template: checksums.txt' <(sed 's/^ *//' "$gr") || err "$gr : che
 grep -qF 'identity="https://github.com/$repo/.github/workflows/release.yml@refs/tags/$tag"' "$vr" ||
   err "$vr : identité différente de celle de la doc"
 grep -qxF 'issuer=https://token.actions.githubusercontent.com' "$vr" || err "$vr : émetteur différent de celui de la doc"
+# Versions de la doc d'installation (Minor de la revue de la PR #12) : toutes
+# les lignes V= des deux docs ont une même valeur X.Y.Z, de la série X.Y de
+# l'étiquette d'image des commandes docker run (égales à celle de la spec §8,
+# contrôlé plus haut) ; la regex cosign de l'image vise cette même série.
+serie=$(printf '%s\n' "$want" | sed -n 's/^ *ghcr\.io\/levy-cmd\/hublot-kit:\([0-9][0-9]*\.[0-9][0-9]*\)$/\1/p')
+[ -n "$serie" ] || err "spec §8 : étiquette d'image X.Y introuvable dans la commande docker run"
+vs=$(grep -h '^V=' docs/en/install.md docs/fr/installation.md 2>/dev/null | sort -u || true)
+case $(printf '%s' "$vs" | awk 'END { print NR }') in
+  0) err "docs d'installation : aucune ligne V=" ;;
+  1)
+    v=${vs#V=}
+    if ! printf '%s\n' "$v" | grep -qxE '[0-9]+\.[0-9]+\.[0-9]+'; then
+      err "docs d'installation : V=$v n'a pas la forme X.Y.Z"
+    elif [ "${v%.*}" != "$serie" ]; then
+      err "docs d'installation : V=$v est de la série ${v%.*}, l'image documentée est :$serie (attendu V=$serie.x)"
+    fi
+    ;;
+  *) err "docs d'installation : lignes V= différentes ($(printf '%s\n' "$vs" | tr '\n' ' ' | sed 's/ $//'))" ;;
+esac
+serie_re=$(printf '%s' "$serie" | sed 's/\./\\./g')
 for f in docs/en/install.md docs/fr/installation.md; do
   [ -f "$f" ] || continue
   grep -qF -- '--certificate-identity "https://github.com/levy-cmd/Hublot-Kit/.github/workflows/release.yml@refs/tags/v$V"' "$f" ||
     err "$f : identité de signature des archives"
-  grep -qF -- "--certificate-identity-regexp '^https://github\.com/levy-cmd/Hublot-Kit/\.github/workflows/release\.yml@refs/tags/v0\.2\.[0-9]+\$'" "$f" ||
-    err "$f : identité de signature de l'image"
+  grep -qF -- "--certificate-identity-regexp '^https://github\.com/levy-cmd/Hublot-Kit/\.github/workflows/release\.yml@refs/tags/v$serie_re\.[0-9]+\$'" "$f" ||
+    err "$f : identité de signature de l'image (regex cosign de la série $serie attendue)"
   grep -qF -- '--certificate-oidc-issuer https://token.actions.githubusercontent.com' "$f" || err "$f : émetteur OIDC"
   grep -qF 'checksums.txt.sigstore.json' "$f" || err "$f : bundle de checksums.txt"
 done
