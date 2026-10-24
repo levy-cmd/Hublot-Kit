@@ -25,7 +25,7 @@ export default {
 		"Le conteneur est arrêté : Docker l'exporte en entier, volumes compris (jusqu'à 4 Gio lus), et le verrouille pendant l'export, 5 min au plus : démarrage, inspect, logs et écritures attendent.",
 	'snapshots.cost.index':
 		"Tirée de l'index déjà construit : aucun export, aucun verrou, aucune empreinte. La comparaison ne verra que tailles, dates, droits, liens, ajouts et suppressions.",
-	'snapshots.cost.memory': "Mémoire de l'agent : environ 150 Mo au pire (500 000 entrées).",
+	'snapshots.cost.memory': "Mémoire de l'agent : toutes les entrées jusqu'à la fin de l'export, environ 250 Mo au pire (500 000 entrées).",
 	'snapshots.cost.size': 'Taille du conteneur selon Docker : {size}.',
 	'snapshots.progress': 'Photo de {name} en cours : {n} entrées, {p} %',
 	'snapshots.progress.count': 'Comptage de {name} en cours : {n} entrées',

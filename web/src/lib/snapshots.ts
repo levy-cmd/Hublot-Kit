@@ -106,7 +106,7 @@ export function planCost(plan: SnapshotPlan, sizeRootFs: number | null | undefin
 	const size = sizeRootFs != null ? tf('snapshots.cost.size', { size: fmt(sizeRootFs) }) : '';
 	switch (plan) {
 		case 'running':
-			return [t('snapshots.cost.running'), t('snapshots.cost.memory'), size].filter(Boolean);
+			return [t('snapshots.cost.running'), size].filter(Boolean);
 		case 'stopped':
 			return [t('snapshots.cost.stopped'), t('snapshots.cost.memory'), size].filter(Boolean);
 		case 'index':

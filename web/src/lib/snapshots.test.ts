@@ -46,7 +46,7 @@ describe('snapshots', () => {
 	// Spec v0.2 §0.2: the confirmation says the cost.
 	it('says the cost of each plan', () => {
 		const fmt = (n: number) => `${n} o`;
-		expect(planCost('running', 42, fmt)).toEqual([t('snapshots.cost.running'), t('snapshots.cost.memory'), expect.stringContaining('42 o')]);
+		expect(planCost('running', 42, fmt)).toEqual([t('snapshots.cost.running'), expect.stringContaining('42 o')]);
 		expect(planCost('stopped', null, fmt)).toEqual([t('snapshots.cost.stopped'), t('snapshots.cost.memory')]);
 		expect(planCost('index', 42, fmt)).toEqual([t('snapshots.cost.index')]);
 		for (const k of ['snapshots.cost.running', 'snapshots.cost.stopped', 'snapshots.cost.index']) expect(t(k)).not.toBe(k);
