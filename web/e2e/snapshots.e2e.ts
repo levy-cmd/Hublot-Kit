@@ -83,9 +83,17 @@ test('snapshots : comparaison avec le conteneur actuel, diff seulement si l’im
 	await dialog.getByRole('button', { name: 'Confirmer' }).click();
 	await expect(page).toHaveURL(/with=current/);
 	const real = await (await done).json();
-	await expect(section).toContainText('Aucune différence.');
 	expect(real.b.id).toBe('current');
 	expect(real.contentCompared).toBe(real.a.source !== 'index');
+	if (real.contentCompared) {
+		await expect(section).toContainText('Aucune différence.');
+	} else {
+		// A photo of the metadata (another journey built the index first):
+		// a file of the same size and date is unknown, nothing else differs.
+		await expect(section).toContainText('Empreintes non comparables');
+		expect(real.results.length).toBeGreaterThan(0);
+		for (const r of real.results) expect(r.kind).toBe('unknown');
+	}
 
 	// The page as it shows a modified file, the agent's answers replaced.
 	const answer = {
