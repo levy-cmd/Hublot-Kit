@@ -109,6 +109,15 @@ The technical spec ([§13, in French](../superpowers/specs/2026-10-07-hublot-kit
 - Caps of the index: 4 GiB read, 16 GiB decompressed, 1,000,000 entries, 4 KiB per name or link target, 256 MiB of names, 5 minutes; of a read: 4 GiB, 16 GiB decompressed, 2 minutes. Beyond, `too_large`.
 - No download of the files of an image, and a preview of 2 MiB at most.
 
+## Snapshots (v0.2)
+
+- No content is kept: two photos compare by their metadata and fingerprints, without a line-by-line diff.
+- The photo of a running container is not atomic: a file changed during the walk may be seen before or after the change. The header keeps the start and end times.
+- The photo of a stopped container goes through its export: Docker puts its volumes in it too (read, then skipped, they count in the 4 GiB read) and locks the container for up to 5 min.
+- Caps: 500,000 entries (past it, refused: an incomplete manifest would show deletions); 1 GiB hashed, then the next files without a fingerprint ("partial"); 256 MiB per hashed file; 10,000 entries read per directory; 10 min for a running container, 4 GiB and 5 min for an export. Memory: about 300 bytes per entry for an export, 150 MB at worst.
+- Retention: 20 photos per container and 1 GiB in all, then refused; no automatic deletion.
+- With the key lost, deleted or changed (`rotate-snapshot-key`), older photos compare by their metadata only.
+
 ## Secret masking
 
 The X-ray masks secrets by name and by known forms. Not recognised in v0.1, among others:

@@ -121,6 +121,15 @@ tous les détails.
 - Plafonds de l'index : 4 Gio lus, 16 Gio décompressés, 1 000 000 d'entrées, 4 Kio par nom ou cible de lien, 256 Mio de noms, 5 minutes ; d'une lecture : 4 Gio, 16 Gio décompressés, 2 minutes. Au-delà, `too_large`.
 - Pas de téléchargement des fichiers d'une image, et un aperçu de 2 Mio au plus.
 
+## Snapshots (v0.2)
+
+- Aucun contenu n'est gardé : deux photos se comparent par leurs métadonnées et leurs empreintes, sans diff ligne à ligne.
+- La photo d'un conteneur en marche n'est pas atomique : un fichier modifié pendant le parcours peut être vu avant ou après sa modification. L'en-tête garde l'heure de début et celle de fin.
+- La photo d'un conteneur arrêté passe par son export : Docker y met aussi ses volumes (lus, puis sautés, ils comptent dans les 4 Gio lus) et verrouille le conteneur jusqu'à 5 min.
+- Plafonds : 500 000 entrées (au-delà, refus : un manifeste incomplet ferait croire à des suppressions) ; 1 Gio haché, puis les fichiers suivants sans empreinte (« partielle ») ; 256 Mio par fichier haché ; 10 000 entrées lues par dossier ; 10 min pour un conteneur en marche, 4 Gio et 5 min pour un export. Mémoire : environ 300 octets par entrée pour un export, soit 150 Mo au pire.
+- Rétention : 20 photos par conteneur et 1 Gio en tout, puis refus ; aucune suppression automatique.
+- La clé perdue, supprimée ou changée (`rotate-snapshot-key`), les anciennes photos ne se comparent plus que par leurs métadonnées.
+
 ## Masquage des secrets
 
 La radiographie masque les secrets par leur nom et par des formes connues. Non reconnus en v0.1, entre autres :

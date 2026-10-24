@@ -84,10 +84,33 @@ Treat the access token like the root password of the server.
   container is marked unavailable.
 - This is a heuristic: [some forms are not recognised](limitations.md#secret-masking). Logs are never masked.
 
+## Snapshots
+
+- A snapshot keeps no file content: metadata and, for each regular file, an HMAC-SHA256 of its content, with a key of
+  the agent (`snapshot.key`, 32 bytes, 0600, in the data directory). A bare SHA-256 of a small secret file (a code, a
+  short password) could be guessed offline; without the key, it cannot. Neither the fingerprints nor the key id leave
+  the agent: no API response contains one.
+- The key is created atomically (temporary file, `fsync`, `linkat`) and read back without following a link; it is
+  refused if it is not a regular file of the agent's user, if group or others have any right on it, or if it is not
+  exactly 32 bytes. `hublot rotate-snapshot-key` (agent stopped) writes a new one: the snapshots taken with the old
+  one then compare by their metadata only. Deleting or changing the key has the same effect.
+- The manifests live in `snapshots/` (0700), opened without following a link and checked through its descriptor;
+  each file is written there in 0600, relative to that descriptor, published by `renameat`. **The names of the
+  container's files are written there**: a name may be sensitive; it is already visible in the explorer, and the
+  directory is root's. The key and the manifests are in the same directory: whoever reads it has both, but they are
+  root on the host. The key protects what leaves the directory in pieces (a manifest pasted in a ticket, a partial
+  backup).
+- The walk of a running container opens every path from the pinned root without following any link (`openat2` with
+  `RESOLVE_NO_SYMLINKS`): a link planted during the walk is never followed, the file is noted unreadable. It reads no
+  pseudo filesystem, no FIFO, no device, crosses no mount point, and reads with `O_NOATIME` (the access times of the
+  production disk do not change). The export of a stopped container goes through the same refusals as the explorer
+  (a bind of the host's `/`, `/proc`, `/sys` or `/dev`, judged as written and as resolved on the host); its content
+  is hashed only under the caps, never for a sparse entry.
+
 ## Audit log
 
 `audit.log` in the data directory, one JSON line per event: failed logins, revealed variables, edited and uploaded
-files. A failed login also records the IP address of the TCP connection (never `X-Forwarded-For`). It is append-only and is not rotated in v0.1.
+files, snapshots taken and deleted. A failed login also records the IP address of the TCP connection (never `X-Forwarded-For`). It is append-only and is not rotated in v0.1.
 
 ## Docker socket
 

@@ -14,7 +14,7 @@ Cette page décrit l'interface de Hublot-Kit à partir de la v0.2. Pour l'instal
 
 ## La barre latérale
 
-Elle mène aux pages qui existent : Conteneurs (avec leur nombre), Images (avec leur nombre), Diff avec l'image, Recherche, Logs, Secrets et Paramètres. « Recherche » ouvre la recherche globale. « Diff avec l'image » et « Logs » ouvrent le panneau correspondant du conteneur choisi ; sans conteneur choisi, la liste demande d'en choisir un.
+Elle mène aux pages qui existent : Conteneurs (avec leur nombre), Images (avec leur nombre), Diff avec l'image, Recherche, Logs, Secrets, Snapshots et Paramètres. « Recherche » ouvre la recherche globale. « Diff avec l'image » et « Logs » ouvrent le panneau correspondant du conteneur choisi ; sans conteneur choisi, la liste demande d'en choisir un.
 
 En bas, un encart dit l'état réel de l'agent :
 
@@ -57,7 +57,7 @@ Les boutons « Explorer les fichiers », « Comparer avec l'image » et « Voir 
 
 Ils arrivent après le reste du détail, sans le retenir ; « — » veut dire en cours de chargement, inconnu ou indisponible.
 
-- **Fichiers** : le nombre d'entrées de l'index d'un conteneur arrêté, s'il est déjà construit (en ouvrant ses fichiers). L'agent ne lance jamais une construction pour ce chiffre : sans index, et pour un conteneur en marche, il reste « — ».
+- **Fichiers** : le nombre d'entrées de l'index d'un conteneur arrêté, s'il est déjà construit (en ouvrant ses fichiers) ; sinon celui du dernier snapshot du conteneur, avec sa date ; sinon celui d'un comptage récent. L'agent ne lance jamais de travail pour ce chiffre de lui-même : sans aucun des trois, un bouton « Compter » propose un comptage borné, après une confirmation qui dit son coût (un parcours des fichiers sans lire leur contenu pour un conteneur en marche ; l'export, qui verrouille le conteneur jusqu'à 5 min, pour un conteneur arrêté). Le résultat est gardé 5 min.
 - **Taille de l'image** : la taille que Docker donne pour l'image du conteneur, gardée en mémoire par image (une image ne change pas).
 - **Taille du conteneur** : la couche inscriptible (ce que le conteneur a écrit depuis sa création), puis le total avec l'image. Pour la calculer, Docker parcourt la couche inscriptible : l'agent ne la demande qu'à l'ouverture du détail, jamais pour la liste, et la garde une minute. Pendant l'export d'un conteneur arrêté, Docker le verrouille : le chiffre attend, 30 s au plus.
 
@@ -120,6 +120,22 @@ Les conteneurs sont triés par nombre de secrets détectés (variables et argume
 Une valeur révélée n'est gardée que par la page : elle est oubliée quand on replie la ligne, qu'on actualise, qu'on quitte la page ou qu'on ferme l'onglet. Rien n'est écrit dans le stockage du navigateur.
 
 L'inventaire coûte un `docker inspect` par conteneur (quelques millisecondes), quatre à la fois au plus pour tout l'agent. Un conteneur qui ne répond pas en 3 s, par exemple parce que Docker le verrouille pendant son export, est marqué « indisponible » sans retenir les autres ; « Actualiser » réessaie. Rien n'est gardé en cache : la page relit Docker à chaque ouverture.
+
+## La page Snapshots
+
+Un snapshot est une **photo des fichiers** d'un conteneur à un instant : pour chaque entrée, son chemin, son type, sa taille, ses droits, son propriétaire, sa date, la cible d'un lien et, pour un fichier régulier, une empreinte à clé de son contenu (HMAC-SHA256). **Le contenu n'est jamais copié** : les secrets d'un fichier ne sont pas dupliqués dans le dossier de l'agent. L'empreinte ne sort jamais de l'agent ; elle ne sert qu'à dire si un fichier a changé.
+
+Le snapshot couvre le système de fichiers propre au conteneur. Volumes, binds, tmpfs, `/dev`, `/etc/hosts`, `/etc/hostname`, `/etc/resolv.conf` et tout point de montage sont notés sans être parcourus ; `/proc` et `/sys` sont notés « inaccessibles ».
+
+Choisissez un conteneur, puis prenez la photo. Une boîte de confirmation dit d'abord ce qu'elle coûte :
+
+- **conteneur en marche** : un parcours de ses fichiers, un à la fois, jusqu'à 1 Gio lu sur le disque, 10 min au plus. La photo n'est pas atomique : un fichier modifié pendant le parcours peut être vu avant ou après sa modification ;
+- **conteneur arrêté** : l'export complet par Docker, volumes compris (jusqu'à 4 Gio lus), pendant lequel Docker verrouille le conteneur, 5 min au plus : démarrage, `docker inspect`, logs et écritures attendent ;
+- **photo des métadonnées** : quand l'index d'un conteneur arrêté est déjà construit (ses fichiers ont été ouverts), elle est proposée en premier. Elle est tirée de l'index, sans export ni verrou, mais sans empreinte : une comparaison ne verra que les tailles, dates, droits, liens, ajouts et suppressions.
+
+Une seule photo (ou un seul comptage) à la fois pour tout l'agent ; la page suit son avancement. La prise et la suppression sont permises même avec `--read-only` : elles écrivent dans le dossier de l'agent, jamais dans Docker, et sont notées dans le journal d'audit (`snapshot.create`, `snapshot.delete`).
+
+Les photos sont groupées par conteneur, la plus récente d'abord. Une photo « partielle » a atteint le budget d'empreintes (1 Gio) ou un dossier de plus de 10 000 entrées : des fichiers y sont notés sans empreinte. L'agent garde 20 photos par conteneur et 1 Gio en tout ; au-delà, une nouvelle prise est refusée, et rien n'est jamais supprimé de lui-même : supprimez une photo depuis la page. Les photos d'un conteneur supprimé restent, marquées « conteneur supprimé ».
 
 ## La page d'un conteneur et le téléphone
 

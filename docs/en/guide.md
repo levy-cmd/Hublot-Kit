@@ -14,7 +14,7 @@ This page describes the interface of Hublot-Kit from v0.2 on. To install it, see
 
 ## The side bar
 
-It leads to the pages that exist: Containers (with their count), Images (with their count), Diff with the image, Search, Logs, Secrets and Settings. "Search" opens the global search. "Diff with the image" and "Logs" open the matching panel of the chosen container; with no container chosen, the list asks you to choose one.
+It leads to the pages that exist: Containers (with their count), Images (with their count), Diff with the image, Search, Logs, Secrets, Snapshots and Settings. "Search" opens the global search. "Diff with the image" and "Logs" open the matching panel of the chosen container; with no container chosen, the list asks you to choose one.
 
 At the bottom, a notice says the agent's real state:
 
@@ -57,7 +57,7 @@ The "Explore the files", "Compare with the image" and "See the logs" buttons ope
 
 They come after the rest of the detail, without holding it back; "—" means loading, unknown or not available.
 
-- **Files**: the number of entries in the index of a stopped container, if it is already built (by opening its files). The agent never starts a build for this figure: without an index, and for a running container, it stays "—".
+- **Files**: the number of entries in the index of a stopped container, if it is already built (by opening its files); else that of the container's last snapshot, with its date; else that of a recent count. The agent never starts any work for this figure by itself: without any of the three, a "Count" button offers a bounded count, after a confirmation that says its cost (a walk of the files without reading their content for a running container; the export, which locks the container for up to 5 min, for a stopped one). The result is kept 5 min.
 - **Image size**: the size Docker gives for the container's image, kept in memory per image (an image does not change).
 - **Container size**: the writable layer (what the container wrote since its creation), then the total with the image. To compute it, Docker walks the writable layer: the agent asks for it only when the detail opens, never for the list, and keeps it one minute. While a stopped container is being exported, Docker locks it: the figure waits, 30 s at most.
 
@@ -120,6 +120,22 @@ Containers are sorted by number of detected secrets (variables and arguments), t
 A revealed value is kept by the page only: it is forgotten when you fold the row, refresh, leave the page or close the tab. Nothing is written to the browser's storage.
 
 The inventory costs one `docker inspect` per container (a few milliseconds), four at a time at most for the whole agent. A container that does not answer within 3 s, for instance because Docker locks it during its export, is marked "unavailable" without holding the others; "Refresh" tries again. Nothing is cached: the page reads Docker again each time it opens.
+
+## The Snapshots page
+
+A snapshot is a **photo of the files** of a container at one moment: for each entry, its path, type, size, permissions, owner, date, the target of a link and, for a regular file, a keyed fingerprint of its content (HMAC-SHA256). **The content is never copied**: the secrets of a file are not duplicated in the agent's directory. The fingerprint never leaves the agent; it only tells whether a file changed.
+
+A snapshot covers the container's own filesystem. Volumes, binds, tmpfs, `/dev`, `/etc/hosts`, `/etc/hostname`, `/etc/resolv.conf` and every mount point are noted without being walked; `/proc` and `/sys` are noted "inaccessible".
+
+Choose a container, then take the photo. A confirmation dialog first says what it costs:
+
+- **running container**: a walk of its files, one at a time, up to 1 GiB read from the disk, 10 min at most. The photo is not atomic: a file changed during the walk may be seen before or after the change;
+- **stopped container**: the full export by Docker, volumes included (up to 4 GiB read), during which Docker locks the container, 5 min at most: start, `docker inspect`, logs and writes wait;
+- **photo of the metadata**: when the index of a stopped container is already built (its files were opened), it is offered first. It is taken from the index, without export nor lock, but without fingerprints: a comparison will only see sizes, dates, permissions, links, additions and deletions.
+
+One photo (or one count) at a time for the whole agent; the page follows its progress. Taking and deleting a photo are allowed even with `--read-only`: they write in the agent's directory, never in Docker, and are recorded in the audit log (`snapshot.create`, `snapshot.delete`).
+
+Photos are grouped by container, the most recent first. A "partial" photo reached the fingerprint budget (1 GiB) or a directory of more than 10,000 entries: some files are noted without a fingerprint. The agent keeps 20 photos per container and 1 GiB in all; past that, a new photo is refused, and nothing is ever deleted by the agent itself: delete a photo from the page. The photos of a removed container stay, marked "container removed".
 
 ## A container's page and the phone
 
