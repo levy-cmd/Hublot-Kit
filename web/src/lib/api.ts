@@ -45,8 +45,13 @@ export type Container = {
 	status: string;
 	created: string;
 	ports: Port[];
+	// Spec v0.2 §5.1: Compose labels, absent outside Compose or when masked.
+	project?: string;
+	service?: string;
 };
-export type Meta = { version: string; readOnly: boolean };
+// Spec v0.2 §5.10: host is masked by the agent (secrets.Line).
+export type DockerInfo = { host: string; connected: boolean; serverVersion: string; apiVersion: string };
+export type Meta = { version: string; readOnly: boolean; docker: DockerInfo };
 
 export const login = (token: string) =>
 	api<{ ok: boolean }>('/login', { method: 'POST', body: JSON.stringify({ token }) });
@@ -90,8 +95,11 @@ async function get(url: string, signal?: AbortSignal): Promise<Response> {
 	return res;
 }
 
-export async function previewFile(id: string, path: string): Promise<Preview> {
-	const res = await get(`/api${fsPath(id, '/file', path)}`);
+export const previewFile = (id: string, path: string): Promise<Preview> => previewAt(`/api${fsPath(id, '/file', path)}`);
+
+/** The preview served at url: a container's file, or an image's (files.ts). */
+export async function previewAt(url: string): Promise<Preview> {
+	const res = await get(url);
 	const type = res.headers.get('Content-Type') ?? '';
 	const etag = res.headers.get('ETag') ?? '';
 	if (/^image\/(png|jpeg|gif|webp)$/.test(type)) return { kind: 'image', blob: await res.blob(), etag };
@@ -189,9 +197,24 @@ export type Radiography = {
 	networks: Network[];
 	mounts: Mount[];
 	tmpfs: string[];
+	labels: Label[];
 };
 
+// Spec v0.2 §5.2: value null when masked, and no reveal for a label.
+export type Label = { key: string; value: string | null; masked: boolean };
+
 export const getContainer = (id: string) => api<Radiography>(`/containers/${encodeURIComponent(id)}`);
+
+// Spec v0.2 §5.3: loaded apart from the detail; a size Docker does not give
+// is null, files null without an index already built.
+export type Figures = {
+	sizeRw: number | null;
+	sizeRootFs: number | null;
+	imageSize: number | null;
+	files: { count: number; source: 'index' | 'snapshot' | 'count'; at: string } | null;
+};
+export const getFigures = (id: string, signal?: AbortSignal) =>
+	api<Figures>(`/containers/${encodeURIComponent(id)}/figures`, { signal });
 
 // The agent journals the reveal (env.reveal) before it answers. The value is
 // only returned: never logged, never stored by the caller beyond its state.

@@ -22,14 +22,22 @@ var radioGolden = filepath.Join("testdata", "radio.golden.json")
 func goldenRadio() dockerx.ContainerInfo {
 	return dockerx.ContainerInfo{
 		ID: "c0ffee0123456789", Name: "cache", Running: false,
-		FinishedAt: "0001-01-01T00:00:00Z", // never started: Docker's zero date
+		FinishedAt: "2026-10-20T08:00:00.123456789Z", // the last exit (spec v0.2 §5.3)
 		Mounts: []dockerx.Mount{
 			{Type: "volume", Name: "data", Source: "/var/lib/docker/volumes/data/_data", Destination: "/data", Driver: "local", Mode: "ro"},
 			{Type: "bind", Source: "/srv/conf", Destination: "/etc/app", RW: true},
 		},
 		Tmpfs: []string{"/run"}, LogDriver: "json-file",
 		Details: dockerx.Details{
-			Image: "redis:7", ImageID: "sha256:0123456789abcdef", Created: "2026-10-10T07:00:00Z", Status: "created",
+			Image: "redis:7", ImageID: "sha256:0123456789abcdef", Created: "2026-10-10T07:00:00Z", Status: "exited",
+			ExitCode: 137, StartedAt: "2026-10-10T07:00:05Z",
+			// Spec v0.2 §5.2: one label in clear, two masked (outside the
+			// whitelist; a secret value under it).
+			Labels: map[string]string{
+				"com.docker.compose.project":                    "shop",
+				"com.docker.compose.x":                          "postgres://u:s3cr3t-label@db/app",
+				"traefik.http.middlewares.auth.basicauth.users": "admin:$apr1$s3cr3t-label",
+			},
 			RestartPolicy: "on-failure", MaxRetry: 5,
 			Cmd:        []string{"redis-server", "--requirepass", "s3cr3t-cmd"},
 			WorkingDir: "/data",

@@ -2,8 +2,8 @@ import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 import type { Radiography } from './api';
 import {
-	addReveal, askFor, commandLine, envValue, forgetReveals, isStopped, mountLabel, noReveals, portLabel, removeReveal, restartLabel,
-	revealedFor, shortId
+	addReveal, askFor, commandLine, envValue, forgetReveals, isStopped, lastExit, mountLabel, noReveals, portLabel,
+	removeReveal, restartLabel, revealedFor, shortId, splitLabels
 } from './xray';
 
 describe('xray (F7)', () => {
@@ -90,6 +90,42 @@ describe('xray (F7)', () => {
 		expect(revealedFor(addReveal(hid, askFor(a, 'a'), 'a', 'DB_PASSWORD', 's3cr3t'), 'a')).toEqual({ DB_PASSWORD: 's3cr3t' });
 	});
 
+	it('keeps an empty value in clear as a chip, not as masked (spec v0.2 §5.2)', () => {
+		expect(splitLabels([{ key: 'com.docker.compose.depends_on', value: '', masked: false }])).toEqual({
+			shown: [{ key: 'com.docker.compose.depends_on', value: '' }],
+			masked: []
+		});
+		expect(splitLabels([])).toEqual({ shown: [], masked: [] });
+	});
+
+	it('shows the labels in clear as chips, the masked ones as keys only (review of tranche 2)', () => {
+		const split = splitLabels([
+			{ key: 'architecture', value: null, masked: true },
+			{ key: 'com.docker.compose.project', value: 'shop', masked: false },
+			{ key: 'com.docker.compose.project.working_dir', value: null, masked: true },
+			{ key: 'org.opencontainers.image.source', value: 'https://github.com/o/r', masked: false },
+			{ key: 'backup.dsn', value: 's3cr3t', masked: true } // masked wins over a value
+		]);
+		expect(split.shown).toEqual([
+			{ key: 'com.docker.compose.project', value: 'shop' },
+			{ key: 'org.opencontainers.image.source', value: 'https://github.com/o/r' }
+		]);
+		expect(split.masked).toEqual(['architecture', 'com.docker.compose.project.working_dir', 'backup.dsn']);
+		expect(JSON.stringify(split)).not.toContain('s3cr3t');
+	});
+
+	it('reads the last exit, "never" for Docker\'s zero date (spec v0.2 §5.3)', () => {
+		const s = (finishedAt: string | undefined, running: boolean, exitCode: number) => ({
+			status: running ? 'running' : 'exited', running, exitCode, oomKilled: false, finishedAt
+		});
+		expect(lastExit(s(undefined, true, 0))).toBeNull();
+		expect(lastExit(s('0001-01-01T00:00:00Z', false, 0))).toBeNull();
+		expect(lastExit(s('2026-10-20T08:00:00Z', false, 137))).toEqual({ at: '2026-10-20T08:00:00Z', code: 137 });
+		expect(lastExit(s('2026-10-20T08:00:00Z', false, 0))).toEqual({ at: '2026-10-20T08:00:00Z', code: 0 });
+		// Restarted since: the exit is known, its code is not (reset at start).
+		expect(lastExit(s('2026-10-20T08:00:00Z', true, 0))).toEqual({ at: '2026-10-20T08:00:00Z', code: null });
+	});
+
 	it('treats a restarting container as stopped, like the agent (Running && Pid != 0)', () => {
 		const s = (status: string, running: boolean) => ({ status, running, exitCode: 0, oomKilled: false });
 		expect(isStopped(s('running', true))).toBe(false);
@@ -104,10 +140,16 @@ describe('xray (F7)', () => {
 		const raw = readFileSync(new URL('../../../internal/api/testdata/radio.golden.json', import.meta.url), 'utf8');
 		expect(raw).not.toContain('s3cr3t');
 		const r = JSON.parse(raw) as Radiography;
-		// Zero dates emptied by the agent: absent, not "0001-01-01".
-		expect(r.state.startedAt).toBeUndefined();
-		expect(r.state.finishedAt).toBeUndefined();
+		expect(r.state.finishedAt).toBe('2026-10-20T08:00:00.123456789Z');
+		expect(r.state.exitCode).toBe(137);
+		expect(lastExit(r.state)).toEqual({ at: '2026-10-20T08:00:00.123456789Z', code: 137 });
 		expect(isStopped(r.state)).toBe(true);
+		// Spec v0.2 §5.2: the label rule applied by the agent.
+		expect(r.labels).toEqual([
+			{ key: 'com.docker.compose.project', value: 'shop', masked: false },
+			{ key: 'com.docker.compose.x', value: null, masked: true },
+			{ key: 'traefik.http.middlewares.auth.basicauth.users', value: null, masked: true }
+		]);
 		expect(restartLabel(r.restartPolicy, r.restartCount)).toBe('on-failure (5) · 0');
 		expect(r.ports.map((p) => portLabel(p, '(auto)'))).toEqual(['[::1]:8080 → 80/tcp', '(auto) → 90/tcp', '9000/tcp']);
 		expect(r.env.map((v) => [v.name, envValue(v, {})])).toEqual([['DB_PASSWORD', null], ['PLAIN', 'visible']]);

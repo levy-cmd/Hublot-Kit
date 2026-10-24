@@ -1,12 +1,10 @@
 package api
 
 import (
-	"encoding/json"
-	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
+	"slices"
 
 	"github.com/levy-cmd/hublot-kit/internal/audit"
 	"github.com/levy-cmd/hublot-kit/internal/dockerx"
@@ -64,27 +62,41 @@ type radioJSON struct {
 	Networks      []dockerx.Network `json:"networks"`
 	Mounts        []mountJSON       `json:"mounts"`
 	Tmpfs         []string          `json:"tmpfs"`
+	// Labels: by secrets.Labels only (spec v0.2 §5.2), never revealed.
+	Labels []secrets.Label `json:"labels"`
 }
 
 func toRadioJSON(c dockerx.ContainerInfo) radioJSON {
 	d := c.Details
-	ep, epMasked := secrets.Args(d.Entrypoint)
-	cmd, cmdMasked := secrets.Args(d.Cmd)
+	ep, cmd, cmdMasked := maskCommand(d.Entrypoint, d.Cmd)
 	out := radioJSON{
 		ID: c.ID, Name: c.Name, Image: d.Image, ImageID: d.ImageID, Created: d.Created,
 		State: stateJSON{Status: d.Status, Running: c.Running, ExitCode: d.ExitCode, Error: secrets.Line(d.Error),
 			StartedAt: d.StartedAt, FinishedAt: dockerx.Date(c.FinishedAt), OOMKilled: d.OOMKilled, Health: d.Health},
 		RestartCount: d.RestartCount, RestartPolicy: restartJSON{Name: d.RestartPolicy, MaxRetry: d.MaxRetry},
-		Entrypoint: nonNil(ep), Cmd: nonNil(cmd), CommandMasked: epMasked || cmdMasked,
+		Entrypoint: ep, Cmd: cmd, CommandMasked: cmdMasked,
 		WorkingDir: d.WorkingDir, User: d.User, Tty: c.Tty, LogDriver: c.LogDriver,
 		Env: secrets.Env(d.Env), Ports: nonNil(d.Ports), NetworkMode: d.NetworkMode,
-		Networks: nonNil(d.Networks), Mounts: []mountJSON{}, Tmpfs: nonNil(c.Tmpfs),
+		Networks: nonNil(d.Networks), Mounts: []mountJSON{}, Tmpfs: nonNil(c.Tmpfs), Labels: secrets.Labels(d.Labels),
 	}
 	for _, m := range c.Mounts {
 		out.Mounts = append(out.Mounts, mountJSON{Type: m.Type, Name: m.Name, Source: m.Source,
 			Destination: m.Destination, Driver: m.Driver, Mode: m.Mode, RW: m.RW})
 	}
 	return out
+}
+
+// maskCommand masks an entrypoint and a command together: Docker runs them
+// as one argv, so a secret flag that ends the entrypoint ("--requirepass")
+// names the first argument of the command (review of tranche 5, Codex).
+// secrets.Args masks them end to end, then they are split again at the
+// same length. Never nil.
+func maskCommand(entrypoint, cmd []string) (ep, c []string, masked bool) {
+	all, masked := secrets.Args(append(slices.Clip(entrypoint), cmd...))
+	if all == nil {
+		return []string{}, []string{}, false
+	}
+	return nonNil(all[:len(entrypoint):len(entrypoint)]), nonNil(all[len(entrypoint):]), masked
 }
 
 // nonNil: an empty JSON array rather than null.
@@ -116,12 +128,9 @@ func (s *server) revealEnv(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Name string `json:"name"`
 	}
-	dec := json.NewDecoder(io.LimitReader(r.Body, 4096))
-	err := dec.Decode(&body)
-	if err == nil && dec.Decode(&struct{}{}) != io.EOF {
-		err = errors.New("data after the JSON object")
-	}
-	if err != nil {
+	// One JSON object of 4 KiB at most, nothing after it but blanks, even
+	// past the 4 KiB (review of tranche 4, decodeOne).
+	if err := decodeOne(r.Body, 4096, &body); err != nil {
 		writeFSError(w, fmt.Errorf("%w (%v)", errNoVariable, err))
 		return
 	}

@@ -1,0 +1,161 @@
+# Visite de l'interface
+
+Cette page décrit l'interface de Hublot-Kit à partir de la v0.2. Pour l'installer, voir [Installation](installation.md) ; pour ce que l'agent peut faire et ce qui le protège, voir [le modèle de sécurité](securite.md).
+
+## La barre du haut
+
+- À gauche, l'anneau du hublot, le nom et la version réelle de l'agent (`dev` pour une version de développement).
+- Au centre, le champ « Rechercher un conteneur, une image, un fichier… » avec l'indication `Ctrl K` (`⌘ K` sur macOS). Il ouvre la recherche (ci-dessous) et ne cherche rien par lui-même.
+- À droite :
+  - l'état de Docker : « Connecté » ou « Docker injoignable », suivi de l'adresse du démon (par exemple `unix:///var/run/docker.sock`). Une adresse qui contiendrait un identifiant (`tcp://utilisateur:motdepasse@hôte`) est masquée par l'agent ;
+  - le bouclier : plein avec « Lecture seule » quand l'agent a démarré avec `--read-only`, en contour avec « Écriture permise » sinon ;
+  - la bascule du thème ;
+  - le menu du serveur : l'adresse de l'agent, « Serveurs », « Paramètres » et « Se déconnecter ». Hublot-Kit n'a pas de comptes, seulement un jeton : le menu est celui du serveur, pas d'une personne.
+
+## La barre latérale
+
+Elle mène aux pages qui existent : Conteneurs (avec leur nombre), Images (avec leur nombre), Diff avec l'image, Recherche, Logs, Secrets, Snapshots et Paramètres. « Recherche » ouvre la recherche globale. « Diff avec l'image » et « Logs » ouvrent le panneau correspondant du conteneur choisi ; sans conteneur choisi, la liste demande d'en choisir un.
+
+En bas, un encart dit l'état réel de l'agent :
+
+- « Lecture seule : aucune écriture dans les conteneurs » quand l'agent a démarré avec `--read-only` ;
+- « Écriture permise, toujours confirmée » sinon. C'est le cas par défaut : chaque écriture passe par une boîte de confirmation qui nomme le conteneur et le chemin.
+
+Sous 80 rem de large, la barre se réduit à ses icônes ; sous 48 rem, elle devient un tiroir qu'ouvre le bouton de menu de la barre du haut.
+
+## La recherche (Ctrl+K)
+
+`Ctrl K` (`⌘ K` sur macOS), le champ de la barre du haut ou l'entrée « Recherche » ouvrent une palette, sur toutes les pages sauf celle de connexion.
+
+- Elle cherche les conteneurs (nom, ID court, image, projet, service), les projets Compose et les pages de l'interface, dans la liste que le navigateur a déjà : rien n'est demandé à l'agent pour cela. Un nom exact passe en premier, puis un début de nom, puis un nom qui contient la recherche ; un conteneur passe avant un projet ou une page.
+- Elle cherche aussi les **fichiers**, mais seulement ceux du conteneur ouvert (`?c=` ou la page du conteneur), et seulement dans l'index déjà construit quand l'explorateur l'a ouvert. La recherche ne lance jamais d'export ni de parcours : pour un conteneur en marche, ou un conteneur arrêté que l'explorateur n'a pas encore ouvert, la palette propose « Ouvrir l'explorateur ». La recherche porte sur le chemin complet, sans tenir compte de la casse ; les noms qui contiennent la recherche passent avant les chemins qui la contiennent par un dossier parent. 200 fichiers au plus, puis la palette demande de préciser.
+- Elle ne renvoie que des noms que l'explorateur montre déjà pour ce conteneur, jamais un contenu, jamais une valeur masquée (environnement, commande, labels).
+- Au clavier : les flèches choisissent, Entrée ouvre, Échap ferme et rend le focus là où il était ; Tab reste dans la palette.
+- Rien n'est gardé : ni historique, ni stockage du navigateur, ni requête dans l'adresse de la page. La requête des fichiers part dans le corps d'un appel POST à l'agent (`/api/containers/{id}/fs/search`), jamais dans une adresse ; l'agent ne la journalise pas (voir [les limites](limites.md)).
+
+Sur la page d'une image, la palette cherche les fichiers de cette image, de la même façon : seulement dans son index déjà construit par l'onglet Fichiers, sans jamais lancer d'export (`POST /api/images/{id}/fs/search`).
+
+## La page Conteneurs
+
+- Les onglets Tous, En cours et Arrêtés filtrent la liste ; un conteneur en pause ou qui redémarre compte parmi « En cours ». La liste « Statut » choisit un état précis de Docker.
+- Le champ de filtre cherche dans le nom et l'image. Il n'est pas gardé dans l'adresse de la page, car un nom peut être sensible ; l'onglet, le statut et le projet le sont.
+- La colonne Projet et la liste « Projet » viennent des labels de Compose (`com.docker.compose.project` et `.service`). La liste propose les projets présents, plus « Sans projet ». Un nom de projet que le masquage des secrets refuserait n'est pas envoyé : le conteneur compte alors comme « sans projet ».
+- La colonne Uptime traduit le statut de Docker : `Up 3 hours (healthy)` devient « depuis 3 heures, sain », `Exited (137) 2 days ago` devient « arrêté il y a 2 jours, code 137 ». Un texte que l'interface ne reconnaît pas est montré tel quel.
+- La couleur double toujours un texte : émeraude pour un conteneur en marche, ambre pour une alerte (pause, redémarrage, sortie avec un code non nul), gris pour un arrêt propre.
+- Au clavier : `/` place le curseur dans le filtre, les flèches, Début et Fin parcourent les lignes, Entrée choisit le conteneur.
+
+## Le panneau de détail
+
+Choisir un conteneur ouvre à droite son détail : l'image (avec un bouton de copie), la date de création, la dernière sortie (« jamais » pour un conteneur jamais arrêté), trois chiffres clés, puis deux onglets.
+
+- **Aperçu** : la commande, sous la forme masquée par l'agent (le bouton de copie copie cette forme, jamais une valeur révélée), les ports, les labels, puis, sous « Détails », l'identité, l'état, les réseaux et les montages.
+- **Secrets** : les variables d'environnement. Une valeur secrète est masquée ; « Révéler » la demande à l'agent, qui journalise la révélation. Une valeur révélée est oubliée quand on quitte l'onglet ou le conteneur.
+
+Les boutons « Explorer les fichiers », « Comparer avec l'image » et « Voir les logs » ouvrent les panneaux du bas.
+
+### Chiffres clés
+
+Ils arrivent après le reste du détail, sans le retenir ; « — » veut dire en cours de chargement, inconnu ou indisponible.
+
+- **Fichiers** : le nombre d'entrées de l'index d'un conteneur arrêté, s'il est déjà construit (en ouvrant ses fichiers) ; sinon celui du dernier snapshot du conteneur, avec sa date ; sinon celui d'un comptage récent. L'agent ne lance jamais de travail pour ce chiffre de lui-même : sans aucun des trois, un bouton « Compter » propose un comptage borné, après une confirmation qui dit son coût (un parcours des fichiers sans lire leur contenu pour un conteneur en marche ; l'export, qui verrouille le conteneur jusqu'à 5 min, pour un conteneur arrêté). Le résultat est gardé 5 min.
+- **Taille de l'image** : la taille que Docker donne pour l'image du conteneur, gardée en mémoire par image (une image ne change pas).
+- **Taille du conteneur** : la couche inscriptible (ce que le conteneur a écrit depuis sa création), puis le total avec l'image. Pour la calculer, Docker parcourt la couche inscriptible : l'agent ne la demande qu'à l'ouverture du détail, jamais pour la liste, et la garde une minute. Pendant l'export d'un conteneur arrêté, Docker le verrouille : le chiffre attend, 30 s au plus.
+
+### Labels
+
+Les labels portent souvent des secrets que le masquage ne reconnaît pas, par exemple `traefik.http.middlewares.auth.basicauth.users=admin:$apr1$…`. Seules les valeurs des labels `com.docker.compose.*` et `org.opencontainers.image.*` sont montrées, et seulement si le masquage n'y trouve rien ; celles qui donnent des chemins de la machine hôte (`com.docker.compose.project.config_files`, `.working_dir` et `.environment_file`) sont masquées aussi. Les valeurs montrées forment des puces ; les labels masqués tiennent sur une ligne repliée, « N autres labels masqués », qui ne déplie que leurs noms. Aucun label ne se révèle : sa valeur se lit sur l'hôte avec `docker inspect`.
+
+## Les panneaux du bas
+
+À partir de 90 rem de large, quatre panneaux côte à côte ; en dessous, des onglets.
+
+1. **Système de fichiers** : l'explorateur. « Explorer » montre tout le dossier, « Diff » seulement ce qui a changé depuis l'image ; dans les deux cas, une lettre marque un fichier ajouté (A) ou modifié (M). Pour un conteneur arrêté, la première ouverture construit un index, avec sa progression.
+2. **Diff avec l'image** : les compteurs des ajouts, modifications et suppressions, puis la liste ; un chemin ouvre son diff de contenu dans le panneau suivant.
+3. **Contenu du fichier** : l'aperçu avec ses numéros de ligne, le téléchargement et, si l'écriture est permise, la modification. Ou bien le diff de contenu du chemin choisi dans le panneau Diff ; le dernier choisi l'emporte.
+
+### Le diff de contenu
+
+Pour un fichier **modifié**, le diff unifié entre sa version dans l'image du conteneur et sa version dans le conteneur, en lecture seule. Deux colonnes de numéros : à gauche la ligne dans l'image, à droite dans le conteneur ; `+` marque une ligne ajoutée (pas de numéro dans l'image), `−` une ligne retirée (pas de numéro dans le conteneur). Un fichier **ajouté** ne montre que la version du conteneur, un fichier **supprimé** que celle de l'image. L'icône de dossier ouvre le fichier dans l'explorateur.
+
+- L'image est lue par son ID, sans conteneur : le diff marche aussi quand l'étiquette qui a lancé le conteneur a été retirée ou déplacée. La première lecture d'un fichier de l'image relit son export jusqu'à la couche qui le porte ; une progression s'affiche pendant ce temps, comme dans l'explorateur des images. Pour un conteneur arrêté, l'index du conteneur se construit aussi la première fois.
+- Pas de diff, et un message qui dit pourquoi, si l'une des deux versions est binaire (octet nul dans les 8 premiers Kio, ou image PNG, JPEG, GIF, WebP), dépasse 2 Mio, n'est pas un fichier régulier (dossier, lien, périphérique), ou n'existe pas de ce côté.
+- Si le texte est le même, le panneau le dit : seules les métadonnées ont changé, ou seules les fins de ligne (CRLF et LF).
+- Le diff est borné quel que soit le contenu des fichiers (lignes × modifications : 10 millions au plus, et 1 000 modifications). Au-delà, tout ce qui se trouve entre le début et la fin communs est montré en un seul bloc remplacé, et le panneau le dit.
+- Le diff ne montre rien de plus que les deux aperçus : ce que l'explorateur du conteneur et celui de l'image afficheraient pour ce chemin. Un fichier de secrets (`.env`, clé) s'y lit en clair, comme dans l'aperçu. Il est calculé dans le navigateur.
+4. **Logs en direct** : l'horodatage, le niveau et le message. Le niveau est déduit du texte (`ERROR`, `WARN`, `INFO`, `DEBUG`, ou un champ `level`) ; c'est une heuristique, et à défaut le flux d'origine (`stdout` ou `stderr`) est affiché. « Suivi automatique » fait suivre la fin du flux ; le couper ne met pas le flux en pause. « Pause » arrête la réception, « Reprendre » rattrape les lignes arrivées entre-temps.
+
+## La page Images
+
+La page Images liste les images du démon, celles sans étiquette comprises (montrées par leur ID court), avec leur taille, leur date et les conteneurs qui les utilisent. Elle se trie par date, par taille ou par nom ; le champ filtre par étiquette, par début d'ID ou par nom de conteneur. Les images intermédiaires de l'ancien constructeur ne sont pas listées.
+
+Une image s'ouvre sur sa page, `/images/<ID>`. Elle se désigne toujours par son **ID complet** (64 caractères hexadécimaux), jamais par un nom comme `nginx:latest` : un nom peut changer de cible entre deux requêtes. Une adresse avec un nom ou un ID court répond « Introuvable ». Une image dé-étiquetée (`docker rmi -f` d'une image utilisée) reste donc lisible tant qu'elle existe.
+
+La page montre :
+
+- l'ID complet (avec copie), les étiquettes, la taille, la date et la plateforme (`linux/arm64/v8`) ;
+- la configuration : la commande, le dossier de travail, l'utilisateur, les ports exposés, les variables et les labels, masqués par les mêmes règles que la radiographie d'un conteneur. Une valeur masquée ne se révèle pas depuis l'image : la révélation, journalisée, se fait depuis un conteneur qui l'utilise ;
+- les couches, c'est-à-dire l'historique de construction, de la plus récente à la plus ancienne. Les entrées sans fichier (`ENV`, `CMD`, `LABEL`…) sont repliées. Les arguments de construction (`|2 GH_PAT=… /bin/sh -c …`, `ARG GH_PAT=…`) sont masqués quel que soit leur nom, et une ligne `LABEL` ne garde aucun texte : les labels se lisent dans la configuration, filtrés ;
+- les conteneurs de l'image, qui mènent à leur détail.
+
+La liste coûte deux demandes à Docker, quel que soit le nombre d'images (la liste des images et celle des conteneurs) ; deux onglets ouverts en même temps partagent la même lecture. Le détail en coûte trois. Si Docker ne répond pas en 10 s, la page le dit et « Actualiser » réessaie.
+
+### Les fichiers d'une image
+
+L'onglet **Fichiers** de la page d'une image explore son arborescence, en lecture seule, **sans créer de conteneur** : l'agent lit l'export de l'image (`docker save`, une lecture côté Docker) et en construit un index des couches, avec les mêmes règles que l'explorateur d'un conteneur arrêté. Les fichiers supprimés par une couche plus haute n'apparaissent pas ; un lien symbolique se résout dans l'image, jamais sur l'hôte.
+
+- **Première ouverture** : une barre de progression pendant la lecture des couches (0,2 s pour `alpine:3`, environ 2 s pour `postgres:16-alpine`, 4 s pour `golang:1.27` mesurés sur Docker Desktop). L'index reste en mémoire, dans les trois places partagées avec les conteneurs arrêtés.
+- **Aperçu d'un fichier** : l'agent relit l'export jusqu'à la fin de la couche qui porte ce fichier, vérifie son empreinte, puis montre le contenu (texte ou image, 2 Mio au plus). Pendant ce temps, l'aperçu montre sa progression et redemande toutes les 2 s ; changer de fichier arrête la demande, et l'agent abandonne une lecture que plus personne ne demande depuis 15 s. Le contenu reste une minute en mémoire.
+- Pas de bouton d'écriture, d'envoi ni de téléchargement : les fichiers d'une image se lisent seulement.
+- Une image dont l'agent ne sait pas lire les couches (zstd, plusieurs plateformes présentes, export altéré) est refusée avec un message ; voir [les limites](limites.md).
+
+## La page Secrets
+
+La page Secrets fait l'inventaire de ce que l'agent masque, sur tous les conteneurs à la fois. Elle ne montre que des **noms**, jamais une valeur :
+
+- les variables d'environnement que la radiographie masque ;
+- les arguments de la commande et du point d'entrée où l'agent a trouvé un secret, par leur place et par ce qui a été détecté (« Commande, argument 3 : valeur de --requirepass »), jamais par leur texte : un masque partiel pourrait laisser voir un reste de la valeur ;
+- les noms des labels masqués. Tout label hors de `com.docker.compose.*` et `org.opencontainers.image.*` est masqué par précaution, qu'il porte un secret ou non : ils sont comptés à part.
+
+Les conteneurs sont triés par nombre de secrets détectés (variables et arguments), puis par nombre de labels masqués ; la liste « Projet » filtre par projet Compose, comme sur la page Conteneurs. Une ligne se déplie sur ses variables ; « Révéler » passe par la même demande que l'onglet Secrets du détail, journalisée par l'agent, et permise en lecture seule. La commande et les labels ne se révèlent pas.
+
+Une valeur révélée n'est gardée que par la page : elle est oubliée quand on replie la ligne, qu'on actualise, qu'on quitte la page ou qu'on ferme l'onglet. Rien n'est écrit dans le stockage du navigateur.
+
+L'inventaire coûte un `docker inspect` par conteneur (quelques millisecondes), quatre à la fois au plus pour tout l'agent. Un conteneur qui ne répond pas en 3 s, par exemple parce que Docker le verrouille pendant son export, est marqué « indisponible » sans retenir les autres ; « Actualiser » réessaie. Rien n'est gardé en cache : la page relit Docker à chaque ouverture.
+
+## La page Snapshots
+
+Un snapshot est une **photo des fichiers** d'un conteneur à un instant : pour chaque entrée, son chemin, son type, sa taille, ses droits, son propriétaire, sa date, la cible d'un lien et, pour un fichier régulier, une empreinte à clé de son contenu (HMAC-SHA256). **Le contenu n'est jamais copié** : les secrets d'un fichier ne sont pas dupliqués dans le dossier de l'agent. L'empreinte ne sort jamais de l'agent ; elle ne sert qu'à dire si un fichier a changé.
+
+Le snapshot couvre le système de fichiers propre au conteneur. Volumes, binds, tmpfs, `/dev`, `/etc/hosts`, `/etc/hostname`, `/etc/resolv.conf` et tout point de montage sont notés sans être parcourus ; `/proc` et `/sys` sont notés « inaccessibles ».
+
+Choisissez un conteneur, puis prenez la photo. Une boîte de confirmation dit d'abord ce qu'elle coûte :
+
+- **conteneur en marche** : un parcours de ses fichiers, un à la fois, jusqu'à 1 Gio lu sur le disque, 10 min au plus. La photo n'est pas atomique : un fichier modifié pendant le parcours peut être vu avant ou après sa modification ;
+- **conteneur arrêté** : l'export complet par Docker, volumes compris (jusqu'à 4 Gio lus), pendant lequel Docker verrouille le conteneur, 5 min au plus : démarrage, `docker inspect`, logs et écritures attendent ;
+- **photo des métadonnées** : quand l'index d'un conteneur arrêté est déjà construit (ses fichiers ont été ouverts), elle est proposée en premier. Elle est tirée de l'index, sans export ni verrou, mais sans empreinte : une comparaison ne verra que les tailles, dates, droits, liens, ajouts et suppressions.
+
+Une seule photo (ou un seul comptage) à la fois pour tout l'agent ; la page suit son avancement. La prise et la suppression sont permises même avec `--read-only` : elles écrivent dans le dossier de l'agent, jamais dans Docker, et sont notées dans le journal d'audit (`snapshot.create`, `snapshot.delete`).
+
+Les photos sont groupées par conteneur, la plus récente d'abord. Une photo « partielle » a atteint le budget d'empreintes (1 Gio) ou un dossier de plus de 10 000 entrées : des fichiers y sont notés sans empreinte. L'agent garde 20 photos par conteneur et 1 Gio en tout ; au-delà, une nouvelle prise est refusée, et rien n'est jamais supprimé de lui-même : supprimez une photo depuis la page. Les photos d'un conteneur supprimé restent, marquées « conteneur supprimé ».
+
+### Comparer
+
+« Comparer », sur une photo, la confronte à une autre photo du même conteneur (ou d'un conteneur du même nom, recréé par exemple par Compose), ou au **conteneur actuel**. Chaque différence a un genre : **ajouté**, **supprimé**, **modifié** (l'empreinte du contenu a changé), **métadonnées** (taille, droits, propriétaire, groupe, date ou cible d'un lien seulement), **type changé** (un fichier devenu dossier, par exemple) ou **inconnu** (même taille et même date, mais une empreinte manque ou n'est pas de la même clé : rien ne peut être dit du contenu). Les entrées identiques n'apparaissent pas. Des cases filtrent par genre ; les dossiers dont seule la date change sont masqués par défaut. Au-delà de 10 000 différences, seules les 10 000 premières sont montrées. Les fichiers « inconnus » sont à part : une ligne repliée les compte (« 12 345 fichiers non comparables ») et en liste les 1 000 premiers, et ils ne prennent jamais la place d'un vrai changement. Quand la comparaison s'est arrêtée à 10 000 différences, ce compte est un minimum : la ligne dit « Au moins 12 345 ».
+
+Ce que la comparaison **ne montre pas** : l'ancien contenu d'un fichier, puisqu'il n'est jamais copié.
+
+- **Entre deux photos** : « modifié » dit seulement que l'empreinte a changé ; aucun contenu n'est montré.
+- **Contre le conteneur actuel** : l'agent relit le conteneur comme pour une photo (même coût, même confirmation, une seule à la fois), mais n'écrit rien ; le résultat est gardé 5 min. Pour un fichier, la page montre son **contenu actuel**, avec les règles de l'aperçu (secrets, binaire, 2 Mio). Pour un fichier modifié, elle montre un **diff ligne à ligne** dans un seul cas : quand l'empreinte de l'ancienne version égale celle du même fichier dans l'image du conteneur. L'ancienne version était alors exactement celle de l'image, que l'agent relit (empreinte de la couche vérifiée). Sinon, la page dit « ancienne version non conservée ».
+- Une photo des métadonnées, ou une photo prise avant un changement de clé (`hublot rotate-snapshot-key`), ne se compare que par les métadonnées : un fichier de même taille et de même date y est « inconnu ».
+
+## La page d'un conteneur et le téléphone
+
+Chaque conteneur a sa page, `/c/<identifiant>`, avec les onglets Aperçu, Logs, Diff, Fichiers et Secrets. C'est aussi ce qu'ouvre un téléphone : la liste, puis le détail en page pleine. Les anciens liens de la v0.1 (`?tab=changes`, `?tab=xray`) mènent toujours au bon onglet. La modification de fichiers reste pensée pour un ordinateur.
+
+## Le thème
+
+Sombre par défaut, même si le système demande le clair. La bascule de la barre du haut, ou la page Paramètres, passe au thème clair ; le choix est gardé dans ce navigateur seulement (`localStorage`, clé `hublot-theme`) et appliqué avant le premier affichage.
+
+## Les paramètres
+
+La page Paramètres montre la langue (celle du navigateur) et le thème, puis, en lecture seule, la version de l'agent, la lecture seule et Docker : adresse, état, version du démon et version d'API. Ces valeurs sont des options de démarrage de l'agent ; elles ne se modifient pas depuis l'interface.

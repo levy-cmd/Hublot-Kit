@@ -1,5 +1,5 @@
 import type { Container, Port } from './api.ts';
-import { t, type Key } from './i18n/index.ts';
+import { t } from './i18n/index.ts';
 
 export function formatPorts(ports: Port[]): string {
 	return [...ports]
@@ -9,17 +9,73 @@ export function formatPorts(ports: Port[]): string {
 		.join(', ');
 }
 
-export function filterContainers(list: Container[], query: string, showAll: boolean): Container[] {
+/** The tabs of the list: paused and restarting count as running (they hold a process). */
+export type Group = 'running' | 'stopped';
+const RUNNING = ['running', 'paused', 'restarting'];
+export const groupOf = (state: string): Group => (RUNNING.includes(state) ? 'running' : 'stopped');
+
+/**
+ * The "No project" choice of the Project list (spec v0.2 §5.1), in the URL
+ * as ?project=-: a Compose project name starts with a letter or a digit.
+ */
+export const NO_PROJECT = '-';
+
+/** The Compose projects present in the list, sorted. */
+export const projectsOf = (list: Container[]): string[] =>
+	[...new Set(list.flatMap((c) => (c.project ? [c.project] : [])))].sort((a, b) => a.localeCompare(b));
+
+/**
+ * The containers of a tab ("running", "stopped") or of one Docker state
+ * ("paused"…), "" for all, of one Compose project (NO_PROJECT: none, "":
+ * any), whose name or image contains the query.
+ */
+export function filterContainers(list: Container[], query: string, state: string, project = ''): Container[] {
 	const q = query.trim().toLowerCase();
 	return list.filter(
 		(c) =>
-			(showAll || c.state === 'running') &&
+			(state === '' || (state === 'running' || state === 'stopped' ? groupOf(c.state) === state : c.state === state)) &&
+			(project === '' || (project === NO_PROJECT ? !c.project : c.project === project)) &&
 			(q === '' || c.name.toLowerCase().includes(q) || c.image.toLowerCase().includes(q))
 	);
 }
 
-const STATES = ['running', 'exited', 'created', 'paused', 'restarting', 'removing', 'dead'];
+export function countGroups(list: Container[]): { all: number; running: number; stopped: number } {
+	const running = list.filter((c) => groupOf(c.state) === 'running').length;
+	return { all: list.length, running, stopped: list.length - running };
+}
+
+export const STATES = ['running', 'paused', 'restarting', 'exited', 'created', 'removing', 'dead'];
 
 export function stateLabel(state: string): string {
-	return STATES.includes(state) ? t(`state.${state}` as Key) : state;
+	return STATES.includes(state) ? t(`state.${state}`) : state;
+}
+
+// The colour that doubles a state's text (spec v0.2 §4.1): emerald when it
+// runs, amber for an alert (pause, restart, abnormal exit, dead), soft text
+// for a clean stop. Red is kept for UI errors and deletions in a diff.
+export type Tone = 'ok' | 'warn' | 'idle';
+
+export function stateTone(state: string, exitCode?: number): Tone {
+	if (state === 'running') return 'ok';
+	if (state === 'paused' || state === 'restarting' || state === 'dead') return 'warn';
+	if (state === 'exited') return (exitCode ?? 0) === 0 ? 'idle' : 'warn';
+	return 'idle';
+}
+
+// Keyboard moves in the container list: the index to focus, or null when
+// the key is not a move.
+export function rowStep(current: number, key: string, length: number): number | null {
+	if (length === 0) return null;
+	switch (key) {
+		case 'ArrowDown':
+			return Math.min(current + 1, length - 1);
+		case 'ArrowUp':
+			return Math.max(current - 1, 0);
+		case 'Home':
+			return 0;
+		case 'End':
+			return length - 1;
+		default:
+			return null;
+	}
 }

@@ -1,13 +1,14 @@
-# Known limitations (v0.1)
+# Known limitations
 
-v0.1 is a first public version. This page lists what it does not do, and the cases it knowingly does not detect.
-The technical spec ([§13, in French](../superpowers/specs/2026-10-07-hublot-kit-v0.1-design.md)) has every detail.
+This page lists what Hublot-Kit does not do, and the cases it knowingly does not detect. The technical specs, in
+French, have every detail: [v0.1 §13](../superpowers/specs/2026-10-07-hublot-kit-v0.1-design.md), and
+[v0.2 §9](../superpowers/specs/2026-10-23-hublot-kit-v0.2-design.md) for what v0.2 adds.
 
 ## Scope
 
 - One Docker server, one user. Multiple servers or users: later.
 - Not supported: rootless Docker, `userns-remap`, Podman, Kubernetes.
-- Not in v0.1: processes and resources, start/stop/restart, web terminal (planned for v0.2); certificates from
+- Not done: processes and resources, start/stop/restart, web terminal (postponed after v0.2); certificates from
   Let's Encrypt (bring your own); rotation of the audit log.
 
 ## Host
@@ -95,9 +96,38 @@ The technical spec ([§13, in French](../superpowers/specs/2026-10-07-hublot-kit
   Docker counts the parts of a long line, not lines, and gives no way to tell. The download has the whole line.
 - A logging driver Docker cannot read back (`none`, `syslog`…) gives `logs_unavailable`.
 
+## Search (v0.2)
+
+- Files can be searched only in the index already built of a stopped container the explorer has opened. A running container has no index: open the explorer.
+- The query of a file search goes in the body of a POST (`…/fs/search`), never in an address: the agent neither logs nor keeps it, and an ordinary access log of a reverse proxy does not see it. A proxy set to log request bodies would see it: a file name can be sensitive.
+- While a stopped container is exported (its index being built), Docker locks the container. The agent recognises that build by the container's full ID or name, never by a short ID: a direct API call with a short ID then waits for the lock, up to the route's deadline (10 s for files and search; the key figures wait for that lock whatever the ID, up to 30 s). The interface always sends the full ID.
+
+## Images (v0.2)
+
+- The files of an image are read from its export (`docker save`), without creating a container. A layer compressed with **zstd** is refused (`unsupported_image`): only gzip and uncompressed layers are read.
+- A **multi-platform** image with several platforms present locally is refused (`unsupported_image`): the manifest of the export then has several entries.
+- **Cost of a read**: the preview of a file reads the export again up to the end of the layer that holds it, earlier layers included; at worst, the whole export (a few seconds for an image of a gigabyte). The export keeps a core and Docker's disk busy for its duration, without locking any container. Two reads at most for the whole agent, one per image; beyond, the preview waits and asks again.
+- Caps of the index: 4 GiB read, 16 GiB decompressed, 1,000,000 entries, 4 KiB per name or link target, 256 MiB of names, 5 minutes; of a read: 4 GiB, 16 GiB decompressed, 2 minutes. Beyond, `too_large`.
+- No download of the files of an image, and a preview of 2 MiB at most.
+- Build history: the values of the build arguments are masked, whatever their name. Accepted residual risk: the value
+  of an `ARG` that itself contains ` /bin/sh -c `, followed by a command in exec form or by a `SHELL` other than sh or
+  bash, leaves a single shell marker; the rest of the line is then masked by the ordinary rules only. The history
+  does not tell the value from the command, and the case is very unlikely.
+
+## Snapshots (v0.2)
+
+- No content is kept: two photos compare by their metadata and fingerprints, without a line-by-line diff.
+- The photo of a running container is not atomic: a file changed during the walk may be seen before or after the change. The header keeps the start and end times.
+- The photo of a stopped container goes through its export: Docker puts its volumes in it too (read, then skipped, they count in the 4 GiB read) and locks the container for up to 5 min.
+- Caps: 500,000 entries (past it, refused: an incomplete manifest would show deletions); 1 GiB hashed, then the next files without a fingerprint ("partial"); 256 MiB per hashed file; 10,000 entries read per directory; 10 min for a running container, 4 GiB and 5 min for an export. Memory: an export keeps every entry until its end, about 500 bytes each (measured: a 37 MB peak for 36,784 entries), about 250 MB at the entry cap; the paths and link targets kept are capped at 256 MiB in all, as for the index (past it, refused), about 500 MB at worst; the walk of a running container writes as it goes (measured: 22 MB). The manifest takes about 42 bytes per entry once compressed (1.5 MB for 36,784).
+- Retention: 20 photos per container and 1 GiB in all, then refused; no automatic deletion.
+- With the key lost, deleted or changed (`rotate-snapshot-key`), older photos compare by their metadata only.
+- Past 10,000 differences, the comparison stops: the files of the same size and date it counted as "unknown" are then
+  a floor, shown as "at least N".
+
 ## Secret masking
 
-The X-ray masks secrets by name and by known forms. Not recognised in v0.1, among others:
+The X-ray masks secrets by name and by known forms. Not recognised, among others:
 
 - JSON values (`{"token": "…"}`), `user:password@host` without `://`, `password = …` with spaces, a variable named
   `DB_PWD`;
@@ -106,4 +136,4 @@ The X-ray masks secrets by name and by known forms. Not recognised in v0.1, amon
   `ApiKey …`;
 - some masks leave a remainder visible, and `env PWD=/srv` is masked although it is not a secret.
 
-The command itself cannot be revealed in v0.1 (`docker inspect` can).
+The command itself cannot be revealed (`docker inspect` can).

@@ -34,11 +34,21 @@ func writeFSError(w http.ResponseWriter, err error) {
 	writeError(w, status, code, errorDetail(status, err))
 }
 
-// errorDetail is the detail of an error response: fixed for a 404 and for
-// an error of the Docker daemon (dockerDetail), the error's text otherwise.
+// internalDetail: the detail of an unclassified error (500 internal).
+const internalDetail = "internal error (see the agent's log)"
+
+// errorDetail is the detail of an error response: fixed for a 404, for an
+// error of the Docker daemon (dockerDetail) and for an error that nothing
+// classifies (500 internal: the text of an internal error names paths of
+// the host, /proc/<pid>/root…, or the password of DOCKER_HOST for a daemon
+// error the engine did not wrap; writeFSError logs it, masked), the error's
+// text otherwise: the agent's own, for a classified error.
 func errorDetail(status int, err error) string {
-	if status == http.StatusNotFound {
+	switch status {
+	case http.StatusNotFound:
 		return notFoundDetail(err)
+	case http.StatusInternalServerError:
+		return internalDetail
 	}
 	if d := dockerDetail(err); d != "" {
 		return d
@@ -64,6 +74,31 @@ func dockerDetail(err error) string {
 		return "Docker did not answer, or failed (see the agent's log)"
 	}
 	return ""
+}
+
+// reservedStatus: codes of spec v0.2 §6 reserved by tranche 1, so that the
+// tranches that use them (3: invalid_query, 6: unsupported_image) never
+// write this file.
+var reservedStatus = map[string]int{
+	"invalid_query":     http.StatusBadRequest,
+	"unsupported_image": http.StatusUnprocessableEntity,
+}
+
+// apiCoder is an error that names its reserved code. A package that cannot
+// import api (fsview) gives its error an APICode method; writeFSError maps
+// it. Any code outside reservedStatus is ignored (internal).
+type apiCoder interface{ APICode() string }
+
+// writeReserved writes a reserved code with its status; any other code is
+// a programming error, answered as internal.
+func writeReserved(w http.ResponseWriter, code, detail string) {
+	status, ok := reservedStatus[code]
+	if !ok {
+		slog.Error("unreserved error code", "code", code)
+		writeError(w, http.StatusInternalServerError, "internal", "")
+		return
+	}
+	writeError(w, status, code, detail)
 }
 
 // notFoundDetail is the detail of a 404, for users (v0.1.1): never the
@@ -117,6 +152,12 @@ func fsErrorStatus(err error) (int, string) {
 	case errors.Is(err, fs.ErrNotExist), errors.Is(err, fsview.ErrNotDir), errors.Is(err, syscall.ENOTDIR),
 		errors.Is(err, syscall.ELOOP): // a link loop, or a magic link refused by pathrs
 		return http.StatusNotFound, "not_found"
+	}
+	var coder apiCoder
+	if errors.As(err, &coder) {
+		if status, ok := reservedStatus[coder.APICode()]; ok {
+			return status, coder.APICode()
+		}
 	}
 	return http.StatusInternalServerError, "internal"
 }

@@ -652,3 +652,147 @@ func TestViewsServeReinspects(t *testing.T) {
 		t.Errorf("ÉVASION : %d GET /archive de /, attendu 2 (ancien index servi)", n)
 	}
 }
+
+// Spec v0.2 §5.3 (figures) and §5.7 (photo of the metadata): Cached and
+// CachedCount give the index already served to a request, under the key For
+// would use (full ID and FinishedAt), and never start a build.
+func TestViewsCachedNeverBuilds(t *testing.T) {
+	g := &gated{Fake: stoppedDocker(t), open: make(chan struct{})}
+	v := NewViews(g, Options{})
+	info := g.Infos["db"]
+	none := func(what string, info dockerx.ContainerInfo) {
+		t.Helper()
+		if fsys, ok := v.Cached(info); ok || fsys != nil {
+			t.Errorf("%s : Cached a servi un index", what)
+		}
+		if n, at, ok := v.CachedCount(info); ok || n != 0 || !at.IsZero() {
+			t.Errorf("%s : CachedCount = %d, %v, %v", what, n, at, ok)
+		}
+	}
+	none("aucun index", info)
+	if n := archiveCalls(g.Fake, vID, "/"); n != 0 || v.count() != 0 {
+		t.Fatalf("une construction lancée : %d GET /archive de /, %d index", n, v.count())
+	}
+	v.For(tctx, "db") // starts the build, held by the gate
+	none("construction en cours", info)
+	close(g.open)
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(time.Millisecond) {
+		v.mu.Lock()
+		b := v.builds[vID+"\x00"+info.FinishedAt]
+		done := b != nil && finished(b)
+		v.mu.Unlock()
+		if done {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("construction jamais finie")
+		}
+	}
+	none("index fini, jamais servi", info)
+	ready(t, v, "db")
+	start := time.Now()
+	fsys, ok := v.Cached(info)
+	if !ok {
+		t.Fatal("index servi, Cached refuse")
+	}
+	if _, _, err := fsys.List(tctx, "/etc"); err != nil {
+		t.Errorf("List : %v", err)
+	}
+	// image() of tarindex_test.go: 29 entries besides "/", /proc and /sys
+	// themselves kept, nothing under them.
+	n, at, ok := v.CachedCount(info)
+	if !ok || n != 29 || at.IsZero() || at.After(start) {
+		t.Errorf("CachedCount = %d, %v, %v ; attendu 29, l'heure de la construction", n, at, ok)
+	}
+	// Restarted and stopped since (new FinishedAt), or running now: the old
+	// index is not this container's state.
+	later := info
+	later.FinishedAt = "2026-10-09T11:00:00Z"
+	none("nouveau FinishedAt", later)
+	running := info
+	running.Running, running.Pid = true, 42
+	none("conteneur actif", running)
+	if n := archiveCalls(g.Fake, vID, "/"); n != 1 {
+		t.Errorf("%d GET /archive de /, attendu 1", n)
+	}
+}
+
+// Spec v0.2 §5.5 step 6: the indexes of images share the 3 slots of the
+// containers', under the same rules (spec §5.2 step 4): the least recently
+// used is evicted, a build in progress never is.
+func TestViewsImageAndContainerShareThreeSlots(t *testing.T) {
+	f := stoppedDocker(t)
+	addStopped(t, f, "c2")
+	imgs, ids := imagesDocker(t, 2)
+	f.Images, f.ImageSaves = imgs.Images, imgs.ImageSaves
+	v := NewViews(f, Options{MaxCached: 3})
+	ready(t, v, "db")
+	readyImage(t, v, ids[0])
+	ready(t, v, "c2")
+	readyImage(t, v, ids[1]) // evicts db, the least recently used
+	if v.count() != 3 {
+		t.Fatalf("%d index en cache, attendu 3", v.count())
+	}
+	readyImage(t, v, ids[0]) // still there: no export
+	if n := f.ImageSaveCalls.Load(); n != 2 {
+		t.Errorf("%d exports, attendu 2", n)
+	}
+	ready(t, v, "db") // evicted: built again, evicting c2
+	if n := archiveCalls(f, vID, "/"); n != 2 {
+		t.Errorf("db : %d constructions, attendu 2", n)
+	}
+	if _, _, indexed := v.SearchImage(tctx, ids[1], "f", 10); !indexed {
+		t.Error("image 2 évincée à la place de c2")
+	}
+
+	// Three builds in progress, two containers and an image: a fourth
+	// (an image) waits, nothing is evicted, nothing is exported.
+	f2 := stoppedDocker(t)
+	addStopped(t, f2, "c2")
+	imgs2, ids2 := imagesDocker(t, 2)
+	f2.Images, f2.ImageSaves = imgs2.Images, imgs2.ImageSaves
+	open := make(chan struct{})
+	var closes atomic.Int32
+	g := &gated{Fake: f2, open: open}
+	h := &heldIndex{gated: g, closes: &closes}
+	v2 := NewViews(h, Options{MaxCached: 3})
+	for _, n := range []string{"db", "c2"} {
+		if _, err := v2.For(tctx, n); !errors.Is(err, ErrIndexing) {
+			t.Fatalf("%s : %v", n, err)
+		}
+	}
+	if _, err := v2.ForImage(tctx, ids2[0]); !errors.Is(err, ErrIndexing) {
+		t.Fatalf("image 1 : %v", err)
+	}
+	for deadline := time.Now().Add(2 * time.Second); f2.ImageSaveCalls.Load() < 1; time.Sleep(time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("export de l'image 1 jamais lancé")
+		}
+	}
+	if _, err := v2.ForImage(tctx, ids2[1]); !errors.Is(err, ErrIndexing) {
+		t.Fatalf("image 2 : %v", err)
+	}
+	time.Sleep(20 * time.Millisecond)
+	if n := f2.ImageSaveCalls.Load(); n != 1 || v2.count() != 3 {
+		t.Errorf("%d exports, %d index ; attendu 1 et 3 (aucune construction évincée)", n, v2.count())
+	}
+	close(open)
+	ready(t, v2, "db")
+	ready(t, v2, "c2")
+	readyImage(t, v2, ids2[0])
+	readyImage(t, v2, ids2[1]) // the others served: evictable now
+}
+
+// heldIndex holds the exports of images like gated holds GET /archive.
+type heldIndex struct {
+	*gated
+	closes *atomic.Int32
+}
+
+func (h *heldIndex) ImageSave(ctx context.Context, id string) (io.ReadCloser, error) {
+	rc, err := h.Fake.ImageSave(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	return &held{ctx: ctx, open: h.open, rc: rc, closes: h.closes}, nil
+}

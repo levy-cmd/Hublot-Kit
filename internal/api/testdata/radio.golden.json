@@ -5,9 +5,11 @@
 	"imageId": "sha256:0123456789abcdef",
 	"created": "2026-10-10T07:00:00Z",
 	"state": {
-		"status": "created",
+		"status": "exited",
 		"running": false,
-		"exitCode": 0,
+		"exitCode": 137,
+		"startedAt": "2026-10-10T07:00:05Z",
+		"finishedAt": "2026-10-20T08:00:00.123456789Z",
 		"oomKilled": false
 	},
 	"restartCount": 0,
@@ -79,5 +81,22 @@
 	],
 	"tmpfs": [
 		"/run"
+	],
+	"labels": [
+		{
+			"key": "com.docker.compose.project",
+			"value": "shop",
+			"masked": false
+		},
+		{
+			"key": "com.docker.compose.x",
+			"value": null,
+			"masked": true
+		},
+		{
+			"key": "traefik.http.middlewares.auth.basicauth.users",
+			"value": null,
+			"masked": true
+		}
 	]
 }

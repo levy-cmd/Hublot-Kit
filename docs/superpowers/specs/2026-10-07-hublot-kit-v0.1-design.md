@@ -24,9 +24,20 @@ Un dev solo diagnostique un conteneur en panne sur son serveur Linux sans ouvrir
 | F5 | Diff avec l'image (ajouté / modifié / supprimé depuis la création) | oui |
 | F6 | Logs en direct : flux, recherche, pause, téléchargement | oui |
 | F7 | Radiographie : env (secrets masqués), ports, réseaux, volumes, commande | oui |
-| F8 | Process et ressources | v0.2 |
-| F9 | Démarrer / arrêter / redémarrer | v0.2 |
-| F10 | Terminal web | v0.2 |
+| F8 | Process et ressources | après la v0.2 (Q55) |
+| F9 | Démarrer / arrêter / redémarrer | après la v0.2 (Q55) |
+| F10 | Terminal web | après la v0.2 (Q55) |
+| F11 | Disposition « Graphite & Émeraude », thème sombre par défaut et thème clair | v0.2 (spec v0.2 §3, §4) |
+| F12 | Recherche globale (Ctrl+K) | v0.2 (spec v0.2 §5.8) |
+| F13 | Projets Compose : colonne, filtre | v0.2 (spec v0.2 §5.1) |
+| F14 | Labels dans le détail, en liste blanche | v0.2 (spec v0.2 §5.2) |
+| F15 | Chiffres clés : fichiers, taille de l'image, taille du conteneur, dernière sortie | v0.2 (spec v0.2 §5.3) |
+| F16 | Page Images, fichiers compris, en lecture seule | v0.2 (spec v0.2 §5.4, §5.5) |
+| F17 | Diff de contenu d'un fichier entre l'image et le conteneur | v0.2 (spec v0.2 §5.6) |
+| F18 | Page Snapshots : photo des fichiers, sans contenu, et comparaison | v0.2 (spec v0.2 §5.7) |
+| F19 | Page Secrets : inventaire des noms, révélation existante | v0.2 (spec v0.2 §5.9) |
+
+F8 à F10, promises pour la v0.2 par la première version de cette spec, sont reportées après la v0.2 (décision Q55 de l'utilisateur, 2026-10-23, spec v0.2 §0.1). F11 à F19 sont décrites par la spec v0.2 (`2026-10-23-hublot-kit-v0.2-design.md`), complément de celle-ci : toutes sont en lecture seule côté Docker.
 
 Hors v0.1, en plus de F8 à F10 : HTTPS par Let's Encrypt (la v0.1 accepte un certificat fourni), rotation du journal d'audit, plusieurs serveurs, plusieurs utilisateurs, Docker rootless, userns-remap, Podman, Kubernetes ; côté distribution, paquets `.deb` et `.rpm`, image `latest` et provenance SLSA (§8).
 
@@ -60,13 +71,19 @@ Un agent unique tourne sur le serveur. Il sert l'interface, expose l'API, est le
 cmd/hublot/          point d'entrée : flags, config, démarrage, sous-commande reset-token
 internal/
   dockerx/           interface + implémentation au-dessus du SDK Docker (version d'API négociée)
-                     ListContainers, Inspect, Changes, Logs, GetArchive, PutArchive
+                     ListContainers, Inspect, Changes, Logs, GetArchive, PutArchive ;
+                     v0.2 : Info, ContainerSize, ImageList, ImageInspect, ImageHistory, ImageSave
   fsview/            lecture de l'arborescence d'un conteneur, une interface, deux implémentations
     fsview.go          type FS interface { List, Stat, Open, StatNoLinks, CheckArchive, Close } + types Entry
     procfs.go          conteneur actif
     tarindex.go        conteneur arrêté
+    imageindex.go      v0.2 : index des couches d'une image, en lecture seule (spec v0.2 §5.5)
+    search.go          v0.2 : recherche dans un index déjà servi (spec v0.2 §5.8)
+    walk_linux.go      v0.2 : parcours borné d'un conteneur actif, pour les snapshots (spec v0.2 §5.7)
+  snapshot/          v0.2 : clé HMAC, manifestes, rétention, comparaison (spec v0.2 §5.7)
   files/             seul point d'écriture : lecture seule, If-Match, audit, PutArchive
-  secrets/           masquage de l'environnement, de la commande et du message d'erreur (§7)
+  secrets/           masquage de l'environnement, de la commande et du message d'erreur (§7) ;
+                     v0.2 : labels, historique et configuration d'une image
   auth/              jeton, sessions, limitation des tentatives
   audit/             journal JSONL en ajout seul
   api/               routes HTTP, SSE, en-têtes de sécurité, vérification d'Origin
@@ -82,7 +99,7 @@ scripts/             développement (dev-agent, test-linux, e2e) et vérificatio
 
 **Frontières**
 
-- `api` ne parle qu'à `dockerx`, `fsview`, `files`, `secrets`, `auth`, `audit`. Jamais au SDK Docker directement.
+- `api` ne parle qu'à `dockerx`, `fsview`, `files`, `secrets`, `auth`, `audit` et, depuis la v0.2, `snapshot`. Jamais au SDK Docker directement. `snapshot` lit par `fsview` et n'écrit que dans le dossier de données de l'agent (`snapshots/`), jamais dans Docker.
 - `fsview.FS` :
 
   ```go
@@ -210,7 +227,7 @@ Préfixe `/api`, JSON. Erreur : `{"error": "<code>", "detail": "<texte libre pou
 |---|---|---|
 | POST | `/api/login` | `{token}` → cookie de session |
 | POST | `/api/logout` | |
-| GET | `/api/meta` | `{version, readOnly}` |
+| GET | `/api/meta` | `{version, readOnly}` ; v0.2 : `docker` (spec v0.2 §5.10) |
 | GET | `/api/containers` | F1 |
 | GET | `/api/containers/{id}` | F7 : image, état (le message d'erreur de Docker masqué comme la commande, §7), redémarrages, commande et point d'entrée (parties secrètes remplacées par `••••••`, `commandMasked`), `env` (`[{name, value, masked}]`, valeur `null` si masquée, §7), ports, réseaux, montages, tmpfs, pilote de logs, TTY |
 | POST | `/api/containers/{id}/env/reveal` | `{name}` (nom exact ; la dernière occurrence s'il est en double) → `{name, value}` en clair, journalisé (`env.reveal`) avant l'envoi : si le journal ne s'écrit pas, `internal` et rien n'est révélé ; variable absente ou corps invalide → `not_found` ; `Origin` exigé (§7) ; permis en lecture seule (c'est une lecture) |
@@ -225,6 +242,8 @@ Préfixe `/api`, JSON. Erreur : `{"error": "<code>", "detail": "<texte libre pou
 
 Tout sauf `/api/login` et les fichiers statiques exige une session.
 
+**Routes de la v0.2** : la spec v0.2 §6 les donne (chiffres clés, comptage, recherche, images et leurs fichiers, snapshots et leur comparaison, inventaire des secrets), avec les codes `unsupported_image` (422) et `invalid_query` (400). Toutes sont en lecture seule côté Docker : les seules routes qui appellent `PutArchive` restent `PUT …/fs/file` et `POST …/fs/upload` (F4). `TestNoDockerWritesOutsideFiles` le vérifie sur toutes les routes du routeur, lues dans sa source (`server.go` et `moduleRoutes`), pour qu'une route future soit couverte.
+
 **Aperçu** : un octet nul dans les 8 premiers Ko → binaire, pas d'aperçu texte. Images : PNG, JPEG, GIF, WebP détectées par `http.DetectContentType`. **SVG et HTML sont toujours servis comme texte.**
 
 ## 7. Sécurité
@@ -233,7 +252,7 @@ L'agent a, de fait, les droits root sur l'hôte. Le README le dit en tête. Les 
 
 - **Écoute** : `127.0.0.1:7878` par défaut. Adresse non locale sans TLS → avertissement visible au démarrage (cas légitime : dans un conteneur, ou derrière un reverse proxy). L'agent n'ouvre aucune connexion sortante (ni télémétrie, ni recherche de mise à jour) : il ne parle qu'à Docker (le socket, ou ce que désigne `DOCKER_HOST`).
 - **Jeton** : 32 octets de `crypto/rand`, encodés en base64url, affichés une seule fois au premier lancement. Stocké sous forme d'empreinte SHA-256 dans `<data-dir>/token.sha256`. `hublot reset-token` en génère un nouveau ; l'empreinte est lue au démarrage, donc un agent déjà lancé accepte l'ancien jeton jusqu'à son redémarrage (la doc fait suivre `reset-token` d'un redémarrage). Comparaison par `subtle.ConstantTimeCompare`.
-- **Tentatives** : 5 échecs par minute et par IP → `rate_limited` (429). Chaque échec est journalisé, et les tentatives bloquées aussi (résultat `rate_limited`, au plus une ligne `rate_limited` par IP et par minute).
+- **Tentatives** : 5 échecs par minute et par IP → `rate_limited` (429) ; chaque tentative est comptée avant la lecture de son jeton (v0.1.2). Les échecs sont journalisés (`login.fail`), et les tentatives bloquées aussi (résultat `rate_limited`, au plus une ligne `rate_limited` par IP et par minute), dans un budget de 10 lignes par minute et par bloc d'adresses (une adresse IPv4, ou le /64 d'une adresse IPv6) (v0.1.2). Au-delà, une ligne `suppressed` pour ce bloc ; les échecs suivants sont comptés sans être écrits, et une ligne de synthèse `suppressed` par bloc donne leur nombre une minute après le premier d'entre eux, même s'ils ont cessé.
 - **Session** : 32 octets aléatoires, en mémoire, 12 h. Cookie `HttpOnly`, `SameSite=Strict`, `Secure` si TLS ou si `--public-origin` est en https, `Path=/`.
 - **CSRF** : sur toute méthode autre que GET/HEAD, l'en-tête `Origin` doit être présent, bien formé, différent de `null`, et égal à l'**origine de confiance** comparée en entier (schéma, hôte, port), sinon `forbidden_origin`. Origine de confiance : `--public-origin` si défini (obligatoire derrière un reverse proxy, qui change souvent le schéma), sinon `http(s)://` + l'en-tête `Host` de la requête, le schéma venant de la présence de TLS sur l'agent. Les en-têtes `X-Forwarded-*` ne sont jamais crus. Les GET, flux SSE compris, ne modifient rien : le cookie `SameSite=Strict` suffit (les navigateurs n'envoient pas toujours `Origin` sur un GET de même origine, l'exiger casserait le flux). Rebinding DNS : sans `--public-origin`, l'origine de confiance dérive de Host, donc un nom rebindé passe le contrôle d'Origin ; c'est le cookie de session `SameSite=Strict` lié au vrai hôte et le jeton qui protègent alors. Exposé hors de 127.0.0.1, renseignez `--public-origin`. Une page rebindée peut aussi épuiser la limite de tentatives de 127.0.0.1 et bloquer la connexion locale pendant une minute.
 - **En-têtes** : `Content-Security-Policy: default-src 'self'; script-src 'self' 'sha256-…'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; frame-ancestors 'none'`, `X-Content-Type-Options: nosniff`, `Referrer-Policy: no-referrer`, et `Cache-Control: no-store` sur `/api/`. L'`index.html` produit par SvelteKit (adapter-static) démarre l'application par un script en ligne qui embarque la version du build : au démarrage, l'agent lit l'`index.html` embarqué et ajoute à `script-src` l'empreinte SHA-256 de chaque script en ligne (sans `'unsafe-inline'` pour les scripts). Interface non compilée : `script-src 'self'` seul. `style-src 'unsafe-inline'` est accepté, car SvelteKit pose un style en ligne sur `#svelte-announcer` ; le risque reste faible puisque `{@html}` est interdit (aucune injection de balisage) et que les scripts restent verrouillés.
@@ -246,6 +265,7 @@ L'agent a, de fait, les droits root sur l'hôte. Le README le dit en tête. Les 
 - **Binds de l'hôte (conteneur actif)** : un conteneur lancé avec `-v /:/host` montre l'hôte dans l'explorateur ; par exemple, `/host/etc/shadow` est lisible. La lecture et le listing ne sont pas refusés : l'utilisateur de l'interface est de fait root sur l'hôte (début de §7), et les pseudo-systèmes et les périphériques restent refusés. L'écriture, elle, est refusée pour tout le conteneur quand un montage tombe sous la règle de §5.2 étape 7 (bind de `/`, `/proc`, `/sys`, `/dev`…), comme l'explorateur d'un conteneur arrêté (§5.3 étape 2). Un bind d'un autre dossier de l'hôte (`/etc`, `/root`…) reste inscriptible, comme il est lisible : l'utilisateur est root de fait, et la course de §5.3 peut y mener Docker (§13). Le tar d'un dossier, lui, est refusé pour tout le conteneur dès qu'un montage le rend dangereux, et le refus nomme le montage : bind sensible (`/`, `/proc`, `/sys` ou dessous, `/dev` : §5.2 étape 7), volume `type=` pseudo/FUSE, volume d'un pilote tiers, volume aux options illisibles (§5.4).
 - **Journal d'audit** : `<data-dir>/audit.log`, une ligne JSON par événement : `{ts, action, container, path, result, error, remote}`. Actions : `login.fail`, `env.reveal`, `file.write`, `file.upload`. Pour `env.reveal`, `path` porte le nom de la variable, jamais sa valeur. `remote` : IP de la connexion TCP (jamais `X-Forwarded-For`), renseignée pour `login.fail`. Écrit avant (`result` : `intent`) et après (`ok` ou `error`) chaque écriture ; si l'intention ne s'écrit pas, rien n'est écrit dans le conteneur.
 - **Socket** : la documentation ne dit jamais que `:ro` protège quoi que ce soit. Un proxy de socket est mentionné comme complément optionnel.
+- **Ajouts de la v0.2** : spec v0.2 §7 (actions d'audit `snapshot.create` et `snapshot.delete`, `snapshot.key` et `snapshots/` dans le dossier de données, snapshots permis en lecture seule, couches d'image traitées comme données non fiables, `secrets.Labels` et `secrets.History`).
 
 ## 8. Configuration et installation
 
@@ -360,7 +380,11 @@ Base 5 à 10 h par semaine. 12 semaines maintenues : le code du spike a été é
 
 Avancement (2026-10-16) : Spike, Socle, Explorateur, Observation et Lancement sont fusionnés. La pré-version `v0.1.0-rc.1` a éprouvé en privé la signature sans clé, GHCR et le brouillon (plan Lancement, tâche 9). La `v0.1.0` est publiée le 2026-10-16 : dépôt public avec signalement privé des vulnérabilités, release signée, image `ghcr.io/levy-cmd/hublot-kit` (`0.1.0`, `0.1`) publique ; sans connexion, l'image passe `check-image.sh` sur les deux VM, sa signature et son SBOM sont vérifiés hors de GitHub (plan Lancement, tâche 10).
 
+Avancement (2026-10-24) : `v0.1.0` est publiée, puis les correctifs de sécurité `v0.1.1` et `v0.1.2` (audit indépendant, PR #11). La v0.2 (spec `2026-10-23-hublot-kit-v0.2-design.md`, plan `2026-10-23-v0.2.md`) a ses tranches 1 à 9 validées sur `phase/v0.2` (F11 à F19), CI de la PR #10 verte ; la tranche 10 (clôture : test de lecture seule côté Docker, spec et doc) est en cours. F8 à F10 sont reportées après la v0.2 (Q55). Restent la revue de toute la branche, puis la PR, `v0.2.0-rc.1` et `v0.2.0`, chacune sur ARRÊT.
+
 ## 13. Risques
+
+Les risques propres à la v0.2 (couches d'image non fiables, export et verrou de dockerd, snapshots, labels, historique d'image, recherche) sont dans la spec v0.2 §9, qui complète ce tableau.
 
 | Risque | Parade |
 |---|---|

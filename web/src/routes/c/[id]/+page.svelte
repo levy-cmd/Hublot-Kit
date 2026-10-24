@@ -1,92 +1,59 @@
 <script lang="ts">
-	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
 	import { getContext } from 'svelte';
-	import { ApiError, getContainer, type Radiography } from '#lib/api.ts';
-	import { stateLabel } from '#lib/containers.ts';
-	import { errorMessage, t } from '#lib/i18n/index.ts';
-	import ChangesList from '#lib/components/ChangesList.svelte';
-	import FileBrowser from '#lib/components/FileBrowser.svelte';
-	import LogsView from '#lib/components/LogsView.svelte';
-	import XrayView from '#lib/components/XrayView.svelte';
-	import { isStopped } from '#lib/xray.ts';
+	import { t } from '#lib/i18n/index.ts';
+	import Icon from '#lib/icons/Icon.svelte';
+	import { withParams } from '#lib/url.ts';
+	import ContainerDetail, { type DetailTab } from '#lib/components/ContainerDetail.svelte';
 
+	// The full page of a container (spec v0.2 §3): kept for links and for the
+	// phone, with the tabs of the right panel and the bottom panels.
 	let id = $derived(page.params.id ?? '');
-	let container = $state<Radiography | null>(null);
-	let error = $state('');
-	let reloads = $state(0); // bumped by the Reload button
-	// From the layout's /api/meta: true until it answers (spec §9).
 	const readOnly = getContext<() => boolean>('readOnly');
-	const TABS = ['files', 'changes', 'logs', 'xray'] as const;
-	let tab = $derived(TABS.find((x) => x === page.url.searchParams.get('tab')) ?? 'files');
-
-	// GET /api/containers/{id} (F7): the header and the X-ray tab, secrets
-	// already masked by the agent.
-	$effect(() => {
-		const wanted = id;
-		void reloads;
-		let current = true;
-		error = '';
-		container = null;
-		getContainer(wanted)
-			.then((c) => {
-				if (current) container = c;
-			})
-			.catch((e) => {
-				if (!current) return;
-				if (e instanceof ApiError && e.status === 401) {
-					goto('/login').catch(() => {});
-					return;
-				}
-				error = errorMessage(e instanceof ApiError ? e.code : 'unknown');
-			});
-		return () => {
-			current = false;
-		};
+	const TABS: DetailTab[] = ['overview', 'logs', 'diff', 'files', 'secrets'];
+	// v0.1 links: ?tab=changes is the diff, ?tab=xray the overview.
+	const OLD: Record<string, DetailTab> = { changes: 'diff', xray: 'overview' };
+	let tab = $derived.by<DetailTab>(() => {
+		const q = page.url.searchParams.get('tab') ?? '';
+		return TABS.find((x) => x === q) ?? OLD[q] ?? (page.url.searchParams.has('path') ? 'files' : 'overview');
 	});
+	const tabHref = (k: DetailTab) => `?${new URLSearchParams(k === 'overview' ? {} : { tab: k })}`;
+	const fileHref = (path: string) => withParams(new URLSearchParams(), { tab: 'files', path });
 </script>
 
-<main>
-	<p><a href="/">← {t('nav.containers')}</a></p>
-	{#if error}
-		<p role="alert">{error}</p>
-		<button type="button" onclick={() => reloads++}>{t('files.reload')}</button>
-	{/if}
-	{#if container}
-		<h1>{container.name} <small class="state {container.state.status}">{stateLabel(container.state.status)}</small></h1>
-		<p class="image">{container.image}</p>
-		<nav class="tabs">
-			<a class="tab" class:active={tab === 'files'} aria-current={tab === 'files' ? 'page' : undefined} href="?">{t('container.tab.files')}</a>
-			<a class="tab" class:active={tab === 'changes'} aria-current={tab === 'changes' ? 'page' : undefined} href="?tab=changes">{t('container.tab.changes')}</a>
-			<a class="tab" class:active={tab === 'logs'} aria-current={tab === 'logs' ? 'page' : undefined} href="?tab=logs">{t('container.tab.logs')}</a>
-			<a class="tab" class:active={tab === 'xray'} aria-current={tab === 'xray' ? 'page' : undefined} href="?tab=xray">{t('container.tab.xray')}</a>
-		</nav>
-		{#if tab === 'changes'}
-			<ChangesList id={container.id} />
-		{:else if tab === 'logs'}
-			<LogsView id={container.id} />
-		{:else if tab === 'xray'}
-			<XrayView radio={container} onreload={() => reloads++} />
-		{:else}
-			<FileBrowser
-				id={container.id}
-				name={container.name}
-				readOnly={readOnly()}
-				stopped={isStopped(container.state)}
-			/>
-		{/if}
-	{/if}
-</main>
+<div class="page">
+	<a class="back" href="/"><Icon name="arrowLeft" /> {t('container.back')}</a>
+	<div class="panel card">
+		{#key id}
+			<ContainerDetail {id} mode="page" {tab} readOnly={readOnly()} {tabHref} {fileHref} />
+		{/key}
+	</div>
+</div>
 
 <style>
-	main { padding: 1rem; }
-	h1 { margin-bottom: 0.25rem; word-break: break-all; }
-	h1 small { font-size: 0.9rem; font-weight: normal; }
-	.image { margin-top: 0; opacity: 0.8; }
-	.tabs { display: flex; flex-wrap: wrap; gap: 0.5rem; margin: 1rem 0; border-bottom: 1px solid #ddd; }
-	.tab { padding: 0.4rem 0.8rem; }
-	.tab.active { border-bottom: 2px solid currentColor; font-weight: 600; }
-	.state.running { color: #1b7f3b; }
-	.state.exited, .state.dead { color: #b00020; }
-	[role='alert'] { color: #b00020; }
+	.page {
+		display: grid;
+		gap: 0.75rem;
+		min-width: 0;
+	}
+	.back {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.4rem;
+		justify-self: start;
+		color: var(--texte-doux);
+		text-decoration: none;
+		font-weight: 550;
+	}
+	.back:hover {
+		color: var(--texte);
+	}
+	.card {
+		padding: 1.25rem;
+	}
+	@media (max-width: 48rem) {
+		.card {
+			padding: 1rem 0.75rem;
+		}
+	}
 </style>

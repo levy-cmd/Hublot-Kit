@@ -20,6 +20,7 @@ import (
 	"github.com/levy-cmd/hublot-kit/internal/files"
 	"github.com/levy-cmd/hublot-kit/internal/fsview"
 	"github.com/levy-cmd/hublot-kit/internal/secrets"
+	"github.com/levy-cmd/hublot-kit/internal/snapshot"
 )
 
 type Deps struct {
@@ -40,6 +41,9 @@ type Deps struct {
 	PublicOrigin string       // normalized, or ""
 	Static       http.Handler // embedded UI; nil in API tests
 	ScriptHashes []string     // CSP sources of the UI's inline scripts (web.ScriptHashes)
+	// Snapshots is the store of spec v0.2 §5.7 (snapshot.Unavailable when
+	// refused at startup); nil: the snapshot routes answer internal.
+	Snapshots *snapshot.Store
 }
 
 // logClock is the clock used by throttleLog; tests may replace it before New.
@@ -84,6 +88,7 @@ type server struct {
 	// F6: limits of the logs streams, and one slot per stream open.
 	logLimits logLimits
 	streams   *streamSlots
+	snap      *snapService // snapshots.go, count.go
 }
 
 // Spec §13 (FUSE): at most 4 file operations at once per container, each one
@@ -109,6 +114,7 @@ func New(d Deps) http.Handler {
 			Open: d.OpenFS, Forget: d.Views.Forget},
 		logLimits: defaultLogLimits,
 		streams:   newStreamSlots(defaultLogLimits.MaxStreams),
+		snap:      newSnapService(),
 	}
 	s.loginLog.write = s.writeAudit
 	session := func(h http.HandlerFunc) http.Handler { return requireSession(d.Sessions, h) }
@@ -128,6 +134,9 @@ func New(d Deps) http.Handler {
 	mux.Handle("GET /api/containers/{id}/changes", session(s.changes))
 	mux.Handle("GET /api/containers/{id}/logs", session(s.logsStream))
 	mux.Handle("GET /api/containers/{id}/logs/download", session(s.logsDownload))
+	for _, register := range moduleRoutes { // routes of later tranches (routes.go)
+		register(s, mux)
+	}
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusNotFound, "not_found", "")
 	})
@@ -318,8 +327,28 @@ func (s *server) logout(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+type metaDocker struct {
+	Host          string `json:"host"`
+	Connected     bool   `json:"connected"`
+	ServerVersion string `json:"serverVersion"`
+	APIVersion    string `json:"apiVersion"`
+}
+
+// meta (spec v0.2 §5.10). Docker down is not an error here: the UI says it.
+// Info sets Connected from the Ping alone; its error (a failed /version,
+// say) only leaves the versions empty.
 func (s *server) meta(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, map[string]any{"version": s.d.Version, "readOnly": s.d.ReadOnly})
+	info, err := s.d.Docker.Info(r.Context())
+	if err != nil {
+		slog.Debug("docker info", "err", secrets.Line(err.Error()))
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"version":  s.d.Version,
+		"readOnly": s.d.ReadOnly,
+		// The address may carry credentials (ssh://user:pass@host): masked by §7.
+		"docker": metaDocker{Host: secrets.Line(info.Host), Connected: info.Connected,
+			ServerVersion: info.ServerVersion, APIVersion: info.APIVersion},
+	})
 }
 
 func (s *server) containers(w http.ResponseWriter, r *http.Request) {

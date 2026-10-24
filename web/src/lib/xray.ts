@@ -1,4 +1,29 @@
-import type { ContainerState, EnvVar, Mount, Port, Radiography } from './api.ts';
+import type { ContainerState, EnvVar, Label, Mount, Port, Radiography } from './api.ts';
+
+/**
+ * The labels of the detail (spec v0.2 §5.2, review of tranche 2): those the
+ * agent sent in clear become chips; the masked ones are only their keys,
+ * behind one folded line. No label is ever revealed.
+ */
+export function splitLabels(labels: Label[]): { shown: { key: string; value: string }[]; masked: string[] } {
+	const shown: { key: string; value: string }[] = [];
+	const masked: string[] = [];
+	for (const l of labels) {
+		if (l.masked || l.value === null) masked.push(l.key);
+		else shown.push({ key: l.key, value: l.value });
+	}
+	return { shown, masked };
+}
+
+/**
+ * The last exit (spec v0.2 §5.3): State.FinishedAt, null for "never" (the
+ * agent omits Docker's zero date; "0001-01-01…" is read as never too). The
+ * exit code only for a stopped container: Docker resets it at start.
+ */
+export function lastExit(s: ContainerState): { at: string; code: number | null } | null {
+	if (!s.finishedAt || s.finishedAt.startsWith('0001-01-01')) return null;
+	return { at: s.finishedAt, code: s.running ? null : s.exitCode };
+}
 
 /** An argument as a POSIX shell reads it: quoted when it has to be. */
 function quote(arg: string): string {

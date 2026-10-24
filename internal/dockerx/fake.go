@@ -48,7 +48,112 @@ type Fake struct {
 	LogsGate   chan struct{}
 	LogsCloses atomic.Int32
 	logsCalls  []LogsOptions
-	Err        error
+	// Daemon answers Info, with DaemonErr (a Ping that works and a /version
+	// that fails, for instance); with Err set, Connected is false.
+	Daemon    DaemonInfo
+	DaemonErr error
+	// ContainerSizes answers ContainerSize, by id as given (absent: both
+	// nil, as Docker without a size); SizeGate, when not nil, holds every
+	// call until it is closed or the context ends (dockerd's container lock).
+	ContainerSizes map[string]SizePair
+	SizeGate       chan struct{}
+	SizeCalls      atomic.Int32
+	// Images answers ImageInspect, by id as given (absent: ErrNotFound);
+	// ImageCalls counts the calls of ImageInspect and ImageHistory.
+	Images     map[string]ImageInfo
+	ImageCalls atomic.Int32
+	// ImageSummaries answers ImageList; Histories answers ImageHistory, by
+	// id as given (absent: ErrNotFound).
+	ImageSummaries []ImageSummary
+	Histories      map[string][]ImageLayer
+	// ImageSaves answers ImageSave, by id as given (absent: ErrNotFound);
+	// ImageSaveCalls counts the calls.
+	ImageSaves     map[string][]byte
+	ImageSaveCalls atomic.Int32
+	// NoWrites makes PutArchive, the one write of the Client, panic: a test
+	// of a read-only feature fails if anything writes to Docker.
+	NoWrites bool
+	Err      error
+}
+
+func (f *Fake) ImageSave(_ context.Context, id string) (io.ReadCloser, error) {
+	f.ImageSaveCalls.Add(1)
+	if f.Err != nil {
+		return nil, f.Err
+	}
+	b, ok := f.ImageSaves[id]
+	if !ok {
+		return nil, fmt.Errorf("%w: image %s", ErrNotFound, id)
+	}
+	return io.NopCloser(bytes.NewReader(b)), nil
+}
+
+// SizePair is what ContainerSize answers.
+type SizePair struct{ RW, RootFs *int64 }
+
+func (f *Fake) ContainerSize(ctx context.Context, id string) (rw, rootfs *int64, err error) {
+	f.SizeCalls.Add(1)
+	if f.SizeGate != nil {
+		select {
+		case <-f.SizeGate:
+		case <-ctx.Done():
+			return nil, nil, fmt.Errorf("%w: %v", ErrUnavailable, ctx.Err())
+		}
+	}
+	if f.Err != nil {
+		return nil, nil, f.Err
+	}
+	if _, ok := f.Infos[id]; !ok {
+		return nil, nil, fmt.Errorf("%w: %s", ErrNotFound, id)
+	}
+	s := f.ContainerSizes[id]
+	return s.RW, s.RootFs, nil
+}
+
+func (f *Fake) ImageInspect(_ context.Context, id string) (ImageInfo, error) {
+	f.ImageCalls.Add(1)
+	if f.Err != nil {
+		return ImageInfo{}, f.Err
+	}
+	if img, ok := f.Images[id]; ok {
+		return img, nil
+	}
+	return ImageInfo{}, fmt.Errorf("%w: image %s", ErrNotFound, id)
+}
+
+func (f *Fake) ImageList(context.Context) ([]ImageSummary, error) {
+	if f.Err != nil {
+		return nil, f.Err
+	}
+	out := make([]ImageSummary, len(f.ImageSummaries))
+	for i, s := range f.ImageSummaries {
+		s.Tags = realTags(s.Tags) // as the engine
+		out[i] = s
+	}
+	return out, nil
+}
+
+func (f *Fake) ImageHistory(_ context.Context, id string) ([]ImageLayer, error) {
+	f.ImageCalls.Add(1)
+	if f.Err != nil {
+		return nil, f.Err
+	}
+	if h, ok := f.Histories[id]; ok {
+		return append([]ImageLayer{}, h...), nil
+	}
+	if _, ok := f.Images[id]; ok {
+		return []ImageLayer{}, nil
+	}
+	return nil, fmt.Errorf("%w: image %s", ErrNotFound, id)
+}
+
+func (f *Fake) Info(context.Context) (DaemonInfo, error) {
+	if f.Err != nil {
+		info := f.Daemon
+		info.Connected = false
+		return info, f.Err
+	}
+	return f.Daemon, f.DaemonErr
 }
 
 // Put is one PutArchive call: the tar is read whole.
@@ -115,6 +220,9 @@ func (f *Fake) VolumeOptions(_ context.Context, name string) (map[string]string,
 }
 
 func (f *Fake) PutArchive(_ context.Context, id, dir string, content io.Reader) error {
+	if f.NoWrites {
+		panic("dockerx.Fake: PutArchive with NoWrites")
+	}
 	b, err := io.ReadAll(content)
 	if err != nil {
 		return err

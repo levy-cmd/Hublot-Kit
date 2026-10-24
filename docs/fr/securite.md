@@ -28,8 +28,8 @@ Traitez le jeton d'accès comme le mot de passe root du serveur.
   écrits, même s'ils ont cessé.
 - Une connexion doit envoyer son premier octet en 5 secondes, une requête être lue en 15 secondes (ses en-têtes en
   10), une édition ou un envoi, une fois connecté, en 10 minutes ; une connexion inactive est fermée au bout d'une
-  minute. L'agent garde au plus 512 connexions ouvertes, 64 par adresse (`--max-conns-per-ip`). Un téléchargement ou
-  un flux de logs dont le client ne lit plus pendant 30 secondes est arrêté.
+  minute. L'agent garde au plus 512 connexions ouvertes, 64 par adresse (`--max-conns-per-ip`). Un téléchargement, l'aperçu
+  d'un fichier (de conteneur ou d'image) ou un flux de logs dont le client ne lit plus pendant 30 secondes est arrêté.
 - La session vit en mémoire pendant 12 heures. Son cookie est `HttpOnly`, `SameSite=Strict`, et `Secure` avec TLS ou
   une origine publique en `https`.
 - Toute requête autre que GET ou HEAD doit porter un en-tête `Origin` égal à l'origine de confiance
@@ -74,16 +74,51 @@ Traitez le jeton d'accès comme le mot de passe root du serveur.
   `CREDENTIAL`, `PRIVATE` ou `DSN`, quand sa valeur contient une URL avec identifiants, ou un mot de passe sous une
   forme connue (chaînes de connexion, `--requirepass …`, `Authorization: Bearer …`). La commande et le message
   d'erreur sont masqués partie par partie.
+- Les labels suivent une liste blanche : seules les valeurs des labels `com.docker.compose.*` et
+  `org.opencontainers.image.*` sont montrées, si le masquage ci-dessus n'y trouve rien et si ce ne sont pas des chemins
+  de l'hôte (`config_files`, `working_dir`, `environment_file` de Compose). Les autres montrent leur nom,
+  jamais leur valeur, et ne se révèlent pas : un label `basicauth.users` de Traefik porte une empreinte de mot de passe
+  que les règles ci-dessus ne reconnaissent pas.
 - Une valeur masquée se révèle une à une, et chaque révélation est écrite dans le journal d'audit (le nom, jamais la
   valeur) avant l'envoi de la valeur.
+- La page Secrets (`GET /api/secrets`) ne renvoie que des noms : variables masquées, arguments par leur place et ce qui y a été détecté
+  (jamais leur texte, qu'un masque partiel laisserait dépasser), clés des labels masqués. Elle n'a pas de révélation à elle : une valeur passe par la même demande
+  journalisée que la radiographie, une variable à la fois, sous le contrôle d'`Origin`. Comme toute réponse de l'API,
+  elle n'est pas gardée en cache (`Cache-Control: no-store`), et l'interface n'écrit aucune valeur dans le stockage du
+  navigateur. Son coût est borné : quatre `docker inspect` à la fois pour tout l'agent, 3 s chacun, 15 s et
+  1 000 conteneurs par inventaire ; au-delà, un conteneur est marqué indisponible.
 - C'est une heuristique : [certaines formes ne sont pas reconnues](limites.md#masquage-des-secrets). Les logs ne sont
   jamais masqués.
+
+## Snapshots
+
+- Un snapshot ne garde aucun contenu de fichier : des métadonnées et, pour chaque fichier régulier, un
+  HMAC-SHA256 de son contenu, avec une clé de l'agent (`snapshot.key`, 32 octets, 0600, dans le dossier de données).
+  Un SHA-256 nu d'un petit fichier secret (un code, un mot de passe court) se devinerait hors ligne ; sans la clé,
+  non. Ni les empreintes ni l'identifiant de la clé ne sortent de l'agent : aucune réponse de l'API n'en contient.
+- La clé est créée de façon atomique (fichier temporaire, `fsync`, `linkat`) et relue sans suivre de lien ; elle est
+  refusée si elle n'est pas un fichier régulier de l'utilisateur de l'agent, si le groupe ou les autres y ont un droit,
+  ou si elle ne fait pas exactement 32 octets. `hublot rotate-snapshot-key` (agent arrêté) en écrit une nouvelle : les
+  snapshots pris avec l'ancienne ne se comparent plus que par leurs métadonnées. Supprimer ou changer la clé a le même
+  effet.
+- Les manifestes vivent dans `snapshots/` (0700), ouvert sans suivre de lien et contrôlé par son descripteur ;
+  chaque fichier y est écrit en 0600, relativement à ce descripteur, publié par `renameat`. **Les noms des fichiers du
+  conteneur y sont écrits** : un nom peut être sensible ; il est déjà visible dans l'explorateur, et le dossier est
+  réservé à root. La clé et les manifestes sont dans le même dossier : qui le lit a les deux, mais il est root sur
+  l'hôte. La clé protège ce qui sort du dossier par morceaux (un manifeste copié dans un ticket, une sauvegarde
+  partielle).
+- Le parcours d'un conteneur en marche ouvre chaque chemin depuis la racine épinglée sans suivre aucun lien
+  (`openat2` avec `RESOLVE_NO_SYMLINKS`) : un lien posé pendant le parcours n'est jamais suivi, le fichier est noté
+  illisible. Il ne lit ni pseudo-système, ni FIFO, ni périphérique, ne traverse aucun point de montage, et lit avec
+  `O_NOATIME` (les heures d'accès du disque de production ne changent pas). L'export d'un conteneur arrêté passe par les
+  mêmes refus que l'explorateur (un bind de `/`, `/proc`, `/sys` ou `/dev` de l'hôte, jugé tel qu'écrit et tel que
+  résolu sur l'hôte) ; son contenu n'est haché que sous les plafonds, jamais pour une entrée creuse.
 
 ## Journal d'audit
 
 `audit.log` dans le dossier de données, une ligne JSON par événement : connexions échouées, variables révélées,
-fichiers édités et envoyés. Une connexion échouée note aussi l'adresse IP de la connexion TCP (jamais
-`X-Forwarded-For`). Il est en ajout seul et n'est pas tourné en v0.1.
+fichiers édités et envoyés, snapshots pris et supprimés. Une connexion échouée note aussi l'adresse IP de la connexion TCP (jamais
+`X-Forwarded-For`). Il est en ajout seul et n'est pas tourné.
 
 ## Socket Docker
 

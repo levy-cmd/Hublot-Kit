@@ -2,6 +2,7 @@ package dockerx
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -14,6 +15,7 @@ import (
 
 	cerrdefs "github.com/containerd/errdefs"
 	"github.com/moby/moby/api/types/container"
+	"github.com/moby/moby/api/types/image"
 	"github.com/moby/moby/api/types/network"
 )
 
@@ -80,6 +82,36 @@ func TestFromSummaryNameSkipsLinkAlias(t *testing.T) {
 	c := fromSummary(container.Summary{ID: "x", Names: []string{"/other/alias", "/web"}})
 	if c.Name != "web" {
 		t.Fatalf("name = %q", c.Name)
+	}
+}
+
+// Spec v0.2 §5.1: project and service come from the list's labels, and pass
+// the label rule (§5.2): a value §7 would mask is not sent, and the
+// container counts as "no project". No other label leaves through the list.
+func TestContainersProject(t *testing.T) {
+	c := fromSummary(container.Summary{ID: "x", Names: []string{"/shop-web-1"}, Labels: map[string]string{
+		"com.docker.compose.project": "shop", "com.docker.compose.service": "web",
+		"traefik.http.middlewares.auth.basicauth.users": "admin:$apr1$H6uskkkW$IgXLP6ewTrSuBkTrqE8wj/",
+	}})
+	if c.Project != "shop" || c.Service != "web" {
+		t.Fatalf("projet, service : %q %q", c.Project, c.Service)
+	}
+	b, _ := json.Marshal(c)
+	if !strings.Contains(string(b), `"project":"shop","service":"web"`) || strings.Contains(string(b), "apr1") ||
+		strings.Contains(string(b), "traefik") {
+		t.Errorf("JSON : %s", b)
+	}
+	// Outside Compose: both fields absent.
+	b, _ = json.Marshal(fromSummary(container.Summary{ID: "y"}))
+	if strings.Contains(string(b), "project") || strings.Contains(string(b), "service") {
+		t.Errorf("hors Compose : %s", b)
+	}
+	// A value §7 masks: dropped, never sent.
+	m := fromSummary(container.Summary{ID: "z", Labels: map[string]string{
+		"com.docker.compose.project": "postgres://u:s3cr3t@db/app", "com.docker.compose.service": "--password s3cr3t",
+	}})
+	if b, _ := json.Marshal(m); m.Project != "" || m.Service != "" || strings.Contains(string(b), "s3cr3t") {
+		t.Errorf("FUITE : %s", b)
 	}
 }
 
@@ -364,5 +396,99 @@ func TestFromInspectDetails(t *testing.T) {
 	}
 	if d := fromInspect(container.InspectResponse{ID: "x"}).Details; !reflect.DeepEqual(d, Details{}) {
 		t.Errorf("Inspect vide : %+v", d)
+	}
+}
+
+// Spec v0.2 §5.4: the configuration of an image, raw (package secrets masks
+// it), its tags without "<none>:<none>", its exposed ports sorted.
+func TestFromImageInspect(t *testing.T) {
+	var res image.InspectResponse
+	if err := json.Unmarshal([]byte(`{"Id":"sha256:abc","RepoTags":["<none>:<none>","app:1"],"Size":42,
+		"Created":"2026-10-01T12:00:00Z","Os":"linux","Architecture":"arm64","Variant":"v8",
+		"Config":{"Env":["A=1"],"Cmd":["run"],"Entrypoint":["/e"],"WorkingDir":"/w","User":"u",
+		"ExposedPorts":{"8080/tcp":{},"53/udp":{}},"Labels":{"k":"v"}}}`), &res); err != nil {
+		t.Fatal(err)
+	}
+	got := fromImageInspect(res)
+	want := ImageInfo{ID: "sha256:abc", Tags: []string{"app:1"}, Size: 42, Created: "2026-10-01T12:00:00Z",
+		OS: "linux", Architecture: "arm64", Variant: "v8", Env: []string{"A=1"}, Cmd: []string{"run"},
+		Entrypoint: []string{"/e"}, WorkingDir: "/w", User: "u", ExposedPorts: []string{"53/udp", "8080/tcp"},
+		Labels: map[string]string{"k": "v"}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("\n obtenu  %+v\n attendu %+v", got, want)
+	}
+	if got := fromImageInspect(image.InspectResponse{ID: "sha256:x"}); got.Tags == nil || len(got.Tags) != 0 || got.Env != nil {
+		t.Fatalf("sans configuration : %+v", got)
+	}
+}
+
+func TestFromImageSummaries(t *testing.T) {
+	got := fromImageSummaries([]image.Summary{
+		{ID: "sha256:a", RepoTags: []string{"a:1"}, Size: 7, Created: 1_760_000_000},
+		{ID: "sha256:b", RepoTags: []string{"<none>:<none>"}},
+		{ID: "sha256:c"},
+	})
+	if len(got) != 3 || !reflect.DeepEqual(got[0], ImageSummary{ID: "sha256:a", Tags: []string{"a:1"}, Size: 7, Created: time.Unix(1_760_000_000, 0).UTC()}) {
+		t.Fatalf("%+v", got)
+	}
+	for _, s := range got[1:] {
+		if s.Tags == nil || len(s.Tags) != 0 {
+			t.Errorf("sans étiquette : %+v", s)
+		}
+	}
+}
+
+func TestFromHistory(t *testing.T) {
+	got := fromHistory([]image.HistoryResponseItem{
+		{CreatedBy: `CMD ["sh"]`, Created: 1_760_000_000},
+		{CreatedBy: "ADD rootfs", Created: 0, Size: 9},
+	})
+	want := []ImageLayer{
+		{CreatedBy: `CMD ["sh"]`, Created: time.Unix(1_760_000_000, 0).UTC(), Empty: true},
+		{CreatedBy: "ADD rootfs", Size: 9},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("%+v", got)
+	}
+	if got := fromHistory(nil); got == nil {
+		t.Fatal("jamais nil")
+	}
+}
+
+// The image ID of a container is for the Images page only: the container
+// list of the API does not change.
+func TestContainerImageIDNotInJSON(t *testing.T) {
+	c := fromSummary(container.Summary{ID: "x", ImageID: "sha256:abc"})
+	if c.ImageID != "sha256:abc" {
+		t.Fatalf("ImageID = %q", c.ImageID)
+	}
+	b, _ := json.Marshal(c)
+	if strings.Contains(string(b), "sha256:abc") {
+		t.Fatalf("ImageID dans le JSON : %s", b)
+	}
+}
+
+func TestFakeImages(t *testing.T) {
+	f := &Fake{
+		ImageSummaries: []ImageSummary{{ID: "sha256:a", Tags: []string{"<none>:<none>"}}},
+		Images:         map[string]ImageInfo{"sha256:a": {ID: "sha256:a"}, "sha256:b": {ID: "sha256:b"}},
+		Histories:      map[string][]ImageLayer{"sha256:a": {{CreatedBy: "x"}}},
+	}
+	ctx := context.Background()
+	if l, err := f.ImageList(ctx); err != nil || len(l) != 1 || l[0].Tags == nil || len(l[0].Tags) != 0 {
+		t.Fatalf("ImageList : %+v %v", l, err)
+	}
+	if h, err := f.ImageHistory(ctx, "sha256:a"); err != nil || len(h) != 1 {
+		t.Fatalf("ImageHistory : %+v %v", h, err)
+	}
+	if h, err := f.ImageHistory(ctx, "sha256:b"); err != nil || h == nil || len(h) != 0 {
+		t.Fatalf("sans historique : %+v %v", h, err)
+	}
+	if _, err := f.ImageHistory(ctx, "sha256:z"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("inconnue : %v", err)
+	}
+	f.Err = ErrUnavailable
+	if _, err := f.ImageList(ctx); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("Err : %v", err)
 	}
 }

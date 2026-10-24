@@ -25,7 +25,7 @@ anchors() {
 want=$(hk_spec_command)
 [ -n "$want" ] || err "commande docker run introuvable dans la spec §8"
 
-pairs="README.md:README.fr.md docs/en/install.md:docs/fr/installation.md docs/en/security.md:docs/fr/securite.md docs/en/limitations.md:docs/fr/limites.md"
+pairs="README.md:README.fr.md docs/en/guide.md:docs/fr/guide.md docs/en/install.md:docs/fr/installation.md docs/en/security.md:docs/fr/securite.md docs/en/limitations.md:docs/fr/limites.md"
 for p in $pairs; do
   en=${p%%:*} fr=${p##*:}
   ok=1

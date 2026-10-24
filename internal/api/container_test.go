@@ -17,7 +17,7 @@ import (
 
 // The secrets of the fake "web" container: none may appear in a response
 // that has not revealed it.
-var radioSecrets = []string{"s3cr3t-env", "s3cr3t-url", "s3cr3t-cmd", "s3cr3t-ep", "s3cr3t-err", "s3cr3t-cs"}
+var radioSecrets = []string{"s3cr3t-env", "s3cr3t-url", "s3cr3t-cmd", "s3cr3t-ep", "s3cr3t-err", "s3cr3t-cs", "s3cr3t-label"}
 
 func radioFixture(t *testing.T, readOnly bool) (*fixture, *http.Cookie) {
 	t.Helper()
@@ -123,6 +123,80 @@ func TestContainerRadiography(t *testing.T) {
 	}
 	if len(got.Mounts) != 1 || got.Mounts[0].Mode != "ro" || got.Mounts[0].Destination != "/etc/app" || len(got.Tmpfs) != 1 {
 		t.Errorf("montages : %+v %v", got.Mounts, got.Tmpfs)
+	}
+}
+
+// Review of tranche 5 (Codex): Docker runs the entrypoint and the command as
+// one argv, so a secret flag that ends the entrypoint names the first
+// argument of the command. Both are masked together, then split again.
+func TestContainerCommandBoundary(t *testing.T) {
+	for _, tc := range []struct{ ep, cmd, wantEp, wantCmd []string }{
+		{[]string{"redis-server", "--requirepass"}, []string{"s3cr3t-clair", "--port", "6379"},
+			[]string{"redis-server", "--requirepass"}, []string{"••••••", "--port", "6379"}},
+		{[]string{"app", "--password="}, []string{"s3cr3t-clair"}, []string{"app", "--password="}, []string{"••••••"}},
+		{nil, []string{"redis-server", "--requirepass", "s3cr3t-clair"}, []string{}, []string{"redis-server", "--requirepass", "••••••"}},
+		{[]string{"/entry.sh"}, nil, []string{"/entry.sh"}, []string{}},
+	} {
+		f, c := radioFixture(t, false)
+		web := f.docker.Infos["web"]
+		web.Details.Entrypoint, web.Details.Cmd = tc.ep, tc.cmd
+		f.docker.Infos["web"], f.docker.Infos[webID] = web, web
+		rec := f.do("GET", "/api/containers/web", "", c)
+		if rec.Code != http.StatusOK || strings.Contains(rec.Body.String(), "s3cr3t-clair") {
+			t.Errorf("%q + %q : %d %s", tc.ep, tc.cmd, rec.Code, rec.Body)
+			continue
+		}
+		var got struct {
+			Entrypoint, Cmd []string
+			CommandMasked   bool
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+			t.Fatal(err)
+		}
+		if strings.Join(got.Entrypoint, "|") != strings.Join(tc.wantEp, "|") || strings.Join(got.Cmd, "|") != strings.Join(tc.wantCmd, "|") ||
+			got.Entrypoint == nil || got.Cmd == nil || got.CommandMasked != (len(tc.cmd) > 0) {
+			t.Errorf("%q + %q : %q %q %v", tc.ep, tc.cmd, got.Entrypoint, got.Cmd, got.CommandMasked)
+		}
+	}
+}
+
+// Spec v0.2 §5.2 (Q60): labels leave the agent through secrets.Labels only;
+// outside com.docker.compose. and org.opencontainers.image., the key alone,
+// and no reveal for them.
+func TestContainerLabelsNeverLeak(t *testing.T) {
+	f, c := radioFixture(t, false)
+	web := f.docker.Infos["web"]
+	web.Details.Labels = map[string]string{
+		"traefik.http.middlewares.auth.basicauth.users": "admin:$apr1$H6uskkkW$IgXLP6ewTrSuBkTrqE8wj/",
+		"com.docker.compose.project":                    "shop",
+		"com.docker.compose.x":                          "postgres://u:s3cr3t@db/app",
+		"org.opencontainers.image.source":               "https://github.com/o/r",
+		"backup.dsn":                                    "s3cr3t",
+	}
+	f.docker.Infos["web"], f.docker.Infos[webID] = web, web
+	rec := f.do("GET", "/api/containers/web", "", c)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("statut %d : %s", rec.Code, rec.Body)
+	}
+	body := rec.Body.String()
+	for _, w := range []string{"s3cr3t", "$apr1$", "IgXLP6ew"} {
+		if strings.Contains(body, w) {
+			t.Errorf("FUITE : %s dans la réponse", w)
+		}
+	}
+	for _, want := range []string{
+		`{"key":"com.docker.compose.project","value":"shop","masked":false}`,
+		`{"key":"traefik.http.middlewares.auth.basicauth.users","value":null,"masked":true}`,
+		`{"key":"com.docker.compose.x","value":null,"masked":true}`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("%s absent de %s", want, body)
+		}
+	}
+	// No reveal of a label: env/reveal knows only Config.Env.
+	r := f.do("POST", "/api/containers/web/env/reveal", `{"name":"backup.dsn"}`, c)
+	if r.Code != http.StatusNotFound || strings.Contains(r.Body.String(), "s3cr3t") {
+		t.Errorf("label révélé : %d %s", r.Code, r.Body)
 	}
 }
 

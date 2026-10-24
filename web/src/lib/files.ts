@@ -1,5 +1,6 @@
-import type { Entry, EntryType } from './api.ts';
+import { api, ApiError, previewAt, type Entry, type EntryType, type Listing, type Preview } from './api.ts';
 import { errorMessage, t } from './i18n/index.ts';
+import type { FileSearch, PaletteItem } from './palette.ts';
 
 // Container paths are handled as text here, for display and navigation only:
 // the agent resolves them inside the container root.
@@ -95,5 +96,90 @@ export function fsErrorMessage(code: string, detail: string | undefined, stopped
 		return detail ? `${t('files.stoppedUnavailable')} (${detail})` : t('files.stoppedUnavailable');
 	}
 	if (code === 'too_large' && stopped) return t('files.stoppedTooLarge');
+	return errorMessage(code);
+}
+
+/**
+ * Delay between two requests of a file of an image being extracted (spec
+ * v0.2 §5.5): always well under the 15 s after which the agent cancels an
+ * extraction that no request asks for.
+ */
+export const pollDelay = 2000;
+
+/**
+ * Asks ask() again every delay ms while the agent answers 202 indexing,
+ * telling on.indexing the progress; then on.result or on.error, once. The
+ * returned function stops it (another file chosen, the panel closed): no
+ * request after it, no callback.
+ */
+export function pollIndexing<T>(
+	ask: () => Promise<T>,
+	on: { indexing: (progress?: number) => void; result: (value: T) => void; error: (e: unknown) => void },
+	delay = pollDelay
+): () => void {
+	let stopped = false;
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	const run = () => {
+		ask().then(
+			(v) => {
+				if (!stopped) on.result(v);
+			},
+			(e) => {
+				if (stopped) return;
+				if (e instanceof ApiError && e.code === 'indexing') {
+					on.indexing(e.progress);
+					timer = setTimeout(run, delay);
+				} else on.error(e);
+			}
+		);
+	};
+	run();
+	return () => {
+		stopped = true;
+		clearTimeout(timer);
+	};
+}
+
+// The files of an image (spec v0.2 §5.5), read only: by its full ID, the 64
+// hex characters (images.ts imageHex), never a name.
+const imageFsPath = (hex: string, route: string, path: string) =>
+	`/images/${encodeURIComponent(hex)}/fs${route}?path=${encodeURIComponent(path)}`;
+
+export const listImageDir = (hex: string, path: string) => api<Listing>(imageFsPath(hex, '', path));
+export const previewImageFile = (hex: string, path: string): Promise<Preview> =>
+	previewAt(`/api${imageFsPath(hex, '/file', path)}`);
+
+/** POST /api/images/{id}/fs/search: the index already built only, the query in the body. */
+export const searchImageFiles = (hex: string, q: string, signal: AbortSignal) =>
+	api<FileSearch>(`/images/${encodeURIComponent(hex)}/fs/search`, {
+		method: 'POST',
+		body: JSON.stringify({ q: q.trim() }),
+		signal
+	});
+
+/** The Files tab of image hex, at dir and file if given. */
+export function imageExplorerHref(hex: string, dir?: string, file?: string): string {
+	const q = new URLSearchParams({ tab: 'files' });
+	if (dir) q.set('path', dir);
+	if (file) q.set('file', file);
+	return `/images/${encodeURIComponent(hex)}?${q}`;
+}
+
+/** The palette entries of a file search in image hex; without an index, a way to its Files tab. */
+export function imageFileItems(res: FileSearch, hex: string): PaletteItem[] {
+	if (!res.indexed) {
+		return [{ kind: 'page', label: t('palette.openExplorer'), detail: t('imagefs.noIndex'), href: imageExplorerHref(hex) }];
+	}
+	return res.results.map((r) => ({
+		kind: 'file',
+		label: r.path,
+		href: r.type === 'dir' ? imageExplorerHref(hex, r.path) : imageExplorerHref(hex, parentPath(r.path), r.path)
+	}));
+}
+
+/** Message for a failed listing (index) or preview (extraction) of an image. */
+export function imageFsErrorMessage(code: string, preview: boolean): string {
+	if (code === 'too_large') return preview ? t('imagefs.fileTooLarge') : t('imagefs.tooLarge');
+	if (code === 'unsupported_image') return t('imagefs.unsupported');
 	return errorMessage(code);
 }

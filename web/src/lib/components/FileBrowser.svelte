@@ -19,24 +19,48 @@
 		formatMode,
 		formatSize,
 		fsErrorMessage,
+		imageFsErrorMessage,
 		indexingPercent,
 		joinPath,
+		listImageDir,
 		parentPath,
 		resolveLinkTarget,
 		sortEntries
 	} from '#lib/files.ts';
-	import { errorMessage, t } from '#lib/i18n/index.ts';
+	import { errorMessage, lang, t, tf } from '#lib/i18n/index.ts';
 	import { latest, lock } from '#lib/guard.ts';
+	import Icon from '#lib/icons/Icon.svelte';
+	import { withParams } from '#lib/url.ts';
 	import { UPLOAD_MAX, uploadNameOk, writeErrorMessage } from '#lib/write.ts';
 	import ConfirmDialog from '#lib/components/ConfirmDialog.svelte';
 	import FilePreview from '#lib/components/FilePreview.svelte';
 
+	// compact: the narrow bottom panel (name and date only); withPreview false:
+	// the preview is shown by another panel, told of the selected entry by onselect.
+	// source "image": the files of an image (spec v0.2 §5.5), id its 64 hex
+	// characters; read only: no Diff, no upload, no download (Q63).
 	let {
 		id,
 		name,
 		stopped = false,
-		readOnly = true
-	}: { id: string; name: string; stopped?: boolean; readOnly?: boolean } = $props();
+		readOnly = true,
+		compact = false,
+		withPreview = true,
+		diffHref = '',
+		onselect,
+		source = 'container'
+	}: {
+		id: string;
+		name: string;
+		stopped?: boolean;
+		readOnly?: boolean;
+		compact?: boolean;
+		withPreview?: boolean;
+		diffHref?: string;
+		onselect?: (entry: Entry | undefined) => void;
+		source?: 'container' | 'image';
+	} = $props();
+	let image = $derived(source === 'image');
 
 	// The URL carries the state (?path=dir&file=selected): back button and links work.
 	let dir = $derived(page.url.searchParams.get('path') || '/');
@@ -47,11 +71,31 @@
 	let loading = $state(false);
 	let downloadError = $state('');
 	let reloads = $state(0); // bumped by the Reload button: same URL, new request
-	let entries = $derived(listing ? sortEntries(listing.entries) : []);
+	// Explore: every entry; Diff: only what changed since the image (and the
+	// folders that hold a change). F5 marks in both, as in v0.1.
+	let mode = $state<'explore' | 'diff'>('explore');
 	let changes = $state<Change[]>([]);
 	let marks = $derived(changeMarks(changes));
+	let changedDirs = $derived.by(() => {
+		const dirs: Record<string, true> = {};
+		for (const c of changes) {
+			for (let p = parentPath(c.path); p !== '/' && !dirs[p]; p = parentPath(p)) dirs[p] = true;
+		}
+		return dirs;
+	});
+	let entries = $derived.by(() => {
+		const all = listing ? sortEntries(listing.entries) : [];
+		if (mode === 'explore') return all;
+		return all.filter((e) => {
+			const p = joinPath(dir, e.name);
+			return marks.has(p) || changedDirs[p] === true;
+		});
+	});
 	let deleted = $derived(deletedIn(changes, dir));
 	let selected = $derived(file ? entries.find((e) => joinPath(dir, e.name) === file) : undefined);
+	$effect(() => {
+		onselect?.(selected);
+	});
 
 	let picker = $state<HTMLInputElement>();
 	let toUpload = $state<{ id: string; file: File; dir: string } | null>(null); // waiting for the confirmation
@@ -65,8 +109,9 @@
 	let uploading = $state(false);
 	let uploadError = $state('');
 
+	// Other parameters of the page (container, panel, tab) are kept.
 	const href = (path: string, selectedFile?: string) =>
-		'?' + new URLSearchParams(selectedFile ? { path, file: selectedFile } : { path });
+		withParams(page.url.searchParams, { path, file: selectedFile ?? null });
 
 	function go(path: string, selectedFile?: string, replace = false) {
 		goto(href(path, selectedFile), { replace, reset: false }).catch(() => {});
@@ -80,7 +125,7 @@
 		loading = true;
 		error = '';
 		downloadError = '';
-		listDir(id, wanted)
+		(image ? listImageDir(id, wanted) : listDir(id, wanted))
 			.then((l) => {
 				if (!current) return;
 				indexing = null;
@@ -101,7 +146,8 @@
 					return;
 				}
 				indexing = null;
-				error = e instanceof ApiError ? fsErrorMessage(e.code, e.detail, stopped) : errorMessage('unknown');
+				if (!(e instanceof ApiError)) error = errorMessage('unknown');
+				else error = image ? imageFsErrorMessage(e.code, false) : fsErrorMessage(e.code, e.detail, stopped);
 			})
 			.finally(() => {
 				if (current) loading = false;
@@ -118,6 +164,7 @@
 		const wanted = id;
 		let current = true;
 		changes = [];
+		if (image) return; // an image has no changes
 		listChanges(wanted)
 			.then((l) => {
 				if (current) changes = l ?? [];
@@ -192,40 +239,73 @@
 				e instanceof ApiError ? downloadErrorMessage(e.code, e.detail) : downloadErrorMessage('unknown');
 		}
 	}
+
+	// The narrow panel takes the short form (23/10/26 11:56).
+	const date = (iso: string) =>
+		new Date(iso).toLocaleString(
+			lang,
+			compact
+				? { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' }
+				: { day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' }
+		);
+	const iconOf = (e: Entry) => (e.type === 'dir' ? 'folder' : e.type === 'symlink' ? 'link' : 'file');
 </script>
 
-<div class="browser">
+<div class="browser" class:compact class:alone={!withPreview}>
 	<section class="listing">
-		<nav class="crumbs" aria-label={t('files.path')}>
+		{#if image}
+			<p class="note">{t('imagefs.readOnly')}</p>
+		{:else}
+			<div class="bar">
+				<div class="seg" role="group" aria-label={t('files.mode')} title={t('files.modeHint')}>
+					<button type="button" aria-pressed={mode === 'explore'} onclick={() => (mode = 'explore')}>{t('files.mode.explore')}</button>
+					<button type="button" aria-pressed={mode === 'diff'} onclick={() => (mode = 'diff')}>{t('files.mode.diff')}</button>
+				</div>
+				<div class="tools">
+					<button type="button" class="icon-btn small" onclick={downloadDir} aria-label={t('files.downloadDir')} title={t('files.downloadDir')}>
+						<Icon name="download" />
+					</button>
+					{#if !readOnly}
+						<input type="file" bind:this={picker} onchange={picked} hidden />
+						<button
+							type="button"
+							class="icon-btn small"
+							disabled={uploading}
+							onclick={() => picker?.click()}
+							aria-label={uploading ? t('write.uploading') : t('write.upload')}
+							title={uploading ? t('write.uploading') : t('write.upload')}
+						>
+							<Icon name="upload" />
+						</button>
+					{/if}
+				</div>
+			</div>
+		{/if}
+		<nav class="crumbs mono" aria-label={t('files.path')}>
 			{#each breadcrumbs(dir) as c, i (c.path)}
 				{#if i > 1}<span aria-hidden="true">/</span>{/if}
 				<a href={href(c.path)}>{c.name}</a>
 			{/each}
 		</nav>
-		<div class="tools">
-			<button type="button" onclick={downloadDir}>{t('files.downloadDir')}</button>
-			{#if !readOnly}
-				<input type="file" bind:this={picker} onchange={picked} hidden />
-				<button type="button" disabled={uploading} onclick={() => picker?.click()}>
-					{uploading ? t('write.uploading') : t('write.upload')}
-				</button>
-			{/if}
-		</div>
 		{#if downloadError}<p role="alert">{downloadError}</p>{/if}
 		{#if uploadError}
 			<p role="alert">{uploadError}</p>
-			<button type="button" onclick={() => reloads++}>{t('files.reload')}</button>
+			<button type="button" class="btn small" onclick={() => reloads++}>{t('files.reload')}</button>
 		{/if}
 
 		{#if indexing !== null}
-			<p role="status">{t('files.indexing')} : {indexing} %</p>
-			<progress max="100" value={indexing}></progress>
-			<p class="note">{t('files.indexingHint')}</p>
+			<div class="state">
+				<p role="status">{image ? t('imagefs.indexing') : t('files.indexing')} : {indexing} %</p>
+				<progress max="100" value={indexing}></progress>
+				<p class="note">{image ? t('imagefs.indexingHint') : t('files.indexingHint')}</p>
+			</div>
 		{:else if error}
-			<p role="alert">{error}</p>
-			<button type="button" onclick={() => reloads++}>{t('files.reload')}</button>
+			<div class="state">
+				<p role="alert">{error}</p>
+				<button type="button" class="btn small" onclick={() => reloads++}>{t('files.reload')}</button>
+			</div>
 		{:else if loading && !listing}
-			<p>{t('files.loading')}</p>
+			<p class="muted state">{t('files.loading')}</p>
 		{:else if listing}
 			{#if listing.truncated}<p class="note">{t('files.truncated')}</p>{/if}
 			<div class="scroll">
@@ -233,53 +313,60 @@
 					<thead>
 						<tr>
 							<th scope="col">{t('files.col.name')}</th>
-							<th scope="col">{t('files.col.size')}</th>
-							<th scope="col">{t('files.col.mode')}</th>
-							<th scope="col">{t('files.col.owner')}</th>
+							{#if !compact}<th scope="col" class="wide">{t('files.col.size')}</th>
+							<th scope="col" class="wide">{t('files.col.mode')}</th>
+							<th scope="col" class="wide">{t('files.col.owner')}</th>{/if}
 							<th scope="col">{t('files.col.modified')}</th>
 						</tr>
 					</thead>
 					<tbody>
 						{#if dir !== '/'}
 							<tr>
-								<td colspan="5"><a href={href(parentPath(dir))}>.. ({t('files.parent')})</a></td>
+								<td colspan={compact ? 2 : 5}><a class="up" href={href(parentPath(dir))}>.. <span class="muted">({t('files.parent')})</span></a></td>
 							</tr>
 						{/if}
 						{#each entries as e, i (i)}
 							{@const k = marks.get(joinPath(dir, e.name))}
 							<tr class:selected={selected === e}>
 								<td>
-									<button type="button" class="name" onclick={() => open(e)}>
-										{e.name}{e.type === 'dir' ? '/' : ''}
-									</button>
-									{#if k}<abbr class="mark {k}" title={kindLabel(k)}>{kindLetter(k)}</abbr>{/if}
-									{#if e.type === 'symlink'}<span class="target">→ {e.linkTarget}</span>{/if}
+									<div class="name-cell">
+										<span class="ficon {e.type}"><Icon name={iconOf(e)} /></span>
+										<button type="button" class="name" title={e.name} onclick={() => open(e)}>
+											{e.name}{e.type === 'dir' ? '/' : ''}
+										</button>
+										{#if k}<abbr class="mark {k}" title={kindLabel(k)}>{kindLetter(k)}</abbr>{/if}
+										{#if e.type === 'symlink' && !compact}<span class="target mono">→ {e.linkTarget}</span>{/if}
+									</div>
 								</td>
-								<td>{e.type === 'dir' ? '' : formatSize(e.size)}</td>
-								<td><code>{formatMode(e.type, e.mode)}</code></td>
-								<td>{e.uid}:{e.gid}</td>
-								<td>{new Date(e.modTime).toLocaleString()}</td>
+								{#if !compact}<td class="wide mono">{e.type === 'dir' ? '' : formatSize(e.size)}</td>
+								<td class="wide"><code>{formatMode(e.type, e.mode)}</code></td>
+								<td class="wide mono">{e.uid}:{e.gid}</td>{/if}
+								<td class="date">{date(e.modTime)}</td>
 							</tr>
 						{/each}
 					</tbody>
 				</table>
 			</div>
-			{#if entries.length === 0}<p>{t('files.empty')}</p>{/if}
+			{#if entries.length === 0}<p class="muted">{mode === 'diff' ? t('changes.empty') : t('files.empty')}</p>{/if}
 			{#if deleted.length}
+				{@const d = truncateNames(deleted)}
 				<p class="note">
-					{deleted.length} {t('changes.deletedHere')} {truncateNames(deleted).shown.join(', ')}{#if truncateNames(deleted).more}, {t('changes.andMore').replace('{n}', String(truncateNames(deleted).more))}{/if} — <a href="?tab=changes">{t('container.tab.changes')}</a>
+					{deleted.length} {t('changes.deletedHere')} {d.shown.join(', ')}{#if d.more}, {tf('changes.andMore', { n: d.more })}{/if}
+					<a href={diffHref}>{t('changes.seeAll')}</a>
 				</p>
 			{/if}
 		{/if}
 	</section>
 
-	<section class="preview">
-		{#if file}
-			<FilePreview {id} {name} path={file} entry={selected} {stopped} {readOnly} />
-		{:else}
-			<p>{t('files.selectFile')}</p>
-		{/if}
-	</section>
+	{#if withPreview}
+		<section class="preview">
+			{#if file}
+				<FilePreview {id} {name} path={file} entry={selected} {stopped} {readOnly} {source} />
+			{:else}
+				<p class="muted">{t('files.selectFile')}</p>
+			{/if}
+		</section>
+	{/if}
 </div>
 
 {#if toUpload}
@@ -297,21 +384,190 @@
 {/if}
 
 <style>
-	.browser { display: grid; gap: 1rem; grid-template-columns: minmax(0, 1fr); }
-	@media (min-width: 60rem) {
-		.browser { grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); }
+	.browser {
+		display: grid;
+		gap: 1rem;
+		grid-template-columns: minmax(0, 1fr);
+		min-width: 0;
 	}
-	.crumbs { display: flex; flex-wrap: wrap; gap: 0.25rem; word-break: break-all; }
-	.tools { margin: 0.5rem 0; }
-	.scroll { overflow-x: auto; }
-	table { border-collapse: collapse; width: 100%; }
-	th, td { text-align: left; padding: 0.3rem 0.5rem; border-bottom: 1px solid #eee; white-space: nowrap; }
-	button.name { background: none; border: none; padding: 0; color: inherit; text-decoration: underline; cursor: pointer; font: inherit; }
-	.target { opacity: 0.7; margin-left: 0.4rem; }
-	tr.selected { background: #eef4ff; }
-	.note { font-style: italic; overflow-wrap: anywhere; }
-	.mark { font-weight: 700; text-decoration: none; margin-left: 0.4rem; }
-	.added { color: #1b7f3b; }
-	.modified { color: #8a5a00; }
-	[role='alert'] { color: #b00020; }
+	@media (min-width: 64rem) {
+		.browser:not(.alone):not(.compact) {
+			grid-template-columns: minmax(0, 3fr) minmax(0, 2fr);
+		}
+	}
+	.listing {
+		display: grid;
+		gap: 0.5rem;
+		align-content: start;
+		min-width: 0;
+	}
+	.bar {
+		display: flex;
+		align-items: center;
+		justify-content: space-between;
+		gap: 0.5rem;
+	}
+	.seg {
+		display: inline-flex;
+		border: 1px solid var(--trait-fort);
+		border-radius: var(--rayon);
+		overflow: hidden;
+	}
+	.seg button {
+		border: 0;
+		background: none;
+		color: var(--texte-doux);
+		padding: 0.2rem 0.65rem;
+		font-size: var(--t-s);
+		font-weight: 600;
+		cursor: pointer;
+	}
+	.seg button + button {
+		border-left: 1px solid var(--trait-fort);
+	}
+	.seg button[aria-pressed='true'] {
+		background: var(--selection);
+		color: var(--emeraude-texte);
+	}
+	.tools {
+		display: flex;
+		gap: 0.15rem;
+	}
+	.crumbs {
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.25rem;
+		font-size: var(--t-s);
+		overflow-wrap: anywhere;
+		color: var(--texte-doux);
+		padding: 0.3rem 0.5rem;
+		background: var(--releve);
+		border-radius: var(--rayon);
+	}
+	.crumbs a {
+		color: var(--texte);
+		text-decoration: none;
+	}
+	.crumbs a:hover {
+		text-decoration: underline;
+	}
+	.state {
+		display: grid;
+		gap: 0.5rem;
+		justify-items: start;
+		padding: 0.5rem 0;
+	}
+	.scroll {
+		overflow-x: auto;
+	}
+	table {
+		border-collapse: collapse;
+		width: 100%;
+	}
+	th {
+		text-align: left;
+		font-size: var(--t-xs);
+		font-weight: 600;
+		color: var(--texte-doux);
+		padding: 0.3rem 0.5rem;
+		border-bottom: 1px solid var(--trait);
+		white-space: nowrap;
+	}
+	td {
+		padding: 0.25rem 0.5rem;
+		border-bottom: 1px solid var(--trait);
+		white-space: nowrap;
+		font-size: var(--t-s);
+	}
+	tr.selected {
+		background: var(--selection);
+	}
+	tr.selected td:first-child {
+		box-shadow: inset 3px 0 0 var(--focus);
+	}
+	.name-cell {
+		display: flex;
+		align-items: center;
+		gap: 0.4rem;
+		min-width: 0;
+	}
+	.name-cell .name {
+		overflow: hidden;
+		text-overflow: ellipsis;
+		min-width: 0;
+	}
+	.compact table {
+		table-layout: fixed;
+	}
+	.compact th:last-child {
+		width: 7.25rem;
+	}
+	.compact td {
+		overflow: hidden;
+	}
+	.ficon {
+		color: var(--texte-doux);
+	}
+	.ficon.dir {
+		color: var(--emeraude-texte);
+	}
+	button.name {
+		background: none;
+		border: none;
+		padding: 0;
+		color: var(--texte);
+		cursor: pointer;
+		font: inherit;
+		text-align: left;
+	}
+	button.name:hover {
+		text-decoration: underline;
+	}
+	.up {
+		color: var(--texte);
+		text-decoration: none;
+	}
+	.target {
+		color: var(--texte-doux);
+		font-size: var(--t-xs);
+	}
+	.date {
+		color: var(--texte-doux);
+	}
+	.mark {
+		display: inline-grid;
+		place-items: center;
+		width: 1.1rem;
+		height: 1.1rem;
+		border-radius: 3px;
+		font-size: 0.6875rem;
+		font-weight: 700;
+		text-decoration: none;
+	}
+	.mark.added {
+		background: var(--diff-ajout);
+		color: var(--emeraude-texte);
+	}
+	.mark.modified {
+		background: var(--releve);
+		color: var(--ambre-texte);
+	}
+	.mark.deleted {
+		background: var(--diff-suppr);
+		color: var(--rouge-texte);
+	}
+	.note {
+		overflow-wrap: anywhere;
+	}
+	.compact .wide {
+		display: none;
+	}
+	.compact .date {
+		text-align: right;
+	}
+	@media (max-width: 48rem) {
+		.wide {
+			display: none;
+		}
+	}
 </style>

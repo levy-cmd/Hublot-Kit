@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { LogLine } from './api';
-import { appendLines, enqueue, filterLines, formatTs, MAX_LINES, parseCount, parseFailure, parseLine, streamEnd } from './logs';
+import { appendLines, enqueue, filterLines, formatTs, levelOf, MAX_LINES, parseCount, parseFailure, parseLine, streamEnd } from './logs';
 
 const line = (text: string, stream: 'stdout' | 'stderr' = 'stdout'): LogLine => ({ ts: '2026-10-10T07:14:22.769046552Z', stream, line: text });
 
@@ -70,5 +70,36 @@ describe('logs (F6)', () => {
 		expect(streamEnd('failure', '{"error":"logs_unavailable"}')).toEqual({ status: 'error', code: 'logs_unavailable' });
 		expect(streamEnd('failure', 'garbage')).toEqual({ status: 'error', code: 'unknown' });
 		expect(streamEnd('evicted', '{"error":"internal"}')).toEqual({ status: 'error', code: 'evicted' });
+	});
+});
+
+// Spec v0.2 §3: the level is guessed from the text (heuristic, said in the tooltip).
+describe('levelOf', () => {
+	it('reads an upper-case level word', () => {
+		expect(levelOf('2026-10-23 ERROR boom')).toBe('error');
+		expect(levelOf('[WARN] disk almost full')).toBe('warn');
+		expect(levelOf('2025-10-18 08:57:12,345 INFO Processed task')).toBe('info');
+		expect(levelOf('DEBUG cache hit')).toBe('debug');
+		expect(levelOf('FATAL: cannot bind')).toBe('error');
+		expect(levelOf('WARNING: deprecated')).toBe('warn');
+	});
+
+	it('takes the first level word of the line', () => {
+		expect(levelOf('INFO retry after ERROR')).toBe('info');
+	});
+
+	it('reads a JSON or logfmt level field', () => {
+		expect(levelOf('{"level":"warn","msg":"x"}')).toBe('warn');
+		expect(levelOf('{"severity":"ERROR","msg":"x"}')).toBe('error');
+		expect(levelOf('ts=1 level=debug msg=x')).toBe('debug');
+		expect(levelOf('time="x" level=info msg="started"')).toBe('info');
+	});
+
+	it('guesses nothing from plain text', () => {
+		expect(levelOf('plain line')).toBeNull();
+		expect(levelOf('no error here')).toBeNull(); // lower case: prose, not a level
+		expect(levelOf('INFORMATION')).toBeNull();
+		expect(levelOf('{"level":3}')).toBeNull();
+		expect(levelOf('')).toBeNull();
 	});
 });

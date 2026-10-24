@@ -7,25 +7,36 @@
 [Lire en français](README.fr.md)
 
 Explore the inside of the Docker containers of a server from a browser, without a terminal. Pick a container and see
-its files, what changed since it was created, its logs and its configuration.
+its files, what changed since its image, its logs and its configuration; browse the files of an image; take a photo
+of a container's files and compare it later.
 
-![Container list](docs/images/containers.png)
-![File explorer with the changes since creation](docs/images/explorer.png)
+![Container list, dark theme](docs/images/containers.png)
+![File explorer with the changes since the image](docs/images/explorer.png)
 
-## What it does (v0.1)
+## What it does (v0.2)
 
-- **Containers**: name, image, status, ports, uptime; filter and search.
+- **Containers**: name, image, Compose project, status, ports, uptime; tabs, filters, key figures (files, image
+  size, container size) and labels, filtered.
 - **Files**: the whole tree of a running or a stopped container, text and image preview, size, owner, permissions.
 - **Download** a file, or a folder as a tar archive.
 - **Edit** a text file or **upload** a file, after a confirmation that names the container and the path.
-- **Changes**: what was added, modified or deleted since the container was created.
+- **Diff with the image**: what was added, modified or deleted since the image, and the line diff of a modified
+  file between its version in the image and in the container.
 - **Logs**: live stream, search, pause and resume, download.
 - **X-ray**: image, state, command, environment (secrets masked, revealed one at a time and logged), ports, networks,
   mounts.
-- **Read-only mode** (`--read-only`): no write at all.
+- **Images**: every image of the daemon, its layers and its configuration (masked), and its files read only,
+  without creating a container.
+- **Snapshots**: a photo of a container's files (metadata and a keyed fingerprint, never the content), compared with
+  another photo or with the current container.
+- **Secrets**: the names of everything the agent masks, across every container; never a value unless revealed, one
+  at a time.
+- **Search** (`Ctrl K`): containers, Compose projects, pages, and the files of an index already built.
+- **Themes**: dark by default, light on demand, kept in the browser.
+- **Read-only mode** (`--read-only`): no write into the containers; the interface shows the agent's real state.
 
 One server, one user, an interface in English and French, a single static binary with the interface embedded, no
-database, no telemetry. Processes and resources, start/stop and a web terminal are planned for v0.2.
+database, no telemetry. Processes and resources, start/stop and a web terminal are postponed after v0.2.
 
 ## Quick start
 
@@ -60,10 +71,12 @@ Prefer a plain binary run by systemd? See [Binary and systemd](docs/en/install.m
 
 ## Documentation
 
+- [A tour of the interface](docs/en/guide.md): the layout, the search, the panels, the Images, Secrets and Snapshots
+  pages, the theme, read-only mode as the interface shows it.
 - [Installation](docs/en/install.md): Docker, binary and systemd, reverse proxy, token, upgrade, uninstall, verifying
   the signatures and SBOMs of a release.
 - [Security model](docs/en/security.md): what the agent can do, what protects it, how to expose it.
-- [Known limitations](docs/en/limitations.md): what v0.1 does not do, or does not detect.
+- [Known limitations](docs/en/limitations.md): what Hublot-Kit does not do, or does not detect.
 
 ## Development
 
@@ -78,8 +91,9 @@ make test-linux
 
 On macOS (Docker Desktop), `/proc/<pid>/root` only exists inside Docker's virtual machine, so the agent runs in a
 container: `make web && scripts/dev-agent.sh`. The interface in development mode proxies to the agent on
-`127.0.0.1:7878`: `cd web && npm run dev`. The technical spec is in
-[docs/superpowers/specs](docs/superpowers/specs/2026-10-07-hublot-kit-v0.1-design.md) (in French).
+`127.0.0.1:7878`: `cd web && npm run dev`. The technical specs are in docs/superpowers/specs (in French):
+[v0.1](docs/superpowers/specs/2026-10-07-hublot-kit-v0.1-design.md), the reference, and
+[v0.2](docs/superpowers/specs/2026-10-23-hublot-kit-v0.2-design.md), its complement.
 
 ## License
 

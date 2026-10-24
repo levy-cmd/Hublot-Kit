@@ -57,16 +57,40 @@
 	</dl>
 	{#each details as d, i (i)}<p>{d}</p>{/each}
 	<div class="actions">
-		<button type="button" onclick={oncancel}>{t('confirm.cancel')}</button>
-		<button type="button" class="primary" onclick={confirm}>{t('confirm.ok')}</button>
+		<button type="button" class="btn" onclick={oncancel}>{t('confirm.cancel')}</button>
+		<button type="button" class="btn primary" onclick={confirm}>{t('confirm.ok')}</button>
 	</div>
 </dialog>
 
 <style>
-	dialog { box-sizing: border-box; max-width: min(36rem, calc(100vw - 2rem)); }
-	h2 { font-size: 1.1rem; margin-top: 0; }
-	dl { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 0.25rem 0.75rem; }
-	dd { margin: 0; overflow-wrap: anywhere; }
-	.actions { display: flex; justify-content: flex-end; gap: 0.5rem; }
-	.primary { font-weight: 600; }
+	dialog {
+		max-width: min(36rem, calc(100vw - 2rem));
+	}
+	h2 {
+		font-size: var(--t-l);
+		margin-bottom: 0.75rem;
+	}
+	dl {
+		display: grid;
+		grid-template-columns: auto minmax(0, 1fr);
+		gap: 0.35rem 0.75rem;
+		margin: 0 0 0.75rem;
+	}
+	dt {
+		color: var(--texte-doux);
+	}
+	dd {
+		margin: 0;
+		overflow-wrap: anywhere;
+	}
+	p {
+		margin-bottom: 0.5rem;
+		color: var(--texte-doux);
+	}
+	.actions {
+		display: flex;
+		justify-content: flex-end;
+		gap: 0.5rem;
+		margin-top: 1rem;
+	}
 </style>
