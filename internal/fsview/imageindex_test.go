@@ -1369,37 +1369,93 @@ type failing struct{ rc io.ReadCloser }
 func (f failing) Read([]byte) (int, error) { return 0, errors.New("connection reset by peer") }
 func (f failing) Close() error             { return f.rc.Close() }
 
-// A passing error (Docker cut) is not kept: delivered to the client that
-// still polls, forgotten after Idle when nobody asks for it (review of
-// tranche 6: an hour later, the file showed "Docker unavailable").
-func TestImageExtractTransientErrorForgotten(t *testing.T) {
-	var cut atomic.Bool
-	cut.Store(true)
-	h := newSaveHook(imageDocker(saveArchive(t, layerOf(t, tfile("f", "F")))), func(_ context.Context, _ string, rc io.ReadCloser) io.ReadCloser {
-		if cut.Load() {
-			return failing{rc}
-		}
-		return rc
-	})
-	fsys := readyImage(t, NewViews(h, Options{Extract: ExtractLimits{Idle: 50 * time.Millisecond}}), imgID)
+// failingAfter is an export cut once release is closed: the extraction
+// cannot end before the test lets it.
+type failingAfter struct {
+	release chan struct{}
+	rc      io.ReadCloser
+}
 
-	// A client that polls gets it once.
+func (f failingAfter) Read([]byte) (int, error) {
+	<-f.release
+	return 0, errors.New("connection reset by peer")
+}
+func (f failingAfter) Close() error { return f.rc.Close() }
+
+// extractState: whether v holds an extraction of image id at path p, and
+// its error once it has ended.
+func extractState(v *Views, id, p string) (held, ended bool, err error) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	e, ok := v.extracts[id+"\x00"+p]
+	if !ok {
+		return false, false, nil
+	}
+	select {
+	case <-e.done:
+		return true, true, e.err
+	default:
+		return true, false, nil
+	}
+}
+
+// waitState polls extractState until cond holds (an observable state, never
+// a duration: review of the CI run 40090985257).
+func waitState(t *testing.T, v *Views, what string, cond func(held, ended bool, err error) bool) {
+	t.Helper()
+	for deadline := time.Now().Add(5 * time.Second); !cond(extractState(v, imgID, "/f")); time.Sleep(time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("%s : jamais atteint", what)
+		}
+	}
+}
+
+// A passing error (Docker cut) is not kept: delivered once to the client
+// that still polls, forgotten after Idle when nobody asks for it (review of
+// tranche 6: an hour later, the file showed "Docker unavailable"); then a
+// new extraction succeeds.
+func TestImageExtractTransientErrorForgotten(t *testing.T) {
+	var n atomic.Int32 // extractions started
+	release := make(chan struct{})
+	h := newSaveHook(imageDocker(saveArchive(t, layerOf(t, tfile("f", "F")))), func(_ context.Context, _ string, rc io.ReadCloser) io.ReadCloser {
+		switch n.Add(1) {
+		case 1:
+			return failing{rc} // Docker cut, a client polls
+		case 2:
+			return failingAfter{release, rc} // cut again, the client gone
+		}
+		return rc // Docker back
+	})
+	// Idle far above the few statements between the start of the second
+	// extraction and its failure: it fails as a passing error, not as an
+	// abandoned one.
+	v := NewViews(h, Options{Extract: ExtractLimits{Idle: time.Second}})
+	fsys := readyImage(t, v, imgID)
+
+	// 1. Delivered once to the client that polls, and not kept.
 	if _, err := readImage(t, fsys, "/f"); !errors.Is(err, dockerx.ErrUnavailable) {
 		t.Fatalf("export coupé : %v", err)
 	}
-	// A client gone: the error stays nowhere once Idle has passed.
+	if held, _, _ := extractState(v, imgID, "/f"); held {
+		t.Fatal("erreur passagère gardée après sa délivrance")
+	}
+	// 2. The next request starts a new extraction; it cannot have ended.
 	if _, err := fsys.Open(tctx, "/f"); !errors.Is(err, ErrIndexing) {
 		t.Fatalf("seconde extraction : %v", err)
 	}
-	for deadline := time.Now().Add(2 * time.Second); h.callsOf(imgID) < 3; time.Sleep(time.Millisecond) {
-		if time.Now().After(deadline) {
-			t.Fatal("seconde extraction jamais lancée")
-		}
-	}
-	time.Sleep(200 * time.Millisecond)
-	cut.Store(false) // Docker is back
+	waitState(t, v, "seconde extraction lancée", func(held, ended bool, _ error) bool { return held && !ended && n.Load() == 2 })
+	close(release) // it fails, nobody asks for it
+	waitState(t, v, "erreur passagère de la seconde extraction", func(held, ended bool, err error) bool {
+		return held && ended && errors.Is(err, dockerx.ErrUnavailable)
+	})
+	// 3. Forgotten after Idle, without any request.
+	waitState(t, v, "erreur oubliée", func(held, _ bool, _ error) bool { return !held })
+	// 4. Docker is back: a new extraction succeeds.
 	if got, err := readImage(t, fsys, "/f"); err != nil || got != "F" {
 		t.Errorf("après le retour de Docker : %q, %v", got, err)
+	}
+	if got := n.Load(); got != 3 {
+		t.Errorf("%d extractions, attendu 3", got)
 	}
 }
 

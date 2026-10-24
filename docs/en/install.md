@@ -23,10 +23,11 @@ docker run -d --name hublot-kit \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -v hublot-data:/data \
   -p 127.0.0.1:7878:7878 \
-  ghcr.io/levy-cmd/hublot-kit:0.1
+  ghcr.io/levy-cmd/hublot-kit:0.2
 ```
 
-`0.1` follows the 0.1.x patch releases; `0.1.0` never moves. There is no `latest` tag.
+`0.2` follows the 0.2.x patch releases; `0.2.0` never moves. There is no `latest` tag. `0.1` remains available
+for the 0.1.x series.
 
 ### Why each option
 
@@ -38,7 +39,7 @@ docker run -d --name hublot-kit \
 | `--security-opt apparmor=unconfined` | AppArmor hosts: without it, containers started with `--privileged` or `apparmor=unconfined` cannot be explored (the error names this option). No effect on other hosts. |
 | `--security-opt label=disable` | SELinux hosts: lets the agent read other containers and use the Docker socket. Docker already applies it to a container started with `--pid=host`, but that is not a documented contract. Do not use any other `label=` option: it would cut the agent off the socket. No effect on other hosts. |
 | `-v /var/run/docker.sock:…` | the agent's only way to Docker. Mounting it `:ro` protects nothing. |
-| `-v hublot-data:/data` | the hash of the access token and the audit log. |
+| `-v hublot-data:/data` | the hash of the access token, the audit log, and the snapshots and their key. |
 | `-p 127.0.0.1:7878:7878` | reachable from the server only; use an SSH tunnel or a reverse proxy. |
 
 `--privileged` is not needed. The agent is already root on the host in practice: lifting its AppArmor confinement,
@@ -101,7 +102,7 @@ The alternative to the container: the static binary, run as root by systemd. Che
 ([Verify the release](#verify-the-release)). Use `amd64` or `arm64`.
 
 ```sh
-V=0.1.2
+V=0.2.0
 ARCH=amd64
 curl -fLO "https://github.com/levy-cmd/Hublot-Kit/releases/download/v$V/hublot-kit_${V}_linux_${ARCH}.tar.gz"
 tar -xzf "hublot-kit_${V}_linux_${ARCH}.tar.gz"
@@ -184,8 +185,10 @@ sudo systemctl restart hublot-kit
 
 ## Data directory
 
-`--data-dir` must be dedicated to Hublot-Kit. It holds `token.sha256` (the hash of the token, never the token) and
-`audit.log`. Missing, it is created with mode 0700. Existing, its mode is kept, but the agent refuses to start if it
+`--data-dir` must be dedicated to Hublot-Kit. It holds `token.sha256` (the hash of the token, never the token),
+`audit.log`, and, once a snapshot has been taken, `snapshot.key` (the HMAC key of the snapshots, 0600; a new one
+with `hublot rotate-snapshot-key`, agent stopped) and `snapshots/` (their manifests, 0700, never the content of a
+file). Missing, it is created with mode 0700. Existing, its mode is kept, but the agent refuses to start if it
 is a symbolic link, if it belongs to another user, or if its group or others can write to it (`/tmp`, for example).
 Its files are never opened through a symbolic link. The audit log is not rotated.
 
@@ -195,7 +198,7 @@ With Docker, pull the image, remove the container and run the command of [Docker
 `hublot-data` volume keeps the token.
 
 ```sh
-docker pull ghcr.io/levy-cmd/hublot-kit:0.1
+docker pull ghcr.io/levy-cmd/hublot-kit:0.2
 docker rm -f hublot-kit
 ```
 
@@ -250,7 +253,7 @@ The signature of `checksums.txt` followed by the checksum is enough; each archiv
 (`<archive>.sigstore.json`), an optional direct check with the same `cosign verify-blob` command.
 
 ```sh
-V=0.1.2
+V=0.2.0
 ARCH=amd64
 BASE="https://github.com/levy-cmd/Hublot-Kit/releases/download/v$V"
 curl -fLO "$BASE/hublot-kit_${V}_linux_${ARCH}.tar.gz"
@@ -268,16 +271,16 @@ sha256sum --ignore-missing -c checksums.txt
 
 The image is signed by digest, for linux/amd64 and linux/arm64, and carries an SBOM attestation. The signature covers
 the image index, which names by digest the image of each platform and its SBOM attestation. The identity below accepts
-any `v0.1.N` release and refuses a pre-release (`-rc.N`).
+any `v0.2.N` release and refuses a pre-release (`-rc.N`).
 
 ```sh
 cosign verify \
-  --certificate-identity-regexp '^https://github\.com/levy-cmd/Hublot-Kit/\.github/workflows/release\.yml@refs/tags/v0\.1\.[0-9]+$' \
+  --certificate-identity-regexp '^https://github\.com/levy-cmd/Hublot-Kit/\.github/workflows/release\.yml@refs/tags/v0\.2\.[0-9]+$' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  ghcr.io/levy-cmd/hublot-kit:0.1
-docker buildx imagetools inspect ghcr.io/levy-cmd/hublot-kit:0.1 --format '{{ json .SBOM }}'
+  ghcr.io/levy-cmd/hublot-kit:0.2
+docker buildx imagetools inspect ghcr.io/levy-cmd/hublot-kit:0.2 --format '{{ json .SBOM }}'
 ```
 
-To run exactly the image you verified, replace `:0.1` in the command of [Docker](#docker-recommended) with the digest
+To run exactly the image you verified, replace `:0.2` in the command of [Docker](#docker-recommended) with the digest
 of the verified image: `cosign verify` prints JSON, where `critical.image.docker-manifest-digest` holds it
 (`sha256:…`). The reference becomes `ghcr.io/levy-cmd/hublot-kit@sha256:…`.

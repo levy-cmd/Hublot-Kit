@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Vérifie une image de release avec la commande exacte de la spec §8, celle de
 # la doc (plan Lancement). Seule la référence d'image change : IMAGE remplace
-# ghcr.io/levy-cmd/hublot-kit:0.1. Puis : jeton lu dans `docker logs`, connexion,
+# ghcr.io/levy-cmd/hublot-kit:0.2. Puis : jeton lu dans `docker logs`, connexion,
 # /api/meta, l'explorateur sur les cinq cibles de scripts/release-lib.sh, une
 # édition et un envoi, la recréation du conteneur sur le même volume, et la
 # rotation du jeton par docker exec.
@@ -11,7 +11,7 @@
 #
 # Usage : scripts/check-image.sh IMAGE [VERSION_ATTENDUE]   (en root sur les VM)
 #   scripts/check-image.sh ghcr.io/levy-cmd/hublot-kit:0.1.0-rc.1 0.1.0-rc.1
-#   scripts/check-image.sh ghcr.io/levy-cmd/hublot-kit:0.1           (commande inchangée)
+#   scripts/check-image.sh ghcr.io/levy-cmd/hublot-kit:0.2           (commande inchangée)
 set -euo pipefail
 cd "$(dirname "$0")/.."
 . scripts/release-lib.sh

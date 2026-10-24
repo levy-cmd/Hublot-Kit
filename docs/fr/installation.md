@@ -24,10 +24,11 @@ docker run -d --name hublot-kit \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -v hublot-data:/data \
   -p 127.0.0.1:7878:7878 \
-  ghcr.io/levy-cmd/hublot-kit:0.1
+  ghcr.io/levy-cmd/hublot-kit:0.2
 ```
 
-`0.1` suit les correctifs 0.1.x ; `0.1.0` ne bouge jamais. Il n'y a pas d'étiquette `latest`.
+`0.2` suit les correctifs 0.2.x ; `0.2.0` ne bouge jamais. Il n'y a pas d'étiquette `latest`. `0.1` reste
+disponible pour la série 0.1.x.
 
 ### À quoi sert chaque option
 
@@ -39,7 +40,7 @@ docker run -d --name hublot-kit \
 | `--security-opt apparmor=unconfined` | hôtes AppArmor : sans elle, les conteneurs lancés en `--privileged` ou `apparmor=unconfined` ne s'explorent pas (l'erreur nomme cette option). Sans effet ailleurs. |
 | `--security-opt label=disable` | hôtes SELinux : permet à l'agent de lire les autres conteneurs et d'utiliser le socket Docker. Docker l'applique déjà à un conteneur lancé avec `--pid=host`, mais ce n'est pas un contrat documenté. N'utilisez aucune autre option `label=` : elle couperait l'agent du socket. Sans effet ailleurs. |
 | `-v /var/run/docker.sock:…` | le seul accès de l'agent à Docker. Le monter en `:ro` ne protège rien. |
-| `-v hublot-data:/data` | l'empreinte du jeton d'accès et le journal d'audit. |
+| `-v hublot-data:/data` | l'empreinte du jeton d'accès, le journal d'audit, et les snapshots et leur clé. |
 | `-p 127.0.0.1:7878:7878` | joignable depuis le serveur seulement ; passez par un tunnel SSH ou un reverse proxy. |
 
 `--privileged` n'est pas nécessaire. L'agent est déjà root sur l'hôte de fait : lever son confinement AppArmor, ou le
@@ -104,7 +105,7 @@ L'alternative au conteneur : le binaire statique, lancé en root par systemd. V�
 ([Vérifier la release](#vérifier-la-release)). Utilisez `amd64` ou `arm64`.
 
 ```sh
-V=0.1.2
+V=0.2.0
 ARCH=amd64
 curl -fLO "https://github.com/levy-cmd/Hublot-Kit/releases/download/v$V/hublot-kit_${V}_linux_${ARCH}.tar.gz"
 tar -xzf "hublot-kit_${V}_linux_${ARCH}.tar.gz"
@@ -188,8 +189,9 @@ sudo systemctl restart hublot-kit
 
 ## Dossier de données
 
-`--data-dir` doit être dédié à Hublot-Kit. Il contient `token.sha256` (l'empreinte du jeton, jamais le jeton) et
-`audit.log`. Absent, il est créé en 0700. Existant, ses droits ne sont pas modifiés, mais l'agent refuse de démarrer
+`--data-dir` doit être dédié à Hublot-Kit. Il contient `token.sha256` (l'empreinte du jeton, jamais le jeton),
+`audit.log` et, dès le premier snapshot, `snapshot.key` (la clé HMAC des snapshots, 0600 ; une nouvelle avec
+`hublot rotate-snapshot-key`, agent arrêté) et `snapshots/` (leurs manifestes, 0700, jamais le contenu d'un fichier). Absent, il est créé en 0700. Existant, ses droits ne sont pas modifiés, mais l'agent refuse de démarrer
 si c'est un lien symbolique, s'il appartient à un autre utilisateur, ou s'il est accessible en écriture au groupe ou à
 tous (`/tmp`, par exemple). Ses fichiers ne sont jamais ouverts à travers un lien symbolique. Le journal d'audit n'est
 pas tourné.
@@ -200,7 +202,7 @@ Avec Docker, tirez l'image, supprimez le conteneur et relancez la commande de [D
 `hublot-data` garde le jeton.
 
 ```sh
-docker pull ghcr.io/levy-cmd/hublot-kit:0.1
+docker pull ghcr.io/levy-cmd/hublot-kit:0.2
 docker rm -f hublot-kit
 ```
 
@@ -255,7 +257,7 @@ La signature de `checksums.txt` suivie de la somme suffit ; chaque archive a aus
 (`<archive>.sigstore.json`), contrôle direct facultatif par la même commande `cosign verify-blob`.
 
 ```sh
-V=0.1.2
+V=0.2.0
 ARCH=amd64
 BASE="https://github.com/levy-cmd/Hublot-Kit/releases/download/v$V"
 curl -fLO "$BASE/hublot-kit_${V}_linux_${ARCH}.tar.gz"
@@ -273,16 +275,16 @@ sha256sum --ignore-missing -c checksums.txt
 
 L'image est signée par son empreinte, pour linux/amd64 et linux/arm64, et porte une attestation SBOM. La signature
 couvre l'index de l'image, qui désigne par empreinte l'image de chaque plateforme et son attestation SBOM. L'identité
-ci-dessous accepte toute release `v0.1.N` et refuse une pré-version (`-rc.N`).
+ci-dessous accepte toute release `v0.2.N` et refuse une pré-version (`-rc.N`).
 
 ```sh
 cosign verify \
-  --certificate-identity-regexp '^https://github\.com/levy-cmd/Hublot-Kit/\.github/workflows/release\.yml@refs/tags/v0\.1\.[0-9]+$' \
+  --certificate-identity-regexp '^https://github\.com/levy-cmd/Hublot-Kit/\.github/workflows/release\.yml@refs/tags/v0\.2\.[0-9]+$' \
   --certificate-oidc-issuer https://token.actions.githubusercontent.com \
-  ghcr.io/levy-cmd/hublot-kit:0.1
-docker buildx imagetools inspect ghcr.io/levy-cmd/hublot-kit:0.1 --format '{{ json .SBOM }}'
+  ghcr.io/levy-cmd/hublot-kit:0.2
+docker buildx imagetools inspect ghcr.io/levy-cmd/hublot-kit:0.2 --format '{{ json .SBOM }}'
 ```
 
-Pour lancer exactement l'image vérifiée, remplacez `:0.1` dans la commande de [Docker](#docker-recommandé) par
+Pour lancer exactement l'image vérifiée, remplacez `:0.2` dans la commande de [Docker](#docker-recommandé) par
 l'empreinte de l'image vérifiée : `cosign verify` affiche du JSON, où `critical.image.docker-manifest-digest` la
 donne (`sha256:…`). La référence devient `ghcr.io/levy-cmd/hublot-kit@sha256:…`.

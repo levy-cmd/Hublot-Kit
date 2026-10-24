@@ -43,7 +43,7 @@ refused() {
   fi
 }
 
-img='  ghcr.io/levy-cmd/hublot-kit:0.1'
+img='  ghcr.io/levy-cmd/hublot-kit:0.2'
 mutate image-010 "$img" "$img.0" && refused image-010 "dernière ligne"
 mutate espace-final "$img" "$img " && refused espace-final "dernière ligne"
 mutate indentation 'docker run -d --name hublot-kit \' '  docker run -d --name hublot-kit \' && refused indentation introuvable
@@ -62,7 +62,7 @@ cp "$spec" "$tmp/image-option.md" && refused image-option "image refusée" '--pr
 got=$(. scripts/release-lib.sh && hk_spec_args hk-local-test:arm64 && printf '%s|' "${HK_RUN[@]}")
 want='docker|run|-d|--name|hublot-kit|--pid=host|--cgroupns=host|--cap-add|SYS_PTRACE|--security-opt|apparmor=unconfined|--security-opt|label=disable|-v|/var/run/docker.sock:/var/run/docker.sock|-v|hublot-data:/data|-p|127.0.0.1:7878:7878|hk-local-test:arm64|'
 [ "$got" = "$want" ] && echo "ok spec : image locale" || bad "spec : $got"
-pub=ghcr.io/levy-cmd/hublot-kit:0.1
+pub=ghcr.io/levy-cmd/hublot-kit:0.2
 got=$(. scripts/release-lib.sh && hk_spec_args "$pub" && printf '%s|' "${HK_RUN[@]}")
 [ "$got" = "${want%hk-local-test:arm64|}$pub|" ] && echo "ok spec : image publique" || bad "spec publique : $got"
 

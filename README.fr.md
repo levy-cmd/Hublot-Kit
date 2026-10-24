@@ -55,7 +55,7 @@ docker run -d --name hublot-kit \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -v hublot-data:/data \
   -p 127.0.0.1:7878:7878 \
-  ghcr.io/levy-cmd/hublot-kit:0.1
+  ghcr.io/levy-cmd/hublot-kit:0.2
 ```
 
 Le jeton d'accès s'affiche une seule fois, au premier lancement, sur la ligne

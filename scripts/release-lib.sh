@@ -12,7 +12,7 @@ HK_BASE=http://127.0.0.1:7878
 hk_fail() { echo "ÉCHEC : $*" >&2; exit 1; }
 
 HK_SPEC_FILE=${HK_SPEC_FILE:-docs/superpowers/specs/2026-10-07-hublot-kit-v0.1-design.md}
-HK_IMAGE_REF=ghcr.io/levy-cmd/hublot-kit:0.1
+HK_IMAGE_REF=ghcr.io/levy-cmd/hublot-kit:0.2
 HK_SPEC_LINES=8
 
 # La commande `docker run` de la spec §8, à l'octet près (celle de la doc :
