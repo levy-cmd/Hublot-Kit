@@ -14,6 +14,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -176,28 +177,50 @@ func TestV02StalledImagePreviewIsCut(t *testing.T) {
 	}
 }
 
+// slowClient is a writer that takes rate per byte, as a client that reads
+// slowly, and keeps the write deadline as a connection does: a write that
+// would end past it stops there with a timeout. In process: through TCP,
+// a tiny receive window stalls on the persist timer, and large kernel
+// buffers hide the writes.
+type slowClient struct {
+	*httptest.ResponseRecorder
+	rate     time.Duration
+	deadline time.Time
+}
+
+func (s *slowClient) SetWriteDeadline(t time.Time) error { s.deadline = t; return nil }
+
+func (s *slowClient) Write(p []byte) (int, error) {
+	end := time.Now().Add(time.Duration(len(p)) * s.rate)
+	if !s.deadline.IsZero() && end.After(s.deadline) {
+		time.Sleep(time.Until(s.deadline))
+		return 0, os.ErrDeadlineExceeded
+	}
+	time.Sleep(time.Until(end))
+	return s.ResponseRecorder.Write(p)
+}
+
 // A slow client that reads goes on: the deadline slides with each write.
+// 2 MiB at 1 MiB/s take 2 s, past writeStallTimeout (300 ms).
 func TestV02SlowImagePreviewGoesOn(t *testing.T) {
 	stallWrites(t, 300*time.Millisecond)
 	f, _, c := imageFSFixture(t, false, bigImage(t))
 	path := imgFS("/file?path=/big.txt")
 	until(t, f, "GET", path, c)
-	addr := f.serve(t, 5*time.Second)
-	conn := stalledGet(t, addr, path, c)
-	got := 512
-	buf := make([]byte, 64<<10)
+	r := httptest.NewRequest("GET", "http://example.com"+path, nil)
+	r.AddCookie(c)
+	w := &slowClient{ResponseRecorder: httptest.NewRecorder(), rate: time.Second / (1 << 20)}
 	start := time.Now()
-	for {
-		conn.SetReadDeadline(time.Now().Add(5 * time.Second))
-		n, err := conn.Read(buf)
-		got += n
-		if err != nil {
-			break
-		}
-		time.Sleep(10 * time.Millisecond) // about 2 MiB in more than writeStallTimeout
-	}
-	if got < previewMax || time.Since(start) < 300*time.Millisecond {
-		t.Errorf("client lent : %d octets en %s", got, time.Since(start))
+	func() {
+		defer func() {
+			if v := recover(); v != nil {
+				t.Errorf("client lent coupé après %d octets en %s : %v", w.Body.Len(), time.Since(start), v)
+			}
+		}()
+		f.h.ServeHTTP(w, r)
+	}()
+	if w.Body.Len() != previewMax {
+		t.Errorf("client lent : %d octets sur %d", w.Body.Len(), previewMax)
 	}
 }
 

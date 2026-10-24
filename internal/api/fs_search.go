@@ -104,7 +104,7 @@ func (s *server) fsSearch(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	info, err := s.d.Docker.Inspect(ctx, id)
 	if err != nil {
-		writeFSError(w, err)
+		writeDockerRouteError(w, err)
 		return
 	}
 	if info.Running && info.Pid != 0 {
@@ -126,7 +126,7 @@ func (s *server) fsSearch(w http.ResponseWriter, r *http.Request) {
 	}, nil)
 	release()
 	if err != nil {
-		writeFSError(w, err)
+		writeDockerRouteError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, res)

@@ -186,7 +186,7 @@ func (s *server) figures(c *figureCache) http.HandlerFunc {
 					fmt.Sprintf("Docker did not answer within %s (export of the container in progress?)", figuresTimeout))
 				return
 			}
-			writeFSError(w, err)
+			writeDockerRouteError(w, err)
 		}
 		info, err := s.d.Docker.Inspect(ctx, ref)
 		if err != nil {

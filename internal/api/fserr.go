@@ -34,6 +34,23 @@ func writeFSError(w http.ResponseWriter, err error) {
 	writeError(w, status, code, errorDetail(status, err))
 }
 
+// internalDetail: the detail of an unclassified error on a route of v0.2.
+const internalDetail = "internal error (see the agent's log)"
+
+// writeDockerRouteError is writeFSError for the routes of v0.2 that ask
+// Docker (figures, search, files of an image): an error that nothing
+// classifies (internal) may be the daemon's own text, which names the
+// password of DOCKER_HOST=tcp://user:password@… (v0.1.2, audit). Its detail
+// is fixed; the masked text goes to the log only.
+func writeDockerRouteError(w http.ResponseWriter, err error) {
+	if status, code := fsErrorStatus(err); code == "internal" && !errors.As(err, new(*fsview.IndexingError)) {
+		slog.Warn("route error", "code", code, "status", status, "err", secrets.Line(err.Error()))
+		writeError(w, status, code, internalDetail)
+		return
+	}
+	writeFSError(w, err)
+}
+
 // errorDetail is the detail of an error response: fixed for a 404 and for
 // an error of the Docker daemon (dockerDetail), the error's text otherwise.
 func errorDetail(status int, err error) string {

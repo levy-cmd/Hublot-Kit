@@ -334,7 +334,7 @@ type metaDocker struct {
 func (s *server) meta(w http.ResponseWriter, r *http.Request) {
 	info, err := s.d.Docker.Info(r.Context())
 	if err != nil {
-		slog.Debug("docker info", "err", err)
+		slog.Debug("docker info", "err", secrets.Line(err.Error()))
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
 		"version":  s.d.Version,

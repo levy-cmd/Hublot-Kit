@@ -26,8 +26,8 @@ Treat the access token like the root password of the server.
   later one line per address counts the failures that were not written, even if they stopped.
 - A connection must send its first byte within 5 seconds, a request must be read within 15 seconds (headers within
   10), an edit or upload once logged in within 10 minutes; an idle connection is closed after a minute. The agent
-  keeps at most 512 connections open, 64 per address (`--max-conns-per-ip`). A download or a logs stream whose
-  client stops reading for 30 seconds is ended.
+  keeps at most 512 connections open, 64 per address (`--max-conns-per-ip`). A download, the preview of a file
+  of an image or a logs stream whose client stops reading for 30 seconds is ended.
 - The session lives in memory for 12 hours. Its cookie is `HttpOnly`, `SameSite=Strict`, and `Secure` with TLS or an
   `https` public origin.
 - Every request other than GET or HEAD must carry an `Origin` header equal to the trusted origin (`--public-origin`,

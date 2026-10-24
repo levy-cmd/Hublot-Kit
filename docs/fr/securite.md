@@ -28,8 +28,8 @@ Traitez le jeton d'accès comme le mot de passe root du serveur.
   écrits, même s'ils ont cessé.
 - Une connexion doit envoyer son premier octet en 5 secondes, une requête être lue en 15 secondes (ses en-têtes en
   10), une édition ou un envoi, une fois connecté, en 10 minutes ; une connexion inactive est fermée au bout d'une
-  minute. L'agent garde au plus 512 connexions ouvertes, 64 par adresse (`--max-conns-per-ip`). Un téléchargement ou
-  un flux de logs dont le client ne lit plus pendant 30 secondes est arrêté.
+  minute. L'agent garde au plus 512 connexions ouvertes, 64 par adresse (`--max-conns-per-ip`). Un téléchargement, l'aperçu
+  d'un fichier d'image ou un flux de logs dont le client ne lit plus pendant 30 secondes est arrêté.
 - La session vit en mémoire pendant 12 heures. Son cookie est `HttpOnly`, `SameSite=Strict`, et `Secure` avec TLS ou
   une origine publique en `https`.
 - Toute requête autre que GET ou HEAD doit porter un en-tête `Origin` égal à l'origine de confiance
