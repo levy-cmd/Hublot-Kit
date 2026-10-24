@@ -1,42 +1,37 @@
 ---
 branche: phase/v0.2
-base: 5b3c947
+base: 371ccdb
 de: Livaille An-nour (session Claude principale)
-le: 2026-10-23
+le: 2026-10-24
 repris_par:
 verif: make test
 ---
 
 ## Objectif
-Livrer la v0.2 (interface Graphite & Émeraude, Secrets, Images, Snapshots) en 10 tranches verticales : plan `docs/superpowers/plans/2026-10-23-v0.2.md`, suivi `.claude/handoff/phase-v0.2.registre.md`.
+Publier la v0.2 (interface Graphite & Émeraude, Secrets, Images, diff, Snapshots) : plan `docs/superpowers/plans/2026-10-23-v0.2.md`, suivi `.claude/handoff/phase-v0.2.registre.md`.
 
 ## Fait
-- Tranches 1 à 5 validées (relecteur + Codex), consignées au registre (dernière : 7640785).
-- Tranche 6 (fichiers d'image) : 853b601, validée par les deux revues ; suivi des Minor en 5b3c947, CI PR #10 verte (run 40020572507). **Pas encore consignée.**
-- Audit de sécurité indépendant de 7640785 : 5 constats prouvés (2 Important, 3 Minor). Liste dans le prompt de l'agent v0.1.2, à recopier au registre à la clôture du correctif.
-- Recherche concurrents (Portainer, Dozzle, Dockhand, Yacht, Lazydocker) faite, sources dans la conversation, non écrite dans le dépôt.
+- Tranches 1 à 9 validées (relecteur + Codex), consignées au registre.
+- Tranche 10, étapes 1 à 3 : test de lecture seule côté Docker, specs et doc à jour, gitleaks à 0, revue de toute la branche « prête pour la rc ». CI PR #10 verte sur 371ccdb.
+- v0.1.2 publiée (correctifs d'audit), fusionnée dans `main` puis dans `phase/v0.2`.
 
 ## Décisions
-- Tranches séquentielles : disque du Mac presque plein, un seul Docker ; le parallèle 5/8 n'a pas été jugé rentable.
-- Utilisateur (2026-10-23) : les 5 failles se corrigent sur `phase/v0.1.2` (depuis v0.1.1 = origin/main 6b30eab), puis sont reportées dans la v0.2. Tag, release et image v0.1.2 : ARRÊT, accord de l'utilisateur à chaque étape.
-- Risque résiduel accepté en tranche 5 (`secrets.History`, marqueur de shell dans une valeur d'ARG) : à écrire dans les limites à la tranche 10.
+- Pas de v0.1.3 : les trous restants de la v0.1.2 exigent une session et sont corrigés dans la v0.2.0.
+- Chaque étape extérieure (fusion dans `main`, tags, releases) attend l'accord de l'utilisateur.
 
 ## Impasses
-- Reviews Codex = lecture seule, sans exécution ; les sondes prouvées viennent du relecteur.
-- Une seule règle « clé `NOM=` » ne ferme pas `ARG` à valeur avec blanc : seule la règle « une affectation, en dernier mot » tient (registre, tranche 5).
+- Les revues Codex sont en lecture seule : trois de leurs constats se sont révélés faux à la vérification (registre, tranches 7, 9 et report v0.1.2). Toujours vérifier dans le code avant d'agir.
+- Contrôler des numéros calculés ne prouve pas leur rendu : la gouttière du diff n'a été prise qu'en Chromium.
 
 ## Prochain geste
-1. Relancer l'agent v0.1.2 : worktree `.claude/worktrees/agent-a9e9962a8f58d5d98` (branche locale `phase/v0.1.2`, tests rouges 350222b, correctifs non commités dans 7 fichiers). Puis revues, PR brouillon pour la CI, report dans `phase/v0.2`.
-2. Trancher `TestCost` (`internal/secrets/secrets_test.go`, 5b3c947) : Codex le juge affaibli (plafonds 5 s, ratio 20). Avis du relecteur interrompu par le redémarrage. Ensuite consigner la tranche 6.
-3. Tranche 7 (diff de contenu avec l'image) : plan, section « Tranche 7 ».
-4. Étude de rentabilisation (open-core) à relancer, puis à publier en artifact pour l'utilisateur.
+1. Étape 4 : PR #10 hors brouillon, fusion dans `main` (accord de l'utilisateur).
+2. Étape 5 : `v0.2.0-rc.1` (procédure de la tâche 9 du plan Lancement), vérification anonyme.
+3. PR de bascule de la doc d'installation sur 0.2 (registre, tranche 10), puis étape 6 : `v0.2.0`.
 
 ## Pièges
-- **Ne pas pousser `phase/v0.1.2` avant les correctifs** : le dépôt est public, les tests rouges décrivent des attaques sans authentification.
 - Le dépôt principal reste sur `phase/interface` ; registre et handoff s'écrivent par un worktree détaché, `set -e`, HEAD vérifié.
-- PR #10 est un brouillon pour la CI seulement : ne pas la fusionner avant la tranche 10.
-- Un agent a lancé `docker image prune -f` sans mandat : l'interdire dans chaque prompt qui touche Docker.
-- Après un redémarrage : relancer Docker Desktop ; VM Lima `hk-ubuntu` et `hk-fedora` arrêtées (ne jamais les recréer).
+- Une démo locale tourne (`hublot-v02-demo`, port 7878, worktree `scratchpad/demo-v02`) : à arrêter avec l'accord de l'utilisateur.
+- cosign n'est installé ni sur le Mac ni dans hk-ubuntu : la vérification anonyme télécharge la v3.1.3 officielle dans un dossier temporaire.
 
 ## Pré-requis
 skills : econo, codex | variables d'env : PATH (Homebrew), DOCKER_HOST | services : Docker Desktop, Lima, `gh` authentifié
