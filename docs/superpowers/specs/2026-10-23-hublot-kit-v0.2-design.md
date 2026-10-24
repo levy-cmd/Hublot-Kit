@@ -3,7 +3,7 @@
 - **Date** : 2026-10-23
 - **Statut** : toutes les décisions de l'utilisateur du 2026-10-23 sont appliquées (v0.2 §0.1), et aucune question ne reste ouverte. Correctifs de revue du 2026-10-23 intégrés (registre). Implémentée (2026-10-24) : tranches 1 à 9 validées par le relecteur et par Codex, CI de la PR #10 verte ; tranche 10 (clôture) en cours. Les écarts constatés pendant l'exécution sont en v0.2 §11
 - **Référence** : la spec v0.1 (`2026-10-07-hublot-kit-v0.1-design.md`) reste la référence pour tout ce que ce document ne change pas. Ses numéros de section (§5.1, §7…) sont cités tels quels ; les sections de ce document sont notées « v0.2 §N ».
-- **Plan** : `docs/superpowers/plans/2026-10-23-v0.2.md` ; registre : `.claude/handoff/phase-v0.2.registre.md`.
+- **Plan** : `docs/superpowers/plans/2026-10-23-v0.2.md` ; registre : `.claude/handoff/phase-v0.2.registre.md` (dans le dépôt privé `levy-cmd/Hublot-Kit-registres`).
 
 ## 0. Décisions et question ouverte
 
@@ -513,7 +513,7 @@ Plan : `docs/superpowers/plans/2026-10-23-v0.2.md`, en tranches verticales. La n
 
 ## 11. Écarts constatés à l'exécution
 
-Tirés du registre (`.claude/handoff/phase-v0.2.registre.md`), qui garde le détail, les mesures et les arbitrages. Le texte des sections ci-dessus est déjà aligné sur eux.
+Tirés du registre (`.claude/handoff/phase-v0.2.registre.md`, dans le dépôt privé `levy-cmd/Hublot-Kit-registres`), qui garde le détail, les mesures et les arbitrages. Le texte des sections ci-dessus est déjà aligné sur eux.
 
 | Tranche | Écart | Raison |
 |---|---|---|

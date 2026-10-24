@@ -128,7 +128,7 @@ Aucun n'est retiré ; chacun a une seule tâche ou tranche qui le prouve.
 | Verrou : seul un lancement confirmé sur un tag publie ; job `verify` : signatures, sommes, SBOM SPDX des archives et de l'image, plateformes (7) | tranche C (écrit) ; tâche 9, étapes 2 et 3 (éprouvé) |
 | Doc « Verify the release » conforme à `verify-release.sh` (identité, émetteur, couverture de la signature) (7, revue) | tranche C, étapes 1 et 5 |
 | Spec §8, §10, §13 à jour (8) | tâche 8, étape 1 |
-| Audit avant publication : `gitleaks`, `.claude/handoff/*`, adresses des commits (8) | tâche 8, étape 2 |
+| Audit avant publication : `gitleaks`, `.claude/handoff/*` (retiré du suivi le 2026-10-24, désormais dans le dépôt privé `levy-cmd/Hublot-Kit-registres`), adresses des commits (8) | tâche 8, étape 2 |
 | Revue de toute la branche (8) | tâche 8, étape 3 |
 
 ## Global Constraints
@@ -2606,7 +2606,7 @@ limactl shell hk-fedora -- sudo ausearch -m avc -ts recent 2>&1 | tail -n 3
 rm -rf "$snap"
 ```
 
-Expected, sur chaque VM : `ok édition (PUT fs/file)`, `ok envoi (POST fs/upload)`, `ok mise à jour …`, `IMAGE OK : ghcr.io/levy-cmd/hublot-kit:<V>-arm64` ; `0` refus AppArmor ; `<no matches>` ; Fedora en `Enforcing`. Noter noyau, version de Docker et API de chaque VM, commit et run, au registre (`.claude/handoff/phase-lancement.registre.md`), avec les verdicts de revue. **Un correctif** (doc, script, VM en échec) : nouveau commit, puis de nouveau les étapes 7 et 8 sur ce commit ; la CI et les VM portent toujours sur le dernier commit.
+Expected, sur chaque VM : `ok édition (PUT fs/file)`, `ok envoi (POST fs/upload)`, `ok mise à jour …`, `IMAGE OK : ghcr.io/levy-cmd/hublot-kit:<V>-arm64` ; `0` refus AppArmor ; `<no matches>` ; Fedora en `Enforcing`. Noter noyau, version de Docker et API de chaque VM, commit et run, au registre (`.claude/handoff/phase-lancement.registre.md`, désormais dans le dépôt privé `levy-cmd/Hublot-Kit-registres`), avec les verdicts de revue. **Un correctif** (doc, script, VM en échec) : nouveau commit, puis de nouveau les étapes 7 et 8 sur ce commit ; la CI et les VM portent toujours sur le dernier commit.
 
 - [x] **Step 9: Relecture (CLAUDE.md, « Orchestration »)** — `relecteur` puis Codex (`codex:codex-rescue`, lecture seule), concordants ou arbitrés au registre. Points : CI et VM portent sur le dernier commit ; la garde refuse aussi le détail procfs et ne laisse jamais passer le jeton ; le bloc A de `check-docs.sh` lit bien `.goreleaser.yaml` (pas une copie) ; la commande de la doc reste celle de §8 ; résultats VM complets. La tranche B attend les deux avis et la fusion de A.
 
@@ -3101,7 +3101,7 @@ git log --all --format='%an <%ae>' | sort -u
 git log --all --oneline -- '*.pdf' '.superpowers' | head -n 3
 ```
 
-Expected: `no leaks found` (sinon, lister chaque fuite à l'utilisateur, sans rien réécrire) ; les quatre fichiers `.claude/handoff/*` (à relire : ils deviennent publics) ; la liste des auteurs et adresses (elles deviennent publiques) ; aucun PDF ni `.superpowers` dans l'historique.
+Expected: `no leaks found` (sinon, lister chaque fuite à l'utilisateur, sans rien réécrire) ; les quatre fichiers `.claude/handoff/*` (à relire : ils deviennent publics ; étape passée, depuis le 2026-10-24 ces fichiers sont dans le dépôt privé, voir les constats de la tâche 8) ; la liste des auteurs et adresses (elles deviennent publiques) ; aucun PDF ni `.superpowers` dans l'historique.
 
 - [ ] **Step 3: Revue de branche** — demander la revue complète de `phase/lancement` (sous-agent indépendant + Codex) contre ce plan et la spec ; corriger ; cocher les cases ; noter sous « Constats de la tâche 8 » : verdicts de la revue, résultat de l'audit (les résultats VM sont au registre, tranches A et B).
 
@@ -3311,7 +3311,7 @@ done
 
 Expected: `IMAGE OK : ghcr.io/levy-cmd/hublot-kit:0.1` sur les deux VM.
 
-- [x] **Step 5: ARRÊT : accord de l'utilisateur requis — rendre le dépôt public**, après réponse aux constats de l'audit (tâche 8, étape 2). Rappeler : tout l'historique, les plans, `.claude/handoff/*` et les adresses e-mail des commits deviennent publics. Après le « oui » explicite :
+- [x] **Step 5: ARRÊT : accord de l'utilisateur requis — rendre le dépôt public**, après réponse aux constats de l'audit (tâche 8, étape 2). Rappeler : tout l'historique, les plans, `.claude/handoff/*` (étape passée ; depuis le 2026-10-24, ces fichiers sont dans le dépôt privé, voir les constats de la tâche 8) et les adresses e-mail des commits deviennent publics. Après le « oui » explicite :
 
 ```bash
 gh repo edit levy-cmd/Hublot-Kit --visibility public --accept-visibility-change-consequences
@@ -3411,7 +3411,7 @@ gh pr create --base main --title "docs : constats du Lancement (v0.1.0)" --body 
 
 #### Constats des tranches A, B et C
 
-- Au registre de la phase (`.claude/handoff/phase-lancement.registre.md`), une entrée par tranche (règles « Orchestration »).
+- Au registre de la phase (`.claude/handoff/phase-lancement.registre.md`, désormais dans le dépôt privé `levy-cmd/Hublot-Kit-registres`), une entrée par tranche (règles « Orchestration »).
 
 #### Constats de la tâche 8
 
@@ -3422,7 +3422,7 @@ gh pr create --base main --title "docs : constats du Lancement (v0.1.0)" --body 
   - `gitleaks` v8.30.1 (conteneur sur `hk-ubuntu`, dépôt monté en lecture seule, image supprimée ensuite) sur tout l'historique (`--all`, branches distantes comprises) : **238 commits analysés, `no leaks found`**, rapport JSON vide (`[]`). Les 240 commits hors fusions moins 2 qui ne font que supprimer (`dd5e116`, `9521bd3`) ; gitleaks ne lit que les lignes ajoutées.
   - Auteurs et adresses : `Livaille An-nour <51993811+levy-cmd@users.noreply.github.com>` (adresse « noreply » de GitHub, aucune adresse personnelle) et `GitHub <noreply@github.com>` (fusions faites dans l'interface web). Le nom `levy` figure aussi dans `.claude/handoff/spike-semaine-1.md` (`de: levy`).
   - Aucun PDF ni `.superpowers` dans l'historique ; aucun chemin `/Users/…`, `/private/…` ni adresse IP réelle (seulement des adresses d'exemple dans les tests).
-  - Deviendraient publics, à trancher par l'utilisateur avant la tâche 10, étape 5 : `CLAUDE.md`, `.claude/agents/*` et `.claude/handoff/*` (cinq fichiers suivis, plus trois passations supprimées mais présentes dans l'historique) : orchestration par agents (Claude, Codex), revues, défauts trouvés puis corrigés, refus du classifieur de permissions ; le lien `claude.ai` du cahier des charges (spec, ligne 5 : privé, inaccessible au public, mais visible) ; des détails de la machine de développement (`/opt/homebrew/bin`, `$HOME/.docker/run/docker.sock`, disque du Mac à 91 %, noms et versions des VM `hk-ubuntu` et `hk-fedora`, `~/.lima/hk-ubuntu/lima.yaml`) ; l'état du compte GitHub dans le plan (compte `User`, offre Free, dépôt privé) ; toutes les branches poussées (dont `phase/observation-t7-wip`) et les PR, dont la PR brouillon #6.
+  - Deviendraient publics, à trancher par l'utilisateur avant la tâche 10, étape 5 : `CLAUDE.md`, `.claude/agents/*` et `.claude/handoff/*` (cinq fichiers suivis, plus trois passations supprimées mais présentes dans l'historique) : orchestration par agents (Claude, Codex), revues, défauts trouvés puis corrigés, refus du classifieur de permissions ; le lien `claude.ai` du cahier des charges (spec, ligne 5 : privé, inaccessible au public, mais visible) ; des détails de la machine de développement (`/opt/homebrew/bin`, `$HOME/.docker/run/docker.sock`, disque du Mac à 91 %, noms et versions des VM `hk-ubuntu` et `hk-fedora`, `~/.lima/hk-ubuntu/lima.yaml`) ; l'état du compte GitHub dans le plan (compte `User`, offre Free, dépôt privé) ; toutes les branches poussées (dont `phase/observation-t7-wip`) et les PR, dont la PR brouillon #6. Suite (2026-10-24, décision de l'utilisateur) : `.claude/agents/` et `.claude/handoff/` sont retirés du suivi et vivent dans le dépôt privé `levy-cmd/Hublot-Kit-registres` ; l'historique n'est pas réécrit.
 - **Revue de branche** (étape 3) et relecture (étape 5) : à faire par la session principale (`relecteur` puis Codex).
 - **Cases cochées** : avant la tâche 1, tâches 1 à 6, tranches A à C (validées au registre), et les étapes 1, 2 et 4 de cette tâche. La mutation « retirer `--cgroupns=host` » de la tâche 4 n'a pas été jouée (refusée par le classifieur de permissions) : le test de la garde cgroup de la tranche A la remplace (registre).
 
