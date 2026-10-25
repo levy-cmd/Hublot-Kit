@@ -6,16 +6,39 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 url=http://127.0.0.1:7878
+project=hublot-demo
+# An exported COMPOSE_PROJECT_NAME would win over the name: of compose.yaml.
+unset COMPOSE_PROJECT_NAME
 
-compose() { docker compose -f compose.yaml "$@"; }
+compose() { docker compose -p "$project" -f compose.yaml "$@"; }
+
+# Stop, touching nothing, if a container takes a name of the demo without
+# belonging to it. A container of an earlier run of the demo is accepted.
+check_names() {
+  local name found owner
+  for name in api worker web db hublot-demo; do
+    # One line "found:<project>" per container with this exact name, none if free.
+    found=$(docker ps -a --filter "name=^/${name}\$" \
+      --format 'found:{{.Label "com.docker.compose.project"}}')
+    if [ -n "$found" ] && [ "$found" != "found:$project" ]; then
+      owner=${found#found:}
+      echo "A container named $name exists and is not part of the demo (Compose project: ${owner:-none})." >&2
+      echo "Rename or remove it, then run ./demo.sh up again. Nothing was changed." >&2
+      exit 1
+    fi
+  done
+}
 
 up() {
+  check_names
+  since=$(date +%s)
   compose up -d
   # api has no shell: docker cp goes through the Docker API, not the container.
   docker cp api/. api:/etc/api
   # worker writes a few jobs and logs, then is stopped.
   for _ in $(seq 1 30); do
-    docker logs worker 2>&1 | grep -q 'job 6 done' && break
+    # grep without -q reads to the end: no SIGPIPE for docker logs under pipefail.
+    docker logs --since "$since" worker 2>&1 | grep 'job 6 done' >/dev/null && break
     sleep 1
   done
   compose stop worker
