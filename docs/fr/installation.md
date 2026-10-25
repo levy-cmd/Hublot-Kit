@@ -105,7 +105,7 @@ L'alternative au conteneur : le binaire statique, lancé en root par systemd. V�
 ([Vérifier la release](#vérifier-la-release)). Utilisez `amd64` ou `arm64`.
 
 ```sh
-V=0.2.0
+V=0.2.1
 ARCH=amd64
 curl -fLO "https://github.com/levy-cmd/Hublot-Kit/releases/download/v$V/hublot-kit_${V}_linux_${ARCH}.tar.gz"
 tar -xzf "hublot-kit_${V}_linux_${ARCH}.tar.gz"
@@ -257,7 +257,7 @@ La signature de `checksums.txt` suivie de la somme suffit ; chaque archive a aus
 (`<archive>.sigstore.json`), contrôle direct facultatif par la même commande `cosign verify-blob`.
 
 ```sh
-V=0.2.0
+V=0.2.1
 ARCH=amd64
 BASE="https://github.com/levy-cmd/Hublot-Kit/releases/download/v$V"
 curl -fLO "$BASE/hublot-kit_${V}_linux_${ARCH}.tar.gz"
