@@ -30,7 +30,7 @@ test('connexion, liste, panneaux fichiers et diff', async ({ page }) => {
 	// The real version and Docker's state in the top bar (spec v0.2 §3).
 	await expect(page.locator('.topbar')).toContainText('Connecté');
 
-	// Review of tranche 1: under 90 rem (1280 px here), opening the logs panel
+	// Review of tranche 1: under 110 rem (1280 px here), opening the logs panel
 	// of a stopped container mounts no hidden file system panel, so no
 	// export of the container starts.
 	const id = await page.evaluate(() =>
@@ -48,7 +48,7 @@ test('connexion, liste, panneaux fichiers et diff', async ({ page }) => {
 	await page.waitForTimeout(2000);
 	expect(fsCalls).toEqual([]);
 
-	// Review of tranche 1 (Codex): under 90 rem, a logs panel opened then
+	// Review of tranche 1 (Codex): under 110 rem, a logs panel opened then
 	// hidden stays mounted, but closes its stream; shown again, it reopens it.
 	// On the running agent, whose stream stays open (a stopped container's
 	// ends by itself).
@@ -148,7 +148,7 @@ test('connexion, liste, panneaux fichiers et diff', async ({ page }) => {
 	await page.goto(`/?c=${motd}&panel=diff`);
 	await page.getByRole('link', { name: '/etc/motd', exact: true }).click();
 	await expect(content).toContainText("Lecture du fichier dans l'image : 42 %");
-	// Review of tranche 7 (Codex): under 90 rem, the diff hidden behind
+	// Review of tranche 7 (Codex): under 110 rem, the diff hidden behind
 	// another panel stops asking the agent; shown again, it asks again.
 	await panels.getByRole('link', { name: 'Logs en direct' }).click();
 	await expect(page).toHaveURL(/panel=logs/);
@@ -258,6 +258,39 @@ test('connexion, liste, panneaux fichiers et diff', async ({ page }) => {
 	// The full page keeps working (links of v0.1, phone).
 	await page.goto(`/c/${id}?tab=diff`);
 	await expect(page.getByRole('listitem').filter({ hasText: '/root/note.txt' })).toBeVisible();
+
+	// Decision of 2026-10-25: four columns from 110 rem (1760 px) only; at
+	// 1440 px they left the diff 217 px. Below, two columns: the diff and
+	// the content, half the width each (one column under 64 rem).
+	const tabs = page.getByRole('navigation', { name: 'Panneaux du conteneur' });
+	const width = (sel: string) => page.locator(sel).evaluate((e) => e.getBoundingClientRect().width);
+	for (const [px, columns] of [
+		[1024, 1],
+		[1440, 2],
+		[1600, 2],
+		[1800, 4]
+	] as const) {
+		await page.setViewportSize({ width: px, height: 900 });
+		await page.goto(`/?c=${id}&panel=diff&diff=%2Froot%2Fnote.txt&change=added`);
+		await expect(content.locator('.cm-content'), `${px} px`).toHaveText('bonjour hublot');
+		const grid = await width('.panels .grid');
+		if (columns === 4) {
+			await expect(tabs, `${px} px`).toBeHidden();
+			for (const p of ['.p-files', '.p-diff', '.p-content', '.p-logs']) await expect(page.locator(p), `${px} px`).toBeVisible();
+			// None is left the 217 px of the diff at 1440 px (the narrowest,
+			// the diff at 0.85 fr, has about 280 px from 1760 px).
+			for (const p of ['.p-files', '.p-diff', '.p-content', '.p-logs']) expect(await width(p), `${px} px ${p}`).toBeGreaterThan(250);
+		} else {
+			await expect(tabs, `${px} px`).toBeVisible();
+			await expect(page.locator('.p-files'), `${px} px`).toBeHidden();
+			await expect(page.locator('.p-logs'), `${px} px`).toBeHidden();
+			await expect(page.locator('.p-diff'), `${px} px`).toBeVisible();
+			const share = columns === 2 ? 0.45 : 0.95; // the gap takes the rest
+			expect(await width('.p-diff'), `${px} px`).toBeGreaterThan(grid * share);
+			expect(await width('.p-content'), `${px} px`).toBeGreaterThan(grid * share);
+		}
+		expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth), `${px} px`).toBeLessThanOrEqual(0);
+	}
 
 	// 390 px wide: no horizontal scroll, on the list, the file view and the diff.
 	await page.setViewportSize({ width: 390, height: 800 });
