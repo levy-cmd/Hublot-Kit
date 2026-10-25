@@ -67,7 +67,7 @@ Les labels portent souvent des secrets que le masquage ne reconnaît pas, par ex
 
 ## Les panneaux du bas
 
-À partir de 90 rem de large, quatre panneaux côte à côte ; en dessous, des onglets.
+À partir de 110 rem de large (1760 px), quatre panneaux côte à côte ; en dessous, des onglets, et le contenu à côté du panneau système de fichiers ou diff au-delà de 64 rem (deux colonnes, chacune la moitié de la largeur).
 
 1. **Système de fichiers** : l'explorateur. « Explorer » montre tout le dossier, « Diff » seulement ce qui a changé depuis l'image ; dans les deux cas, une lettre marque un fichier ajouté (A) ou modifié (M). Pour un conteneur arrêté, la première ouverture construit un index, avec sa progression.
 2. **Diff avec l'image** : les compteurs des ajouts, modifications et suppressions, puis la liste ; un chemin ouvre son diff de contenu dans le panneau suivant.

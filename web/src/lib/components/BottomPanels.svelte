@@ -5,7 +5,7 @@
 	import { t } from '#lib/i18n/index.ts';
 	import Icon from '#lib/icons/Icon.svelte';
 	import { diffChange, diffHref } from '#lib/contentdiff.ts';
-	import { logsLive, mountedPanels, type Panel } from '#lib/panels.ts';
+	import { logsLive, mountedPanels, WIDE_QUERY, type Panel } from '#lib/panels.ts';
 	import { withParams } from '#lib/url.ts';
 	import ChangesList from './ChangesList.svelte';
 	import FileBrowser from './FileBrowser.svelte';
@@ -14,8 +14,8 @@
 	import UnifiedDiff from './UnifiedDiff.svelte';
 
 	// The bottom panels of the chosen container (spec v0.2 §3): side by side
-	// from 90 rem, tabs below (the file system tab then holds the content).
-	// Below 90 rem a panel is mounted when first opened, never before: a
+	// from 110 rem (WIDE_QUERY), tabs below (the file system tab then holds the content).
+	// Below 110 rem a panel is mounted when first opened, never before: a
 	// hidden file system panel would export a stopped container for nothing.
 	// A logs panel opened, then hidden, stays mounted with its stream closed.
 
@@ -29,7 +29,7 @@
 
 	// Known before the first render: mounting everything, then unmounting,
 	// would already have sent the requests.
-	const wideQuery = matchMedia('(min-width: 90rem)');
+	const wideQuery = matchMedia(WIDE_QUERY);
 	let wide = $state(wideQuery.matches);
 	$effect(() => {
 		const on = () => (wide = wideQuery.matches);
@@ -50,7 +50,7 @@
 	// path of the diff panel (F17, spec v0.2 §5.6): the last one chosen (a
 	// diff link drops the file; a file chosen in the explorer wins).
 	let diff = $derived(file ? null : diffChange(page.url.searchParams));
-	// Below 90 rem the content goes with its panel: the explorer's, or the diff's.
+	// Below 110 rem the content goes with its panel: the explorer's, or the diff's.
 	let contentCurrent = $derived(panel === 'files' || (panel === 'diff' && diff !== null));
 	let entry = $state<Entry | undefined>();
 	const panelHref = (p: Panel) => withParams(page.url.searchParams, { panel: p });
@@ -162,8 +162,12 @@
 		padding: 0.5rem 0;
 	}
 
-	/* Under 90 rem: one panel at a time, chosen by the tabs. */
-	@media (max-width: 89.99rem) {
+	/* Under 110 rem: one panel at a time, chosen by the tabs, beside the
+	   content (two columns, above 64 rem). The exact complement of the wide
+	   query below, not max-width 109.99rem: that left 1759.84 to 1760 px
+	   (a zoom) to no rule. The thresholds follow WIDE_QUERY (panels.ts),
+	   checked by panels.test.ts. */
+	@media not all and (min-width: 110rem) {
 		.panel:not(.current) {
 			display: none;
 		}
@@ -185,8 +189,8 @@
 		}
 	}
 
-	/* From 90 rem: the four panels side by side, as in the mock-up. */
-	@media (min-width: 90rem) {
+	/* From 110 rem: the four panels side by side, as in the mock-up. */
+	@media (min-width: 110rem) {
 		.switch {
 			display: none;
 		}

@@ -23,7 +23,7 @@
 	// the explorer would show (F2, v0.2 §5.5), nothing more; its text goes
 	// into CodeMirror as a document, never as HTML. CodeMirror and the merge
 	// extension load with the first diff, apart from the initial bundle.
-	// active false: the diff is out of sight (another panel below 90 rem);
+	// active false: the diff is out of sight (another panel below 110 rem);
 	// it asks the agent nothing, and resumes where it was when shown again.
 	let {
 		id,
