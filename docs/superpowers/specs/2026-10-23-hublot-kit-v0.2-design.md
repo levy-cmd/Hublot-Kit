@@ -102,7 +102,7 @@ Elle reproduit la maquette. Les écarts sont justifiés par ce qui existe réell
 - Boutons « Explorer les fichiers », « Comparer avec l'image », « Voir les logs » : ils ouvrent le panneau du bas correspondant.
 - Le bouton de copie de la commande copie la **forme masquée** ; une valeur masquée n'est jamais dans le presse-papiers.
 
-**Panneaux du bas** (conteneur choisi), côte à côte à partir de 90 rem, en onglets en dessous
+**Panneaux du bas** (conteneur choisi), côte à côte à partir de 110 rem (1760 px) (révisé le 2026-10-25, décision de l'utilisateur : à 90 rem, le diff n'avait que 217 px à 1440 px), en onglets en dessous
 1. « Système de fichiers » : l'arbre F2, avec la bascule Explorer / Diff (marques F5 dans l'arbre, comme en v0.1).
 2. « Diff avec l'image » : compteurs Ajoutés, Modifiés, Supprimés, et la liste F5 avec des badges.
 3. Le contenu du fichier choisi : l'aperçu F2, ou le diff unifié image contre conteneur (F17, v0.2 §5.6), avec les numéros de ligne.
@@ -517,7 +517,7 @@ Tirés du registre (`.claude/handoff/phase-v0.2.registre.md`, dans le dépôt pr
 
 | Tranche | Écart | Raison |
 |---|---|---|
-| 1 | sous 90 rem, un panneau du bas ne se monte qu'à sa première ouverture ; un flux de logs se coupe quand son panneau est caché | un panneau caché lançait un export d'un conteneur arrêté (4 Gio, 5 min, conteneur verrouillé) ; un flux caché tenait l'une des 8 places |
+| 1 | sous 110 rem (1760 px) (révisé le 2026-10-25, décision de l'utilisateur : à 90 rem, le diff n'avait que 217 px à 1440 px), un panneau du bas ne se monte qu'à sa première ouverture ; un flux de logs se coupe quand son panneau est caché | un panneau caché lançait un export d'un conteneur arrêté (4 Gio, 5 min, conteneur verrouillé) ; un flux caché tenait l'une des 8 places |
 | 2 | `(*Views).Cached(info)` prend un `Inspect` que l'appelant vient de faire, et non un ID seul | la clé `ID + FinishedAt` doit décrire l'état présent sans `Inspect` caché |
 | 2 | les labels Compose qui portent des chemins de l'hôte (`project.config_files`, `project.working_dir`, `project.environment_file`) sont masqués | décision de la session principale, resserre Q60 |
 | 2, 3 | les calculs de `ContainerSize` d'un même conteneur sont regroupés ; toute attente d'un calcul expiré répond 504 | Codex ; une CI instable sous overlay2 |
