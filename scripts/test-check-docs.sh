@@ -44,9 +44,10 @@ edit() {
 fresh temoin
 bash "$tmp/temoin/scripts/check-docs.sh" > "$tmp/out" 2>&1 && echo "ok copie témoin : DOCS OK" || bad "copie témoin refusée : $(grep ERREUR "$tmp/out" | head -n 3)"
 
-# Une seule ligne V= (la première de chaque doc) reste sur une autre version.
+# Une seule ligne V= (la première de chaque doc) passe au correctif suivant
+# (Z+1), quelle que soit la version documentée.
 fresh une-differente
-edit une-differente 'if (!$done && /^V=/) { s/^V=.*/V=0.2.1/; $done = 1 }'
+edit une-differente 'if (!$done && /^V=/) { s/^V=(\d+\.\d+)\.(\d+)$/"V=$1." . ($2 + 1)/e; $done = 1 }'
 refused une-differente "lignes V= différentes"
 
 # Le cas du Minor : toutes les lignes V= restées sur la 0.1, image en :0.2.
@@ -74,7 +75,7 @@ refused sans-v-en "docs/en/install.md : aucune ligne V="
 # regex v0\.3\.) : doit passer, la série n'est écrite en dur nulle part.
 fresh serie-03
 for f in docs/superpowers/specs/2026-10-07-hublot-kit-v0.1-design.md README.md README.fr.md docs/en/*.md docs/fr/*.md; do
-  perl -pi -e 's/hublot-kit:0\.2(?![.\d])/hublot-kit:0.3/g; s/^V=0\.2\.0$/V=0.3.0/; s/v0\\\.2\\\./v0\\.3\\./g' "$tmp/serie-03/$f"
+  perl -pi -e 's/hublot-kit:0\.2(?![.\d])/hublot-kit:0.3/g; s/^V=0\.2\.\d+$/V=0.3.0/; s/v0\\\.2\\\./v0\\.3\\./g' "$tmp/serie-03/$f"
 done
 grep -q '^V=0\.3\.0$' "$tmp/serie-03/docs/fr/installation.md" && grep -qF 'v0\.3\.[0-9]+' "$tmp/serie-03/docs/fr/installation.md" &&
   ! grep -rq 'hublot-kit:0\.2' "$tmp/serie-03/README.md" "$tmp/serie-03/docs/en" "$tmp/serie-03/docs/fr" || bad "serie-03 : mutation incomplète"
