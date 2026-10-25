@@ -53,16 +53,24 @@ describe('threshold of the four columns', () => {
 	};
 	const narrow = query('.panel:not(.current)'); // one panel at a time, tabs
 	const wide = query('.switch'); // the four columns, tabs hidden
-	const applies = (q: string, px: number) =>
-		q.split(/\s+and\s+/).every((part) => {
+	// A query of BottomPanels: (min|max-width: N rem) joined by "and", or
+	// "not all and" before them, which negates the whole query.
+	const applies = (q: string, px: number): boolean => {
+		const not = /^not all and\s+/.exec(q);
+		if (not) return !applies(q.slice(not[0].length), px);
+		return q.split(/\s+and\s+/).every((part) => {
 			const m = /^\((min|max)-width:\s*([\d.]+)rem\)$/.exec(part.trim());
 			if (!m) throw new Error(`requête inattendue : ${q}`);
 			const limit = Number(m[2]) * 16;
 			return m[1] === 'min' ? px >= limit : px <= limit;
 		});
+	};
+	// Review of the fix (Codex, relecteur): with max-width 109.99rem, nothing
+	// applied between 1759.84 and 1760 px, a width a zoom can give.
+	const below = [1024, 1440, 1600, 1759, 1759.9, 1759.99];
 
-	it('two columns at 1024, 1440, 1600 and 1759 px', () => {
-		for (const px of [1024, 1440, 1600, 1759]) {
+	it('tabs (one or two columns) up to 1759.99 px, fractional widths included', () => {
+		for (const px of below) {
 			expect(applies(narrow, px), `${px} px`).toBe(true);
 			expect(applies(wide, px), `${px} px`).toBe(false);
 		}
@@ -77,7 +85,8 @@ describe('threshold of the four columns', () => {
 
 	it('the script and the style agree at every width', () => {
 		expect(src.includes('matchMedia(WIDE_QUERY)'), 'matchMedia(WIDE_QUERY)').toBe(true);
-		for (let px = 320; px <= 3840; px++) {
+		const widths = [...Array.from({ length: 3521 }, (_, i) => 320 + i), ...below, 1759.5, 1760.01];
+		for (const px of widths) {
 			expect(applies(wide, px), `${px} px`).toBe(applies(WIDE_QUERY, px));
 			expect(applies(narrow, px), `${px} px`).toBe(!applies(WIDE_QUERY, px));
 		}

@@ -67,7 +67,7 @@ Labels often hold secrets the masking does not recognise, for example `traefik.h
 
 ## The bottom panels
 
-From 110 rem wide (1760 px), four panels side by side; below, tabs, with the content beside the file system or diff panel from 64 rem (two columns, half the width each).
+From 110 rem wide (1760 px), four panels side by side; below, tabs, with the content beside the file system or diff panel above 64 rem (two columns, half the width each).
 
 1. **File system**: the explorer. "Explore" shows the whole folder, "Diff" only what changed since the image; in both, a letter marks an added (A) or modified (M) file. For a stopped container, the first opening builds an index, with its progress.
 2. **Diff with the image**: the counts of additions, changes and deletions, then the list; a path opens its content diff in the next panel.

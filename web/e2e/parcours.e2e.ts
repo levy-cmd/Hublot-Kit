@@ -261,7 +261,7 @@ test('connexion, liste, panneaux fichiers et diff', async ({ page }) => {
 
 	// Decision of 2026-10-25: four columns from 110 rem (1760 px) only; at
 	// 1440 px they left the diff 217 px. Below, two columns: the diff and
-	// the content, half the width each (one column under 64 rem).
+	// the content, half the width each (one column up to 64 rem, 1024 px included).
 	const tabs = page.getByRole('navigation', { name: 'Panneaux du conteneur' });
 	const width = (sel: string) => page.locator(sel).evaluate((e) => e.getBoundingClientRect().width);
 	for (const [px, columns] of [
@@ -288,6 +288,16 @@ test('connexion, liste, panneaux fichiers et diff', async ({ page }) => {
 			const share = columns === 2 ? 0.45 : 0.95; // the gap takes the rest
 			expect(await width('.p-diff'), `${px} px`).toBeGreaterThan(grid * share);
 			expect(await width('.p-content'), `${px} px`).toBeGreaterThan(grid * share);
+			// Review of the fix (relecteur): side by side in two columns, one
+			// above the other in one.
+			const top = (sel: string) => page.locator(sel).evaluate((e) => Math.round(e.getBoundingClientRect().top));
+			if (columns === 2) {
+				expect(await top('.p-content'), `${px} px`).toBe(await top('.p-diff'));
+				expect(await width('.p-diff'), `${px} px`).toBeLessThan(grid * 0.55);
+				expect(await width('.p-content'), `${px} px`).toBeLessThan(grid * 0.55);
+			} else {
+				expect(await top('.p-content'), `${px} px`).toBeGreaterThan(await top('.p-diff'));
+			}
 		}
 		expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth), `${px} px`).toBeLessThanOrEqual(0);
 	}

@@ -163,9 +163,11 @@
 	}
 
 	/* Under 110 rem: one panel at a time, chosen by the tabs, beside the
-	   content (two columns, from 64 rem). The thresholds follow WIDE_QUERY
-	   (panels.ts), checked by panels.test.ts. */
-	@media (max-width: 109.99rem) {
+	   content (two columns, above 64 rem). The exact complement of the wide
+	   query below, not max-width 109.99rem: that left 1759.84 to 1760 px
+	   (a zoom) to no rule. The thresholds follow WIDE_QUERY (panels.ts),
+	   checked by panels.test.ts. */
+	@media not all and (min-width: 110rem) {
 		.panel:not(.current) {
 			display: none;
 		}
