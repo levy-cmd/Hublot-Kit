@@ -11,3 +11,6 @@
 /web/test-results/
 /web/playwright-report/
 /dist/
+/.claude/handoff
+/.claude/agents
+/.claude/worktrees/
