@@ -93,7 +93,7 @@ An image opens on its page, `/images/<ID>`. It is always named by its **full ID*
 The page shows:
 
 - the full ID (with copy), the tags, the size, the date and the platform (`linux/arm64/v8`);
-- the configuration: the command, the working directory, the user, the exposed ports, the variables and the labels, masked by the same rules as a container's X-ray. A masked value is not revealed from the image: the reveal, journaled, is done from a container that uses it;
+- the configuration: the command, the working directory, the user, the exposed ports, the variables and the labels, masked by the same rules as on a container's page. A masked value is not revealed from the image: the reveal, journaled, is done from a container that uses it;
 - the layers, that is the build history, newest first. The entries without files (`ENV`, `CMD`, `LABEL`…) are folded. The build arguments (`|2 GH_PAT=… /bin/sh -c …`, `ARG GH_PAT=…`) are masked whatever their name, and a `LABEL` line keeps none of its text: the labels are read in the configuration, filtered;
 - the containers of the image, which lead to their detail.
 
@@ -112,7 +112,7 @@ The **Files** tab of an image's page explores its tree, read only, **without cre
 
 The Secrets page takes the inventory of what the agent masks, across every container at once. It shows **names** only, never a value:
 
-- the environment variables the X-ray masks;
+- the environment variables a container's Secrets tab shows masked;
 - the arguments of the command and the entrypoint where the agent found a secret, by their place and what was detected ("Command, argument 3: value of --requirepass"), never by their text: a partial mask could leave a rest of the value visible;
 - the names of the masked labels. Every label outside `com.docker.compose.*` and `org.opencontainers.image.*` is masked as a precaution, whether it holds a secret or not: they are counted apart.
 

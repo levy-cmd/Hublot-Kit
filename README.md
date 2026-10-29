@@ -23,8 +23,8 @@ of a container's files and compare it later.
 - **Diff with the image**: what was added, modified or deleted since the image, and the line diff of a modified
   file between its version in the image and in the container.
 - **Logs**: live stream, search, pause and resume, download.
-- **X-ray**: image, state, command, environment (secrets masked, revealed one at a time and logged), ports, networks,
-  mounts.
+- **Overview** of a container: image, state, command, ports, and under **Details** its networks and mounts; its
+  **Secrets** tab holds the environment (secrets masked, revealed one at a time and logged).
 - **Images**: every image of the daemon, its layers and its configuration (masked), and its files read only,
   without creating a container.
 - **Snapshots**: a photo of a container's files (metadata and a keyed fingerprint, never the content), compared with

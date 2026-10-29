@@ -25,8 +25,8 @@ image ; prenez une photo des fichiers d'un conteneur pour la comparer plus tard.
 - **Diff avec l'image** : ce qui a été ajouté, modifié ou supprimé depuis l'image, et le diff ligne à ligne d'un
   fichier modifié entre sa version dans l'image et dans le conteneur.
 - **Logs** : flux en direct, recherche, pause et reprise, téléchargement.
-- **Radiographie** : image, état, commande, environnement (secrets masqués, révélés un par un et journalisés), ports,
-  réseaux, montages.
+- **Aperçu** d'un conteneur : image, état, commande, ports, et sous **Détails** ses réseaux et montages ; son onglet
+  **Secrets** porte l'environnement (secrets masqués, révélés un par un et journalisés).
 - **Images** : toutes les images du démon, leurs couches et leur configuration (masquée), et leurs fichiers en
   lecture seule, sans créer de conteneur.
 - **Snapshots** : une photo des fichiers d'un conteneur (métadonnées et empreinte à clé, jamais le contenu), comparée
