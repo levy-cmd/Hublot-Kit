@@ -36,8 +36,10 @@ techniques donnent tous les détails : [v0.1 §13](../superpowers/specs/2026-10-
   256 Mio de noms occupait 371 Mio, si bien que trois index peuvent dépasser 1 Gio.
 - Pendant que Docker exporte un conteneur arrêté (indexation, ou téléchargement d'un dossier), il ne répond rien
   d'autre sur ce conteneur. Pendant l'indexation, la navigation répond tout de suite avec la progression ; les autres
-  requêtes sur ce conteneur (onglets Aperçu et Secrets, logs, écritures, navigation pendant un téléchargement)
-  attendent la fin de l'export, et échouent après 10 secondes (`docker_unavailable`) s'il dure plus.
+  requêtes sur ce conteneur (ouverture de son détail, c'est-à-dire Aperçu et Secrets, et tous les onglets de sa page
+  pleine `/c/<identifiant>` ; révélation d'une valeur ; logs, écritures, navigation pendant un téléchargement)
+  attendent la fin de l'export, et échouent après 10 secondes (`docker_unavailable`) s'il dure plus. Un détail déjà
+  chargé ne redemande rien quand on change d'onglet.
 - Un conteneur arrêté qui monte `/`, `/proc`, `/sys` (ou dessous) ou `/dev` de l'hôte ne s'explore pas (l'erreur
   nomme le montage) : son archive contiendrait l'hôte. Ses logs, ses changements et son détail (onglets Aperçu et
   Secrets) restent disponibles. Une source qui est un lien symbolique de l'hôte est jugée par sa cible, résolue

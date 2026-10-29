@@ -34,8 +34,9 @@ French, have every detail: [v0.1 §13](../superpowers/specs/2026-10-07-hublot-ki
   hold over 1 GiB.
 - While Docker exports a stopped container (indexing, or download of a folder), it answers nothing else about that
   container. During the indexing, browsing answers at once with the progress; the other requests on that container
-  (Overview and Secrets tabs, logs, writes, browsing during a download) wait for the end of the export, and fail
-  after 10 seconds (`docker_unavailable`) if it lasts longer.
+  (opening its detail, that is Overview and Secrets, and every tab of its full page `/c/<id>`; revealing a value;
+  logs, writes, browsing during a download) wait for the end of the export, and fail after 10 seconds
+  (`docker_unavailable`) if it lasts longer. A detail already loaded does not ask again when another tab is chosen.
 - A stopped container that bind-mounts `/`, `/proc`, `/sys` (or below) or `/dev` of the host cannot be explored (the
   error names the mount): its archive would contain the host. Its logs, changes and details (Overview and Secrets
   tabs) stay available. A source that is a symbolic link on the host is judged by its target, resolved from the

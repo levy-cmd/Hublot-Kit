@@ -26,7 +26,7 @@ image ; prenez une photo des fichiers d'un conteneur pour la comparer plus tard.
   fichier modifié entre sa version dans l'image et dans le conteneur.
 - **Logs** : flux en direct, recherche, pause et reprise, téléchargement.
 - **Aperçu** d'un conteneur : image, état, commande, ports, et sous **Détails** ses réseaux et montages ; son onglet
-  **Secrets** porte l'environnement (secrets masqués, révélés un par un et journalisés).
+  Secrets porte l'environnement (secrets masqués, révélés un par un et journalisés).
 - **Images** : toutes les images du démon, leurs couches et leur configuration (masquée), et leurs fichiers en
   lecture seule, sans créer de conteneur.
 - **Snapshots** : une photo des fichiers d'un conteneur (métadonnées et empreinte à clé, jamais le contenu), comparée
