@@ -70,7 +70,7 @@ Traitez le jeton d'accès comme le mot de passe root du serveur.
 
 ## Secrets
 
-- La radiographie masque une variable quand son nom contient `PASSWORD`, `PASSWD`, `PASS`, `TOKEN`, `KEY`, `SECRET`,
+- L'agent masque une variable quand son nom contient `PASSWORD`, `PASSWD`, `PASS`, `TOKEN`, `KEY`, `SECRET`,
   `CREDENTIAL`, `PRIVATE` ou `DSN`, quand sa valeur contient une URL avec identifiants, ou un mot de passe sous une
   forme connue (chaînes de connexion, `--requirepass …`, `Authorization: Bearer …`). La commande et le message
   d'erreur sont masqués partie par partie.
@@ -83,7 +83,7 @@ Traitez le jeton d'accès comme le mot de passe root du serveur.
   valeur) avant l'envoi de la valeur.
 - La page Secrets (`GET /api/secrets`) ne renvoie que des noms : variables masquées, arguments par leur place et ce qui y a été détecté
   (jamais leur texte, qu'un masque partiel laisserait dépasser), clés des labels masqués. Elle n'a pas de révélation à elle : une valeur passe par la même demande
-  journalisée que la radiographie, une variable à la fois, sous le contrôle d'`Origin`. Comme toute réponse de l'API,
+  journalisée que l'onglet Secrets d'un conteneur, une variable à la fois, sous le contrôle d'`Origin`. Comme toute réponse de l'API,
   elle n'est pas gardée en cache (`Cache-Control: no-store`), et l'interface n'écrit aucune valeur dans le stockage du
   navigateur. Son coût est borné : quatre `docker inspect` à la fois pour tout l'agent, 3 s chacun, 15 s et
   1 000 conteneurs par inventaire ; au-delà, un conteneur est marqué indisponible.

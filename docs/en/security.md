@@ -66,7 +66,7 @@ Treat the access token like the root password of the server.
 
 ## Secrets
 
-- The X-ray masks a variable when its name contains `PASSWORD`, `PASSWD`, `PASS`, `TOKEN`, `KEY`, `SECRET`,
+- The agent masks a variable when its name contains `PASSWORD`, `PASSWD`, `PASS`, `TOKEN`, `KEY`, `SECRET`,
   `CREDENTIAL`, `PRIVATE` or `DSN`, when its value holds a URL with credentials, or a password in a known form
   (connection strings, `--requirepass …`, `Authorization: Bearer …`). The command and the error message are masked
   part by part.
@@ -77,7 +77,7 @@ Treat the access token like the root password of the server.
 - A masked value is revealed one at a time, and each reveal is written to the audit log (the name, never the value)
   before the value is sent.
 - The Secrets page (`GET /api/secrets`) returns names only: masked variables, arguments by their place and what was detected in them (never their text,
-  which a partial mask could let through), keys of the masked labels. It has no reveal of its own: a value goes through the same journaled request as the X-ray, one
+  which a partial mask could let through), keys of the masked labels. It has no reveal of its own: a value goes through the same journaled request as a container's Secrets tab, one
   variable at a time, under the `Origin` check. Like every answer of the API, it is not cached
   (`Cache-Control: no-store`), and the interface writes no value to the browser's storage. Its cost is bounded: four
   `docker inspect` at a time for the whole agent, 3 s each, 15 s and 1,000 containers per inventory; past that, a

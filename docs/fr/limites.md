@@ -36,15 +36,17 @@ techniques donnent tous les détails : [v0.1 §13](../superpowers/specs/2026-10-
   256 Mio de noms occupait 371 Mio, si bien que trois index peuvent dépasser 1 Gio.
 - Pendant que Docker exporte un conteneur arrêté (indexation, ou téléchargement d'un dossier), il ne répond rien
   d'autre sur ce conteneur. Pendant l'indexation, la navigation répond tout de suite avec la progression ; les autres
-  requêtes sur ce conteneur (radiographie, logs, écritures, navigation pendant un téléchargement) attendent la fin de
-  l'export, et échouent après 10 secondes (`docker_unavailable`) s'il dure plus.
+  requêtes sur ce conteneur (ouverture de son détail, c'est-à-dire Aperçu et Secrets, et tous les onglets de sa page
+  pleine `/c/<identifiant>` ; révélation d'une valeur ; logs, écritures, navigation pendant un téléchargement)
+  attendent la fin de l'export, et échouent après 10 secondes (`docker_unavailable`) s'il dure plus. Un détail déjà
+  chargé ne redemande rien quand on change d'onglet.
 - Un conteneur arrêté qui monte `/`, `/proc`, `/sys` (ou dessous) ou `/dev` de l'hôte ne s'explore pas (l'erreur
-  nomme le montage) : son archive contiendrait l'hôte. Ses logs, ses changements et sa radiographie restent
-  disponibles. Une source qui est un lien symbolique de l'hôte est jugée par sa cible, résolue depuis la racine de
-  l'hôte (`/proc/1/root` : l'agent a besoin de `--pid=host`) ; une source que l'agent ne sait pas résoudre est
-  refusée. Un lien changé sur l'hôte entre ce contrôle et le montage de la source par Docker n'est pas vu, ni un
-  lien que seul `dockerd` voit (dossier partagé par Docker Desktop, `dockerd` dans son propre espace de noms de
-  montage).
+  nomme le montage) : son archive contiendrait l'hôte. Ses logs, ses changements et son détail (onglets Aperçu et
+  Secrets) restent disponibles. Une source qui est un lien symbolique de l'hôte est jugée par sa cible, résolue
+  depuis la racine de l'hôte (`/proc/1/root` : l'agent a besoin de `--pid=host`) ; une source que l'agent ne sait pas
+  résoudre est refusée. Un lien changé sur l'hôte entre ce contrôle et le montage de la source par Docker n'est pas
+  vu, ni un lien que seul `dockerd` voit (dossier partagé par Docker Desktop, `dockerd` dans son propre espace de
+  noms de montage).
 - Un dossier de l'hôte monté dans un conteneur arrêté, avec un montage `/proc`, `/sys`, FUSE ou NFS en dessous, n'est
   pas détecté : l'indexation peut alors faire lire ce montage à Docker, et un serveur FUSE ou NFS bloqué peut bloquer
   `dockerd`.
@@ -139,7 +141,7 @@ techniques donnent tous les détails : [v0.1 §13](../superpowers/specs/2026-10-
 
 ## Masquage des secrets
 
-La radiographie masque les secrets par leur nom et par des formes connues. Non reconnus, entre autres :
+L'agent masque les secrets par leur nom et par des formes connues. Non reconnus, entre autres :
 
 - les valeurs JSON (`{"token": "…"}`), `user:motdepasse@hôte` sans `://`, `password = …` avec des blancs, une
   variable nommée `DB_PWD` ;

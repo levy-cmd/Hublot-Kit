@@ -93,7 +93,7 @@ Une image s'ouvre sur sa page, `/images/<ID>`. Elle se désigne toujours par son
 La page montre :
 
 - l'ID complet (avec copie), les étiquettes, la taille, la date et la plateforme (`linux/arm64/v8`) ;
-- la configuration : la commande, le dossier de travail, l'utilisateur, les ports exposés, les variables et les labels, masqués par les mêmes règles que la radiographie d'un conteneur. Une valeur masquée ne se révèle pas depuis l'image : la révélation, journalisée, se fait depuis un conteneur qui l'utilise ;
+- la configuration : la commande, le dossier de travail, l'utilisateur, les ports exposés, les variables et les labels, masqués par les mêmes règles que sur la page d'un conteneur. Une valeur masquée ne se révèle pas depuis l'image : la révélation, journalisée, se fait depuis un conteneur qui l'utilise ;
 - les couches, c'est-à-dire l'historique de construction, de la plus récente à la plus ancienne. Les entrées sans fichier (`ENV`, `CMD`, `LABEL`…) sont repliées. Les arguments de construction (`|2 GH_PAT=… /bin/sh -c …`, `ARG GH_PAT=…`) sont masqués quel que soit leur nom, et une ligne `LABEL` ne garde aucun texte : les labels se lisent dans la configuration, filtrés ;
 - les conteneurs de l'image, qui mènent à leur détail.
 
@@ -112,7 +112,7 @@ L'onglet **Fichiers** de la page d'une image explore son arborescence, en lectur
 
 La page Secrets fait l'inventaire de ce que l'agent masque, sur tous les conteneurs à la fois. Elle ne montre que des **noms**, jamais une valeur :
 
-- les variables d'environnement que la radiographie masque ;
+- les variables d'environnement que l'onglet Secrets d'un conteneur montre masquées ;
 - les arguments de la commande et du point d'entrée où l'agent a trouvé un secret, par leur place et par ce qui a été détecté (« Commande, argument 3 : valeur de --requirepass »), jamais par leur texte : un masque partiel pourrait laisser voir un reste de la valeur ;
 - les noms des labels masqués. Tout label hors de `com.docker.compose.*` et `org.opencontainers.image.*` est masqué par précaution, qu'il porte un secret ou non : ils sont comptés à part.
 
